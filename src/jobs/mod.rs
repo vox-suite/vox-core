@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,5 +35,6 @@ pub struct ClaimedJob {
     pub id: Uuid,
     pub kind: JobKind,
     pub payload_reference_id: Uuid,
+    pub occurrence_at: Option<DateTime<Utc>>,
     pub attempt_count: i32,
 }

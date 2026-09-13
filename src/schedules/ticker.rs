@@ -1,7 +1,9 @@
 use super::service::compute_next_recurring;
 use crate::db::Db;
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use sqlx::Row;
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -40,6 +42,7 @@ impl ScheduleTicker {
             let schedule_kind: String = row.get("schedule_kind");
             let occurrence_at: DateTime<Utc> = row.get("next_run_at");
             let recurrence_expr: Option<String> = row.get("recurrence_expression");
+            let timezone_name: String = row.get("timezone");
 
             // Create unique RunSchedule job for this occurrence
             sqlx::query(
@@ -62,10 +65,12 @@ impl ScheduleTicker {
                 .await?;
             } else if schedule_kind == "recurring" {
                 let next = if let Some(expr) = recurrence_expr {
-                    compute_next_recurring(&expr, occurrence_at)
-                        .unwrap_or(occurrence_at + chrono::Duration::days(1))
+                    let timezone = Tz::from_str(&timezone_name)
+                        .map_err(|_| sqlx::Error::Decode("invalid schedule timezone".into()))?;
+                    compute_next_recurring(&expr, timezone, occurrence_at)
+                        .map_err(|_| sqlx::Error::Decode("invalid recurrence expression".into()))?
                 } else {
-                    occurrence_at + chrono::Duration::days(1)
+                    return Err(sqlx::Error::Decode("missing recurrence expression".into()).into());
                 };
                 sqlx::query(
                     "UPDATE scheduled_tasks SET next_run_at = $1, updated_at = now() WHERE id = $2",

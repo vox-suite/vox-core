@@ -58,7 +58,7 @@ impl JobRepository {
              UPDATE jobs SET state = 'running', attempt_count = attempt_count + 1, \
                  lease_owner = $3, lease_expires_at = $4 \
              FROM candidates WHERE jobs.id = candidates.id \
-             RETURNING jobs.id, jobs.kind, jobs.payload_reference_id, jobs.attempt_count",
+             RETURNING jobs.id, jobs.kind, jobs.payload_reference_id, jobs.occurrence_at, jobs.attempt_count",
         )
         .bind(now)
         .bind(limit)
@@ -73,6 +73,7 @@ impl JobRepository {
                     id: row.get("id"),
                     kind: JobKind::parse(&kind).ok_or(JobError::UnknownKind)?,
                     payload_reference_id: row.get("payload_reference_id"),
+                    occurrence_at: row.get("occurrence_at"),
                     attempt_count: row.get("attempt_count"),
                 })
             })

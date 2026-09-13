@@ -4,7 +4,7 @@ use crate::{
     db::Db,
     identity::UserId,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -30,7 +30,11 @@ impl ScheduleHandler {
         Self { db, planner }
     }
 
-    pub async fn handle(&self, schedule_id: ScheduleId) -> Result<(), ScheduleHandlerError> {
+    pub async fn handle(
+        &self,
+        schedule_id: ScheduleId,
+        occurrence_at: DateTime<Utc>,
+    ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query("SELECT user_id, instruction FROM scheduled_tasks WHERE id = $1")
             .bind(schedule_id.0)
             .fetch_optional(self.db.pool())
@@ -46,7 +50,7 @@ impl ScheduleHandler {
                 user_id,
                 user_context: String::new(),
                 event_type: "scheduled_task".into(),
-                occurred_at: Utc::now(),
+                occurred_at: occurrence_at,
                 payload: serde_json::json!({ "instruction": instruction }),
             })
             .await?;
@@ -65,7 +69,11 @@ impl ScheduleHandler {
                     }),
                 ),
             };
-            let key = format!("schedule:{}:action:{index}", schedule_id.0);
+            let key = format!(
+                "schedule:{}:occurrence:{}:action:{index}",
+                schedule_id.0,
+                occurrence_at.to_rfc3339()
+            );
             let inserted = sqlx::query_scalar::<_, Uuid>(
                 "INSERT INTO actions (user_id, schedule_id, kind, payload, idempotency_key) \
                  VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
