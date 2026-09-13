@@ -1,0 +1,81 @@
+use crate::{db::Db, identity::UserId};
+use serde::Serialize;
+use serde_json::Value;
+use sqlx::Row;
+
+pub const MAX_CONTEXT_BYTES: usize = 16 * 1024;
+
+#[derive(Serialize)]
+struct UserContextProjection {
+    profile: Value,
+    commitments: Vec<String>,
+    decisions: Vec<String>,
+    recent_recaps: Vec<String>,
+}
+
+pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
+    let profile =
+        sqlx::query_scalar::<_, Value>("SELECT facts FROM user_profiles WHERE user_id = $1")
+            .bind(user_id.0)
+            .fetch_optional(db.pool())
+            .await?
+            .unwrap_or_else(|| serde_json::json!({}));
+    let rows = sqlx::query(
+        "SELECT recap, commitments, decisions FROM conversation_summaries \
+         WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50",
+    )
+    .bind(user_id.0)
+    .fetch_all(db.pool())
+    .await?;
+    let mut projection = UserContextProjection {
+        profile,
+        commitments: rows
+            .iter()
+            .flat_map(|row| json_strings(row.get("commitments")))
+            .collect(),
+        decisions: rows
+            .iter()
+            .flat_map(|row| json_strings(row.get("decisions")))
+            .collect(),
+        recent_recaps: rows.iter().map(|row| row.get("recap")).collect(),
+    };
+    bounded_json(&mut projection)
+}
+
+fn json_strings(value: Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+        .collect()
+}
+
+fn bounded_json(projection: &mut UserContextProjection) -> Result<String, sqlx::Error> {
+    loop {
+        let serialized = serde_json::to_string(projection)
+            .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+        if serialized.len() <= MAX_CONTEXT_BYTES {
+            return Ok(serialized);
+        }
+        if !projection.recent_recaps.is_empty() {
+            projection.recent_recaps.pop();
+        } else if !projection.decisions.is_empty() {
+            projection.decisions.pop();
+        } else if !projection.commitments.is_empty() {
+            projection.commitments.pop();
+        } else if let Some(key) = projection
+            .profile
+            .as_object()
+            .and_then(|facts| facts.keys().next_back().cloned())
+        {
+            projection
+                .profile
+                .as_object_mut()
+                .expect("profile object")
+                .remove(&key);
+        } else {
+            return Ok("{}".into());
+        }
+    }
+}

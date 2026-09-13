@@ -8,6 +8,10 @@ use vox_core::{
     config::Config,
     db::{Db, jobs::JobRepository},
     events::handler::EventHandler,
+    memory::{
+        MemoryService,
+        cache::{ContextCache, RedisContextCache},
+    },
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
     summaries::handler::SummaryHandler,
     workers::Worker,
@@ -26,8 +30,13 @@ async fn main() {
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
-    let events = EventHandler::new(db.clone(), planner.clone());
-    let schedules = ScheduleHandler::new(db.clone(), planner);
+    let cache = config.redis_url.as_deref().map(|url| {
+        Arc::new(RedisContextCache::new(url).expect("Vox Core Redis URL is invalid"))
+            as Arc<dyn ContextCache>
+    });
+    let memory = MemoryService::new(db.clone(), cache);
+    let events = EventHandler::with_memory(db.clone(), planner.clone(), memory.clone());
+    let schedules = ScheduleHandler::with_memory(db.clone(), planner, memory.clone());
     let ticker = ScheduleTicker::new(db.clone());
 
     let bridge_url = config
@@ -40,7 +49,7 @@ async fn main() {
     );
     let actions = ActionHandler::new(db.clone(), bridge_client);
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
-    let summaries = SummaryHandler::new(db.clone(), summarizer);
+    let summaries = SummaryHandler::with_memory(db.clone(), summarizer, memory);
 
     let worker = Worker::with_all_handlers(
         JobRepository::new(db),

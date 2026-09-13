@@ -6,6 +6,8 @@ use crate::{
     },
     conversations::ConversationId,
     db::Db,
+    identity::UserId,
+    memory::MemoryService,
 };
 use sqlx::Row;
 use std::sync::Arc;
@@ -15,6 +17,7 @@ use uuid::Uuid;
 pub struct SummaryHandler {
     db: Db,
     summarizer: Arc<dyn Summarizing>,
+    memory: MemoryService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -29,7 +32,16 @@ pub enum SummaryHandlerError {
 
 impl SummaryHandler {
     pub fn new(db: Db, summarizer: Arc<dyn Summarizing>) -> Self {
-        Self { db, summarizer }
+        let memory = MemoryService::new(db.clone(), None);
+        Self::with_memory(db, summarizer, memory)
+    }
+
+    pub fn with_memory(db: Db, summarizer: Arc<dyn Summarizing>, memory: MemoryService) -> Self {
+        Self {
+            db,
+            summarizer,
+            memory,
+        }
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
@@ -76,14 +88,9 @@ impl SummaryHandler {
         let decisions_val =
             serde_json::to_value(&summary.decisions).unwrap_or_else(|_| serde_json::json!([]));
 
-        sqlx::query(
+        let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO conversation_summaries (conversation_id, user_id, recap, profile_updates, commitments, decisions) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (conversation_id) DO UPDATE SET \
-             recap = EXCLUDED.recap, \
-             profile_updates = EXCLUDED.profile_updates, \
-             commitments = EXCLUDED.commitments, \
-             decisions = EXCLUDED.decisions",
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (conversation_id) DO NOTHING RETURNING id",
         )
         .bind(conversation_id.0)
         .bind(user_id)
@@ -91,10 +98,10 @@ impl SummaryHandler {
         .bind(&profile_updates_val)
         .bind(&commitments_val)
         .bind(&decisions_val)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        if !summary.profile_updates.is_empty() {
+        if inserted.is_some() && !summary.profile_updates.is_empty() {
             sqlx::query(
                 "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
                  VALUES ($1, $2, 1, now()) \
@@ -110,6 +117,7 @@ impl SummaryHandler {
         }
 
         tx.commit().await?;
+        self.memory.refresh(UserId(user_id)).await?;
         Ok(())
     }
 }

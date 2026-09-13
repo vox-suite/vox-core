@@ -6,7 +6,8 @@ pub mod schedules;
 
 use crate::{
     agents::conversation::ConversationResponder, conversations::service::ConversationService,
-    db::Db, events::service::EventService, schedules::service::ScheduleService,
+    db::Db, events::service::EventService, memory::MemoryService,
+    schedules::service::ScheduleService,
 };
 use axum::{
     Router,
@@ -46,10 +47,24 @@ impl AppState {
         agent: Arc<dyn ConversationResponder>,
         service_token: String,
     ) -> Self {
+        let memory = MemoryService::new(db.clone(), None);
+        Self::with_memory(db, agent, memory, service_token)
+    }
+
+    pub fn with_memory(
+        db: Db,
+        agent: Arc<dyn ConversationResponder>,
+        memory: MemoryService,
+        service_token: String,
+    ) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             db: Some(db.clone()),
-            conversations: Some(Arc::new(ConversationService::new(db.clone(), agent))),
+            conversations: Some(Arc::new(ConversationService::with_memory(
+                db.clone(),
+                agent,
+                memory,
+            ))),
             events: Some(Arc::new(EventService::new(db.clone()))),
             schedules: Some(Arc::new(ScheduleService::new(db))),
             service_token: Arc::from(service_token),

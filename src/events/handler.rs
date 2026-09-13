@@ -3,6 +3,7 @@ use crate::{
     agents::event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
     db::Db,
     identity::UserId,
+    memory::MemoryService,
 };
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -13,6 +14,7 @@ use uuid::Uuid;
 pub struct EventHandler {
     db: Db,
     planner: Arc<dyn EventPlanning>,
+    memory: MemoryService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +27,16 @@ pub enum EventHandlerError {
 
 impl EventHandler {
     pub fn new(db: Db, planner: Arc<dyn EventPlanning>) -> Self {
-        Self { db, planner }
+        let memory = MemoryService::new(db.clone(), None);
+        Self::with_memory(db, planner, memory)
+    }
+
+    pub fn with_memory(db: Db, planner: Arc<dyn EventPlanning>, memory: MemoryService) -> Self {
+        Self {
+            db,
+            planner,
+            memory,
+        }
     }
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
@@ -40,7 +51,7 @@ impl EventHandler {
             .planner
             .plan(EventPlanningPrompt {
                 user_id,
-                user_context: String::new(),
+                user_context: self.memory.load(user_id).await?,
                 event_type: row.get("event_type"),
                 occurred_at: row.get::<DateTime<Utc>, _>("occurred_at"),
                 payload: row.get("payload"),

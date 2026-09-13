@@ -5,7 +5,8 @@ use crate::{
         conversation::{ConversationPrompt, ConversationResponder, PromptMessage},
     },
     db::Db,
-    identity::{ChannelIdentity, UserId},
+    identity::{IdentityService, UserId},
+    memory::MemoryService,
 };
 use sqlx::Row;
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use uuid::Uuid;
 pub struct ConversationService {
     db: Db,
     agent: Arc<dyn ConversationResponder>,
+    identities: IdentityService,
+    memory: MemoryService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,7 +36,21 @@ pub enum ConversationError {
 
 impl ConversationService {
     pub fn new(db: Db, agent: Arc<dyn ConversationResponder>) -> Self {
-        Self { db, agent }
+        let memory = MemoryService::new(db.clone(), None);
+        Self::with_memory(db, agent, memory)
+    }
+
+    pub fn with_memory(
+        db: Db,
+        agent: Arc<dyn ConversationResponder>,
+        memory: MemoryService,
+    ) -> Self {
+        Self {
+            identities: IdentityService::new(db.clone()),
+            db,
+            agent,
+            memory,
+        }
     }
 
     pub async fn respond(
@@ -47,7 +64,7 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        let user_id = self.resolve_identity(&request.identity).await?;
+        let user_id = self.identities.resolve(&request.identity).await?;
         let conversation_id = self
             .resolve_conversation(
                 user_id,
@@ -65,7 +82,7 @@ impl ConversationService {
             .agent
             .respond(ConversationPrompt {
                 user_id,
-                user_context: String::new(),
+                user_context: self.memory.load(user_id).await?,
                 recent_messages: prior_messages,
                 user_text: request.text,
                 initiation_context: request.initiation_context,
@@ -114,21 +131,13 @@ impl ConversationService {
         .await?;
 
         // Enqueue post-conversation summarization job if not already enqueued
-        let already_queued = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM jobs WHERE kind = 'summarize_conversation' AND payload_reference_id = $1",
+        sqlx::query(
+            "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1) \
+             ON CONFLICT DO NOTHING",
         )
         .bind(conversation_id)
-        .fetch_one(&mut *tx)
+        .execute(&mut *tx)
         .await?;
-
-        if already_queued == 0 {
-            sqlx::query(
-                "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1)",
-            )
-            .bind(conversation_id)
-            .execute(&mut *tx)
-            .await?;
-        }
         tx.commit().await?;
         Ok(())
     }
@@ -151,53 +160,6 @@ impl ConversationService {
                 text: row.get("text"),
             })
             .collect())
-    }
-
-    async fn resolve_identity(
-        &self,
-        identity: &ChannelIdentity,
-    ) -> Result<UserId, ConversationError> {
-        if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM user_identities WHERE channel = $1 AND external_id = $2",
-        )
-        .bind(identity.channel.trim())
-        .bind(identity.external_id.trim())
-        .fetch_optional(self.db.pool())
-        .await?
-        {
-            return Ok(UserId(id));
-        }
-        let mut tx = self.db.pool().begin().await?;
-        let new_user =
-            sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
-                .fetch_one(&mut *tx)
-                .await?;
-        let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO user_identities (user_id, channel, external_id) VALUES ($1, $2, $3) \
-             ON CONFLICT (channel, external_id) DO NOTHING RETURNING user_id",
-        )
-        .bind(new_user)
-        .bind(identity.channel.trim())
-        .bind(identity.external_id.trim())
-        .fetch_optional(&mut *tx)
-        .await?;
-        let id = if let Some(id) = inserted {
-            id
-        } else {
-            sqlx::query("DELETE FROM users WHERE id = $1")
-                .bind(new_user)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT user_id FROM user_identities WHERE channel = $1 AND external_id = $2",
-            )
-            .bind(identity.channel.trim())
-            .bind(identity.external_id.trim())
-            .fetch_one(&mut *tx)
-            .await?
-        };
-        tx.commit().await?;
-        Ok(UserId(id))
     }
 
     async fn resolve_conversation(
