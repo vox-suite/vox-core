@@ -6,6 +6,8 @@ fn values() -> HashMap<&'static str, &'static str> {
         ("VOX_CORE_BIND_ADDRESS", "127.0.0.1:3001"),
         ("DATABASE_URL", "postgres://vox:test@db/vox"),
         ("VOX_CORE_SERVICE_TOKEN", "test-service-token"),
+        ("GEMINI_API_KEY", "gemini-test-key"),
+        ("EXA_API_KEY", "exa-test-key"),
     ])
 }
 
@@ -19,6 +21,9 @@ fn loads_required_configuration_without_redis() {
     assert_eq!(config.database_url, "postgres://vox:test@db/vox");
     assert_eq!(config.redis_url, None);
     assert_eq!(config.service_token, "test-service-token");
+    assert_eq!(config.gemini_api_key, "gemini-test-key");
+    assert_eq!(config.exa_api_key, "exa-test-key");
+    assert_eq!(config.gemini_model, "gemini-3.5-flash-lite");
 }
 
 #[test]
