@@ -45,6 +45,15 @@ impl SummaryHandler {
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
+        let already_summarized: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM conversation_summaries WHERE conversation_id = $1)",
+        )
+        .bind(conversation_id.0)
+        .fetch_one(self.db.pool())
+        .await?;
+        if already_summarized {
+            return Ok(());
+        }
         let conversation = sqlx::query("SELECT user_id FROM conversations WHERE id = $1")
             .bind(conversation_id.0)
             .fetch_optional(self.db.pool())

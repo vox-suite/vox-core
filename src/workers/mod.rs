@@ -68,8 +68,10 @@ impl Worker {
 
     async fn run_once(&self) -> Result<(), crate::db::jobs::JobError> {
         let now = Utc::now();
-        if let Some(ticker) = &self.ticker {
-            let _ = ticker.tick(now).await;
+        if let Some(ticker) = &self.ticker
+            && let Err(error) = ticker.tick(now).await
+        {
+            tracing::warn!(%error, "schedule ticker failed");
         }
 
         let jobs = self
