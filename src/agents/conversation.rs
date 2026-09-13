@@ -1,5 +1,6 @@
 use super::{AgentError, tools};
 use crate::{config::Config, identity::UserId};
+use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,11 @@ pub struct ConversationAgent {
     google_maps_api_key: Option<String>,
 }
 
+#[async_trait]
+pub trait ConversationResponder: Send + Sync {
+    async fn respond(&self, prompt: ConversationPrompt) -> Result<String, AgentError>;
+}
+
 impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
         let dependencies =
@@ -32,7 +38,7 @@ impl ConversationAgent {
         })
     }
 
-    pub async fn respond(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
+    async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
@@ -62,5 +68,12 @@ impl ConversationAgent {
             prompt.user_text
         );
         agent.prompt(input).await.map_err(|_| AgentError::Provider)
+    }
+}
+
+#[async_trait]
+impl ConversationResponder for ConversationAgent {
+    async fn respond(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
+        self.generate_response(prompt).await
     }
 }
