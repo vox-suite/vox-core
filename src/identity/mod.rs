@@ -10,4 +10,3 @@ pub struct ChannelIdentity {
     pub channel: String,
     pub external_id: String,
 }
-

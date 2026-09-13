@@ -5,7 +5,9 @@ use vox_core::db::Db;
 #[ignore = "requires isolated PostgreSQL"]
 async fn migration_creates_the_complete_core_schema() {
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
-    let db = Db::connect(&database_url).await.expect("connect to test database");
+    let db = Db::connect(&database_url)
+        .await
+        .expect("connect to test database");
     db.migrate().await.expect("run migrations");
 
     let pool = sqlx::PgPool::connect(&database_url)
@@ -33,6 +35,9 @@ async fn migration_creates_the_complete_core_schema() {
         "user_profiles",
         "users",
     ] {
-        assert!(names.iter().any(|name| name == expected), "missing {expected}");
+        assert!(
+            names.iter().any(|name| name == expected),
+            "missing {expected}"
+        );
     }
 }

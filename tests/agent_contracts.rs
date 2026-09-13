@@ -26,7 +26,10 @@ fn rejects_unknown_action_kinds() {
     )
     .expect_err("unknown actions must not execute");
 
-    assert_eq!(error.to_string(), "agent returned invalid structured output");
+    assert_eq!(
+        error.to_string(),
+        "agent returned invalid structured output"
+    );
 }
 
 #[test]
@@ -34,5 +37,8 @@ fn rejects_an_incomplete_summary() {
     let error = parse_summary(r#"{"recap":"Call recap"}"#)
         .expect_err("missing structured fields must fail");
 
-    assert_eq!(error.to_string(), "agent returned invalid structured output");
+    assert_eq!(
+        error.to_string(),
+        "agent returned invalid structured output"
+    );
 }

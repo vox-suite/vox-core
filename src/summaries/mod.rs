@@ -9,4 +9,3 @@ pub struct StructuredSummary {
     pub commitments: Vec<String>,
     pub decisions: Vec<String>,
 }
-

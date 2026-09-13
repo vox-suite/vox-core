@@ -21,8 +21,8 @@ pub struct ConversationAgent {
 
 impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
-        let dependencies = tools::dependencies::ToolDependencies::new()
-            .map_err(|_| AgentError::Provider)?;
+        let dependencies =
+            tools::dependencies::ToolDependencies::new().map_err(|_| AgentError::Provider)?;
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
