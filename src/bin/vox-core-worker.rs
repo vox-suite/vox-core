@@ -2,10 +2,14 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vox_core::{
-    agents::event_planner::GeminiEventPlanner,
+    actions::handler::ActionHandler,
+    agents::{event_planner::GeminiEventPlanner, summarizer::GeminiSummarizer},
+    bridge_client::BridgeClient,
     config::Config,
     db::{Db, jobs::JobRepository},
     events::handler::EventHandler,
+    schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
+    summaries::handler::SummaryHandler,
     workers::Worker,
 };
 
@@ -22,8 +26,31 @@ async fn main() {
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
-    let events = EventHandler::new(db.clone(), planner);
-    let worker = Worker::new(JobRepository::new(db), events, Uuid::new_v4().to_string());
+    let events = EventHandler::new(db.clone(), planner.clone());
+    let schedules = ScheduleHandler::new(db.clone(), planner);
+    let ticker = ScheduleTicker::new(db.clone());
+
+    let bridge_url = config
+        .bridge_url
+        .clone()
+        .unwrap_or_else(|| "http://bridge:3000".to_string());
+    let bridge_client = Arc::new(
+        BridgeClient::new(bridge_url, config.service_token.clone())
+            .expect("Vox Core bridge client creation failed"),
+    );
+    let actions = ActionHandler::new(db.clone(), bridge_client);
+    let summarizer = Arc::new(GeminiSummarizer::new(&config));
+    let summaries = SummaryHandler::new(db.clone(), summarizer);
+
+    let worker = Worker::with_all_handlers(
+        JobRepository::new(db),
+        events,
+        schedules,
+        ticker,
+        actions,
+        summaries,
+        Uuid::new_v4().to_string(),
+    );
     let cancellation = CancellationToken::new();
     let shutdown = cancellation.clone();
     tokio::spawn(async move {

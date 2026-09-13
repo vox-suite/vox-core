@@ -8,6 +8,7 @@ pub struct Config {
     pub gemini_model: String,
     pub exa_api_key: String,
     pub google_maps_api_key: Option<String>,
+    pub bridge_url: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -37,6 +38,7 @@ impl Config {
             exa_api_key: non_empty(&get, "EXA_API_KEY")?,
             google_maps_api_key: get("GOOGLE_MAPS_API_KEY")
                 .filter(|value| !value.trim().is_empty()),
+            bridge_url: get("VOX_BRIDGE_URL").filter(|value| !value.trim().is_empty()),
         })
     }
 }

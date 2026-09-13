@@ -21,3 +21,9 @@ pub struct RespondResponse {
     pub conversation_id: ConversationId,
     pub text: String,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CompleteConversationRequest {
+    pub identity: ChannelIdentity,
+    pub external_conversation_id: String,
+}

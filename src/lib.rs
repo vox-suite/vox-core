@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod agents;
+pub mod bridge_client;
 pub mod config;
 pub mod conversations;
 pub mod db;

@@ -74,11 +74,11 @@ async fn retries_after_backoff_and_terminal_failures_stay_finished() {
         .await
         .unwrap();
     let repository = JobRepository::new(db);
-    let now = Utc::now();
     let job_id = repository
         .enqueue(JobKind::ProcessEvent, Uuid::new_v4())
         .await
         .unwrap();
+    let now = Utc::now();
     repository
         .claim("worker-a", now, Duration::seconds(30), 1)
         .await
