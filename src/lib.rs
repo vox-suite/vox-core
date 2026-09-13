@@ -9,3 +9,4 @@ pub mod identity;
 pub mod jobs;
 pub mod schedules;
 pub mod summaries;
+pub mod workers;

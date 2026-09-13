@@ -1,9 +1,10 @@
 pub mod auth;
 pub mod conversations;
+pub mod events;
 
 use crate::{
     agents::conversation::ConversationResponder, conversations::service::ConversationService,
-    db::Db,
+    db::Db, events::service::EventService,
 };
 use axum::{
     Router,
@@ -20,6 +21,7 @@ use std::sync::{
 pub struct AppState {
     ready: Arc<AtomicBool>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) events: Option<Arc<EventService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -28,6 +30,7 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(ready)),
             conversations: None,
+            events: None,
             service_token: Arc::from(""),
         }
     }
@@ -39,7 +42,8 @@ impl AppState {
     ) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
-            conversations: Some(Arc::new(ConversationService::new(db, agent))),
+            conversations: Some(Arc::new(ConversationService::new(db.clone(), agent))),
+            events: Some(Arc::new(EventService::new(db))),
             service_token: Arc::from(service_token),
         }
     }
@@ -54,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
+        .route("/v1/events", post(events::ingest))
         .with_state(state)
 }
 
