@@ -1,11 +1,12 @@
 use super::{AppState, auth};
-use crate::actions::ActionResultRequest;
+use crate::actions::{ActionResultRequest, ActionResultStatus};
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use sqlx::Row;
 use uuid::Uuid;
 
 pub async fn record_result(
@@ -20,53 +21,54 @@ pub async fn record_result(
     let Some(db) = state.db.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-
-    let status_str = request.status.as_str();
-    let mut tx = match db.pool().begin().await {
-        Ok(tx) => tx,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-
-    let attempt_number = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM action_attempts WHERE action_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap_or(1);
-
-    let _ = sqlx::query(
-        "INSERT INTO action_attempts (action_id, attempt_number, state, error_code, provider_metadata) \
-         VALUES ($1, $2, $3, $4, $5)",
-    )
-    .bind(id)
-    .bind(attempt_number)
-    .bind(status_str)
-    .bind(request.error_code.as_deref())
-    .bind(serde_json::json!({
-        "provider_call_id": request.provider_call_id
-    }))
-    .execute(&mut *tx)
-    .await;
-
-    let result = sqlx::query(
-        "UPDATE actions SET state = $1, completed_at = now(), updated_at = now() \
-         WHERE id = $2 AND (provider_call_id = $3 OR provider_call_id IS NULL)",
-    )
-    .bind(status_str)
-    .bind(id)
-    .bind(&request.provider_call_id)
-    .execute(&mut *tx)
-    .await;
-
-    match result {
-        Ok(_) => {
-            if tx.commit().await.is_ok() {
-                StatusCode::OK.into_response()
-            } else {
-                StatusCode::SERVICE_UNAVAILABLE.into_response()
-            }
+    let result: Result<StatusCode, sqlx::Error> = async {
+        let mut tx = db.pool().begin().await?;
+        let row = sqlx::query("SELECT state, provider_call_id FROM actions WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(row) = row else {
+            return Ok(StatusCode::NOT_FOUND);
+        };
+        let current_state: String = row.get("state");
+        let provider_call_id: Option<String> = row.get("provider_call_id");
+        if provider_call_id.as_deref() != Some(request.provider_call_id.as_str()) {
+            return Ok(StatusCode::CONFLICT);
         }
+        let target_state = request.status.as_str();
+        if matches!(current_state.as_str(), "succeeded" | "failed") {
+            return Ok(if current_state == target_state {
+                StatusCode::OK
+            } else {
+                StatusCode::CONFLICT
+            });
+        }
+        sqlx::query(
+            "UPDATE actions SET state = $1, completed_at = now(), updated_at = now() WHERE id = $2",
+        )
+        .bind(target_state)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        let attempt_state = match request.status {
+            ActionResultStatus::Succeeded => "accepted",
+            ActionResultStatus::Failed => "failed",
+        };
+        sqlx::query(
+            "UPDATE action_attempts SET state = $1, error_code = $2, completed_at = now() \
+             WHERE action_id = $3 AND attempt_number = (SELECT MAX(attempt_number) FROM action_attempts WHERE action_id = $3)",
+        )
+        .bind(attempt_state)
+        .bind(request.error_code.as_deref())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(StatusCode::OK)
+    }
+    .await;
+    match result {
+        Ok(status) => status.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

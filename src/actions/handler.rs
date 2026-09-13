@@ -34,61 +34,62 @@ impl ActionHandler {
     }
 
     pub async fn handle(&self, action_id: ActionId) -> Result<(), ActionHandlerError> {
-        let action = sqlx::query(
-            "SELECT id, user_id, kind, payload, state, idempotency_key, provider_call_id \
-             FROM actions WHERE id = $1",
+        let mut tx = self.db.pool().begin().await?;
+        let row = sqlx::query(
+            "SELECT user_id, kind, payload, state FROM actions WHERE id = $1 FOR UPDATE",
         )
         .bind(action_id.0)
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        let row = action.ok_or(ActionHandlerError::NotFound)?;
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ActionHandlerError::NotFound)?;
         let state: String = row.get("state");
-        if state == "in_progress" || state == "succeeded" {
+        if state != "pending" {
+            tx.commit().await?;
             return Ok(());
         }
-
-        let user_id: Uuid = row.get("user_id");
         let kind: String = row.get("kind");
         if kind != "outbound_call" {
             return Err(ActionHandlerError::InvalidPayload);
         }
-
+        let user_id: Uuid = row.get("user_id");
         let payload: serde_json::Value = row.get("payload");
-        let reason = payload
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Vox Notification")
-            .to_string();
-        let opening_instruction = payload
-            .get("opening_instruction")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Hello from Vox")
-            .to_string();
-
-        let phone = sqlx::query_scalar::<_, String>(
+        let reason = required_string(&payload, "reason")?;
+        let opening_instruction = required_string(&payload, "opening_instruction")?;
+        let external_phone = sqlx::query_scalar::<_, String>(
             "SELECT external_id FROM user_identities WHERE user_id = $1 AND channel = 'phone' LIMIT 1",
         )
         .bind(user_id)
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        let external_phone = phone.ok_or(ActionHandlerError::IdentityNotFound)?;
-
-        let conversation_row = sqlx::query(
-            "INSERT INTO conversations (user_id, channel, external_id) \
-             VALUES ($1, 'phone', $2) \
-             ON CONFLICT (channel, external_id) DO UPDATE SET external_id = EXCLUDED.external_id \
-             RETURNING id",
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ActionHandlerError::IdentityNotFound)?;
+        let conversation_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO conversations (user_id, channel, external_id) VALUES ($1, 'phone', $2) \
+             ON CONFLICT (channel, external_id) DO UPDATE SET external_id = EXCLUDED.external_id RETURNING id",
         )
         .bind(user_id)
         .bind(format!("outbound:{}", action_id.0))
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
+        let attempt_number: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM action_attempts WHERE action_id = $1",
+        )
+        .bind(action_id.0)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO action_attempts (action_id, attempt_number, state) VALUES ($1, $2, 'started')",
+        )
+        .bind(action_id.0)
+        .bind(attempt_number)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE actions SET state = 'in_progress', updated_at = now() WHERE id = $1")
+            .bind(action_id.0)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
 
-        let conversation_id: Uuid = conversation_row.get("id");
-
-        let response = self
+        let result = self
             .bridge
             .initiate_outbound_call(OutboundCallRequest {
                 action_id: action_id.0,
@@ -100,37 +101,57 @@ impl ActionHandler {
                 opening_instruction,
                 conversation_id,
             })
-            .await?;
-
-        let mut tx = self.db.pool().begin().await?;
-
-        let attempt_number = sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM action_attempts WHERE action_id = $1",
-        )
-        .bind(action_id.0)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO action_attempts (action_id, attempt_number, state, provider_metadata) \
-             VALUES ($1, $2, 'accepted', $3)",
-        )
-        .bind(action_id.0)
-        .bind(attempt_number)
-        .bind(serde_json::json!({ "provider_call_id": response.provider_call_id }))
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "UPDATE actions SET state = 'in_progress', provider_call_id = $1, updated_at = now() \
-             WHERE id = $2",
-        )
-        .bind(&response.provider_call_id)
-        .bind(action_id.0)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        Ok(())
+            .await;
+        match result {
+            Ok(response) => {
+                let mut tx = self.db.pool().begin().await?;
+                sqlx::query(
+                    "UPDATE action_attempts SET state = 'accepted', provider_metadata = $1 \
+                     WHERE action_id = $2 AND attempt_number = $3",
+                )
+                .bind(serde_json::json!({"provider_call_id": response.provider_call_id}))
+                .bind(action_id.0)
+                .bind(attempt_number)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE actions SET provider_call_id = $1, updated_at = now() WHERE id = $2",
+                )
+                .bind(response.provider_call_id)
+                .bind(action_id.0)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok(())
+            }
+            Err(error) => {
+                let mut tx = self.db.pool().begin().await?;
+                sqlx::query(
+                    "UPDATE action_attempts SET state = 'failed', error_code = 'bridge_dispatch', completed_at = now() \
+                     WHERE action_id = $1 AND attempt_number = $2",
+                )
+                .bind(action_id.0)
+                .bind(attempt_number)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE actions SET state = 'failed', completed_at = now(), updated_at = now() WHERE id = $1",
+                )
+                .bind(action_id.0)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Err(error.into())
+            }
+        }
     }
+}
+
+fn required_string(payload: &serde_json::Value, key: &str) -> Result<String, ActionHandlerError> {
+    payload
+        .get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or(ActionHandlerError::InvalidPayload)
 }
