@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod admin;
 pub mod auth;
 pub mod conversations;
 pub mod events;
@@ -23,6 +24,7 @@ use std::sync::{
 #[derive(Clone)]
 pub struct AppState {
     ready: Arc<AtomicBool>,
+    pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) db: Option<Db>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) events: Option<Arc<EventService>>,
@@ -34,6 +36,7 @@ impl AppState {
     pub fn new(ready: bool) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(ready)),
+            admin: None,
             db: None,
             conversations: None,
             events: None,
@@ -59,6 +62,7 @@ impl AppState {
     ) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
+            admin: None,
             db: Some(db.clone()),
             conversations: Some(Arc::new(ConversationService::with_memory(
                 db.clone(),
@@ -71,6 +75,11 @@ impl AppState {
         }
     }
 
+    pub fn with_admin(mut self, admin: admin::RedisAdmin) -> Self {
+        self.admin = Some(Arc::new(admin));
+        self
+    }
+
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
     }
@@ -78,6 +87,7 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/v1/admin/redis", get(admin::browse))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))

@@ -30,15 +30,16 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");
-    axum::serve(
-        listener,
-        router(AppState::with_memory(
-            db,
-            agent,
-            memory,
-            config.service_token,
-        )),
-    )
-    .await
-    .expect("Vox Core API failed");
+    let mut state = AppState::with_memory(db, agent, memory, config.service_token);
+    if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN")
+        && !token.trim().is_empty()
+    {
+        state = state.with_admin(
+            vox_core::http::admin::RedisAdmin::new(config.redis_url.as_deref(), token)
+                .expect("Vox admin Redis URL is invalid"),
+        );
+    }
+    axum::serve(listener, router(state))
+        .await
+        .expect("Vox Core API failed");
 }

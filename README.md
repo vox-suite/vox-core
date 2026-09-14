@@ -26,3 +26,24 @@ VOX_ENV_FILE=.env.example docker compose --env-file .env.example config
 ```
 
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
+
+## Read-only Redis administration
+
+`GET /v1/admin/redis` is enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_CORE_SERVICE_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
+
+Query parameters:
+
+- `match`: Redis glob pattern, default `vox:*`, maximum 256 bytes.
+- `cursor`: unsigned 64-bit SCAN cursor represented as a string; default `0`.
+- `key`: inspect one UTF-8 key, maximum 1,024 bytes, without control characters. If provided, returns an atomic bounded value preview and metadata instead of a key listing.
+
+Redis 7+ is required for `EVAL_RO`. The existing Redis 8 service is compatible. SCAN uses a count hint of 100. Connections are reused and reconnect; admin reads have a four-second deadline and at most eight concurrent requests per API instance. String previews stop at 64 KiB. Collection string data has a total 64 KiB budget and 2 KiB per-value limit. No write methods or arbitrary commands are exposed.
+
+Keep Redis private. Configure the HTTPS reverse proxy to route only this exact path to the Core API and omit query strings from access logs. Deployment instructions live in the sibling `vox-web/docs/deployment.md`.
+
+```sh
+cargo test --test admin_redis
+TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --test admin_redis -- --include-ignored
+```
+
+The second command must target an isolated Redis instance. The test creates uniquely prefixed fixture keys and deletes those keys afterward.
