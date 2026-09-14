@@ -1,0 +1,69 @@
+name: publish-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Publish Core image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/vox-suite/vox-core:${{ github.sha }}
+
+  dispatch:
+    needs: publish
+    if: vars.VOX_AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Notify Vox Deploy
+        env:
+          GH_TOKEN: ${{ secrets.VOX_DEPLOY_DISPATCH_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+          IMAGE: ghcr.io/vox-suite/vox-core@${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          jq -n \
+            --arg component core \
+            --arg sha "$SOURCE_SHA" \
+            --arg image "$IMAGE" \
+            '{event_type:"component_published",client_payload:{component:$component,sha:$sha,image:$image}}' \
+            | gh api repos/vox-suite/vox-deploy/dispatches --method POST --input -
