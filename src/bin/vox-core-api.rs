@@ -20,8 +20,10 @@ async fn main() {
     db.migrate()
         .await
         .expect("Vox Core database migration failed");
-    let agent =
-        Arc::new(ConversationAgent::new(&config).expect("Vox Core agent configuration is invalid"));
+    let agent = Arc::new(
+        ConversationAgent::with_db(&config, db.clone())
+            .expect("Vox Core agent configuration is invalid"),
+    );
     let cache = config.redis_url.as_deref().map(|url| {
         Arc::new(RedisContextCache::new(url).expect("Vox Core Redis URL is invalid"))
             as Arc<dyn ContextCache>
