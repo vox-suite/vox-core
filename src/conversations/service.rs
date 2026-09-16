@@ -65,6 +65,38 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         let user_id = self.identities.resolve(&request.identity).await?;
+
+        // Seed name if provided via initiation_context (e.g. from WhatsApp profile)
+        if let Some(init_ctx) = &request.initiation_context {
+            if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
+                let wa_name_clean = wa_name.trim();
+                if !wa_name_clean.is_empty() {
+                    let _ = sqlx::query(
+                        "UPDATE user_profiles \
+                         SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
+                             updated_at = now() \
+                         WHERE user_id = $2 AND (facts->>'name' IS NULL OR facts->>'name' = '')",
+                    )
+                    .bind(wa_name_clean)
+                    .bind(user_id.0)
+                    .execute(self.db.pool())
+                    .await;
+                }
+            }
+        }
+
+        // Check if user's name is known in facts
+        let known_name: Option<String> = sqlx::query_scalar(
+            "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
+        )
+        .bind(user_id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .flatten();
+
+        let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+        let needs_onboarding = !has_name;
+
         let conversation_id = self
             .resolve_conversation(
                 user_id,
@@ -82,10 +114,12 @@ impl ConversationService {
             .agent
             .respond(ConversationPrompt {
                 user_id,
+                channel: request.identity.channel.clone(),
                 user_context: self.memory.load(user_id).await?,
                 recent_messages: prior_messages,
                 user_text: request.text,
                 initiation_context: request.initiation_context,
+                needs_onboarding,
             })
             .await?;
         self.append_message(conversation_id, "assistant", text.trim())
@@ -119,7 +153,7 @@ impl ConversationService {
 
         let conversation_id = match conversation {
             Some(row) => row.get::<Uuid, _>("id"),
-            None => return Ok(()), // Idempotent: nothing to complete
+            None => return Ok(()),
         };
 
         let mut tx = self.db.pool().begin().await?;
@@ -181,8 +215,7 @@ impl ConversationService {
         if stored_user != user_id.0 {
             return Err(ConversationError::IdentityConflict);
         }
-        Ok(ConversationId(row.get("id")))
-    }
+        Ok(ConversationId(row.get("id")))\n    }
 
     async fn append_message(
         &self,
