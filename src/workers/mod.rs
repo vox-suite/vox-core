@@ -1,3 +1,6 @@
+pub mod task_executor;
+pub mod whatsapp_sweeper;
+
 use crate::{
     actions::{ActionId, handler::ActionHandler},
     conversations::ConversationId,
@@ -8,7 +11,9 @@ use crate::{
     summaries::handler::SummaryHandler,
 };
 use chrono::{Duration, Utc};
+use task_executor::TaskExecutorHandler;
 use tokio_util::sync::CancellationToken;
+use whatsapp_sweeper::WhatsAppSweeper;
 
 pub struct Worker {
     jobs: JobRepository,
@@ -17,6 +22,8 @@ pub struct Worker {
     ticker: Option<ScheduleTicker>,
     actions: Option<ActionHandler>,
     summaries: Option<SummaryHandler>,
+    task_executor: Option<TaskExecutorHandler>,
+    wa_sweeper: Option<WhatsAppSweeper>,
     worker_id: String,
 }
 
@@ -29,6 +36,8 @@ impl Worker {
             ticker: None,
             actions: None,
             summaries: None,
+            task_executor: None,
+            wa_sweeper: None,
             worker_id,
         }
     }
@@ -40,6 +49,8 @@ impl Worker {
         ticker: ScheduleTicker,
         actions: ActionHandler,
         summaries: SummaryHandler,
+        task_executor: TaskExecutorHandler,
+        wa_sweeper: WhatsAppSweeper,
         worker_id: String,
     ) -> Self {
         Self {
@@ -49,6 +60,8 @@ impl Worker {
             ticker: Some(ticker),
             actions: Some(actions),
             summaries: Some(summaries),
+            task_executor: Some(task_executor),
+            wa_sweeper: Some(wa_sweeper),
             worker_id,
         }
     }
@@ -72,6 +85,12 @@ impl Worker {
             && let Err(error) = ticker.tick(now).await
         {
             tracing::warn!(%error, "schedule ticker failed");
+        }
+
+        if let Some(sweeper) = &self.wa_sweeper
+            && let Err(error) = sweeper.sweep_inactive_conversations().await
+        {
+            tracing::warn!(%error, "whatsapp sweeper failed");
         }
 
         let jobs = self
@@ -109,6 +128,13 @@ impl Worker {
                         .await
                         .map_err(|_| "summary_processing"),
                     None => Err("summary_handler_unavailable"),
+                },
+                JobKind::EvaluateTask | JobKind::ExecuteTask => match &self.task_executor {
+                    Some(executor) => executor
+                        .handle(job.payload_reference_id)
+                        .await
+                        .map_err(|_| "task_execution"),
+                    None => Err("task_executor_unavailable"),
                 },
             };
 

@@ -7,6 +7,8 @@ pub enum JobKind {
     RunSchedule,
     DispatchAction,
     SummarizeConversation,
+    EvaluateTask,
+    ExecuteTask,
 }
 
 impl JobKind {
@@ -16,6 +18,8 @@ impl JobKind {
             Self::RunSchedule => "run_schedule",
             Self::DispatchAction => "dispatch_action",
             Self::SummarizeConversation => "summarize_conversation",
+            Self::EvaluateTask => "evaluate_task",
+            Self::ExecuteTask => "execute_task",
         }
     }
 
@@ -25,6 +29,8 @@ impl JobKind {
             "run_schedule" => Some(Self::RunSchedule),
             "dispatch_action" => Some(Self::DispatchAction),
             "summarize_conversation" => Some(Self::SummarizeConversation),
+            "evaluate_task" => Some(Self::EvaluateTask),
+            "execute_task" => Some(Self::ExecuteTask),
             _ => None,
         }
     }

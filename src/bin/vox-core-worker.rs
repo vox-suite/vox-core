@@ -14,7 +14,11 @@ use vox_core::{
     },
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
     summaries::handler::SummaryHandler,
-    workers::Worker,
+    workers::{
+        Worker,
+        task_executor::TaskExecutorHandler,
+        whatsapp_sweeper::WhatsAppSweeper,
+    },
 };
 
 #[tokio::main]
@@ -50,6 +54,8 @@ async fn main() {
     let actions = ActionHandler::new(db.clone(), bridge_client);
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
     let summaries = SummaryHandler::with_memory(db.clone(), summarizer, memory);
+    let task_executor = TaskExecutorHandler::new(db.clone(), &config);
+    let wa_sweeper = WhatsAppSweeper::new(db.clone());
 
     let worker = Worker::with_all_handlers(
         JobRepository::new(db),
@@ -58,6 +64,8 @@ async fn main() {
         ticker,
         actions,
         summaries,
+        task_executor,
+        wa_sweeper,
         Uuid::new_v4().to_string(),
     );
     let cancellation = CancellationToken::new();

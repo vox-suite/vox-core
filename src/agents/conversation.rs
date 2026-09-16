@@ -154,6 +154,10 @@ impl ConversationAgent {
                 self.db.clone(),
                 prompt.user_id,
             ))
+            .tool(tools::calls::TriggerOutboundCall::new(
+                self.db.clone(),
+                prompt.user_id,
+            ))
             .default_max_turns(10)
             .build();
 

@@ -259,3 +259,22 @@ This document details all agent tools available to the Gemini conversation agent
 - **Module**: `crate::agents::tools::google_maps::GetRoute`
 - **Description**: Computes route distance and travel time between two waypoints.
 - **Arguments**: `origin` (string), `destination` (string), optional `travel_mode`.
+
+---
+
+## 7. Telephony & Outbound Calling Tools
+
+### `trigger_outbound_call`
+- **Module**: `crate::agents::tools::calls::TriggerOutboundCall`
+- **Description**: Triggers an outbound phone call to the user to speak with them live, deliver an urgent update, or inform them of a completed task.
+- **Arguments**:
+  - `reason` *(required string)*: Brief internal reason for placing the call.
+  - `opening_instruction` *(required string)*: The spoken prompt the voice agent will deliver as soon as the user answers the phone.
+- **Response**:
+  ```json
+  {
+    "status": "call_queued",
+    "action_id": "uuid",
+    "reason": "Flight search complete"
+  }
+  ```
