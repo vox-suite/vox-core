@@ -3,7 +3,7 @@ use crate::{
     db::Db,
 };
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
-use serde_json::{Value, json};
+use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 

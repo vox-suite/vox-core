@@ -215,7 +215,8 @@ impl ConversationService {
         if stored_user != user_id.0 {
             return Err(ConversationError::IdentityConflict);
         }
-        Ok(ConversationId(row.get("id")))\n    }
+        Ok(ConversationId(row.get("id")))
+    }
 
     async fn append_message(
         &self,
