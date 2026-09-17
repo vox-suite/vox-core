@@ -7,6 +7,7 @@ pub mod db;
 pub mod events;
 pub mod http;
 pub mod identity;
+pub mod jev;
 pub mod jobs;
 pub mod memory;
 pub mod schedules;

@@ -1,11 +1,19 @@
 use super::EventId;
 use crate::{
-    agents::event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
+    agents::{
+        event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
+        tools::records::validate_data_against_schema,
+    },
     db::Db,
     identity::UserId,
+    jev::{
+        event_triage::{EventTriageAction, EventTriager},
+        schema_classifier::{SchemaClassificationResult, SchemaClassifier},
+    },
     memory::MemoryService,
 };
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -15,6 +23,8 @@ pub struct EventHandler {
     db: Db,
     planner: Arc<dyn EventPlanning>,
     memory: MemoryService,
+    triager: Option<Arc<EventTriager>>,
+    schema_classifier: Option<Arc<SchemaClassifier>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +46,24 @@ impl EventHandler {
             db,
             planner,
             memory,
+            triager: None,
+            schema_classifier: None,
+        }
+    }
+
+    pub fn with_jev(
+        db: Db,
+        planner: Arc<dyn EventPlanning>,
+        memory: MemoryService,
+        triager: Option<Arc<EventTriager>>,
+        schema_classifier: Option<Arc<SchemaClassifier>>,
+    ) -> Self {
+        Self {
+            db,
+            planner,
+            memory,
+            triager,
+            schema_classifier,
         }
     }
 
@@ -47,14 +75,94 @@ impl EventHandler {
         .fetch_one(self.db.pool())
         .await?;
         let user_id = UserId(row.get("user_id"));
+        let event_type: String = row.get("event_type");
+        let occurred_at: DateTime<Utc> = row.get("occurred_at");
+        let payload: Value = row.get("payload");
+
+        // 1. Jev System 1 Triage Gate
+        if let Some(triager) = &self.triager {
+            match triager.triage(&event_type, &payload).await {
+                Ok(triage) => {
+                    tracing::info!(
+                        event_id = %event_id.0,
+                        action = ?triage.action,
+                        confidence = triage.confidence,
+                        is_critical_alert = triage.is_critical_alert,
+                        "Jev System 1: event triage decision"
+                    );
+
+                    // Ignore routine / benign telemetry without LLM overhead (confidence >= 0.80)
+                    if triage.action == EventTriageAction::Ignore && triage.confidence >= 0.80 {
+                        tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
+                        sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
+                            .bind(event_id.0)
+                            .execute(self.db.pool())
+                            .await?;
+                        return Ok(());
+                    }
+
+                    // Direct ingestion fast-path for structured data records
+                    if triage.action == EventTriageAction::StoreRecord {
+                        if let Some(classifier) = &self.schema_classifier {
+                            if let Ok(class_res) = classifier.classify(user_id.0, &payload).await {
+                                match class_res {
+                                    SchemaClassificationResult::Existing { schema, confidence } => {
+                                        if validate_data_against_schema(&schema.json_schema, &payload).is_ok() {
+                                            tracing::info!(
+                                                event_id = %event_id.0,
+                                                schema = %schema.qualified_name,
+                                                confidence,
+                                                "Jev System 1: direct ingestion into user_records"
+                                            );
+                                            let _ = sqlx::query(
+                                                "INSERT INTO user_records (user_id, schema_id, domain, entity_type, title, data, occurred_at, source) \
+                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                                            )
+                                            .bind(user_id.0)
+                                            .bind(schema.id)
+                                            .bind(&schema.namespace)
+                                            .bind(&schema.name)
+                                            .bind(format!("{} logged", schema.qualified_name))
+                                            .bind(&payload)
+                                            .bind(occurred_at)
+                                            .bind("jev_system1_ingest")
+                                            .execute(self.db.pool())
+                                            .await;
+
+                                            sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
+                                                .bind(event_id.0)
+                                                .execute(self.db.pool())
+                                                .await?;
+                                            return Ok(());
+                                        }
+                                    }
+                                    SchemaClassificationResult::Novel { reason, .. } => {
+                                        tracing::info!(
+                                            event_id = %event_id.0,
+                                            reason,
+                                            "Jev System 1: novel schema detected, escalating to Gemini (System 2)"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "Jev triage evaluation failed, falling back to System 2 planner");
+                }
+            }
+        }
+
+        // 2. System 2 (Gemini Event Planner)
         let actions = self
             .planner
             .plan(EventPlanningPrompt {
                 user_id,
                 user_context: self.memory.load(user_id).await?,
-                event_type: row.get("event_type"),
-                occurred_at: row.get::<DateTime<Utc>, _>("occurred_at"),
-                payload: row.get("payload"),
+                event_type,
+                occurred_at,
+                payload,
             })
             .await?;
 

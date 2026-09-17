@@ -24,6 +24,21 @@ fn loads_required_configuration_without_redis() {
     assert_eq!(config.gemini_api_key, "gemini-test-key");
     assert_eq!(config.exa_api_key, "exa-test-key");
     assert_eq!(config.gemini_model, "gemini-3.5-flash-lite");
+    assert_eq!(config.jev_api_key, None);
+    assert!(!config.jev_enabled);
+    assert_eq!(config.jev_base_url, "https://api.typesafe.ai/v1/systemone");
+}
+
+#[test]
+fn loads_jev_configuration_when_set() {
+    let mut values = values();
+    values.insert("JEV", "test-jev-token");
+
+    let config = Config::from_values(|name| values.get(name).map(|value| value.to_string()))
+        .expect("valid configuration");
+
+    assert_eq!(config.jev_api_key, Some("test-jev-token".to_string()));
+    assert!(config.jev_enabled);
 }
 
 #[test]

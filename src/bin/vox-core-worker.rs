@@ -39,7 +39,17 @@ async fn main() {
             as Arc<dyn ContextCache>
     });
     let memory = MemoryService::new(db.clone(), cache);
-    let events = EventHandler::with_memory(db.clone(), planner.clone(), memory.clone());
+
+    let (triager, schema_classifier) = if let Some(ref api_key) = config.jev_api_key {
+        let client = vox_core::jev::client::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
+        (
+            Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(client.clone()))),
+            Some(Arc::new(vox_core::jev::schema_classifier::SchemaClassifier::new(client, db.clone()))),
+        )
+    } else {
+        (None, None)
+    };
+    let events = EventHandler::with_jev(db.clone(), planner.clone(), memory.clone(), triager, schema_classifier);
     let schedules = ScheduleHandler::with_memory(db.clone(), planner, memory.clone());
     let ticker = ScheduleTicker::new(db.clone());
 

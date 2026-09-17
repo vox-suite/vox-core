@@ -9,6 +9,9 @@ pub struct Config {
     pub exa_api_key: String,
     pub google_maps_api_key: Option<String>,
     pub bridge_url: Option<String>,
+    pub jev_api_key: Option<String>,
+    pub jev_base_url: String,
+    pub jev_enabled: bool,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -26,6 +29,14 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
+        let jev_api_key = get("JEV")
+            .or_else(|| get("JEV_API_KEY"))
+            .filter(|value| !value.trim().is_empty());
+        let jev_enabled = jev_api_key.is_some();
+        let jev_base_url = get("JEV_BASE_URL")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://api.typesafe.ai/v1/systemone".to_string());
+
         Ok(Self {
             bind_address: non_empty(&get, "VOX_CORE_BIND_ADDRESS")?,
             database_url: non_empty(&get, "DATABASE_URL")?,
@@ -39,6 +50,9 @@ impl Config {
             google_maps_api_key: get("GOOGLE_MAPS_API_KEY")
                 .filter(|value| !value.trim().is_empty()),
             bridge_url: get("VOX_BRIDGE_URL").filter(|value| !value.trim().is_empty()),
+            jev_api_key,
+            jev_base_url,
+            jev_enabled,
         })
     }
 }
