@@ -100,10 +100,29 @@ CREATE TABLE tasks (
     CONSTRAINT tasks_execution_type_valid CHECK (execution_type IN ('autonomous', 'interactive', 'manual_human'))
 );
 
+CREATE TABLE data_schemas (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    description TEXT NOT NULL,
+    json_schema JSONB NOT NULL,
+    embedding vector(768),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT data_schemas_user_namespace_name_version_key UNIQUE (user_id, namespace, name, version),
+    CONSTRAINT data_schemas_namespace_not_empty CHECK (length(btrim(namespace)) > 0),
+    CONSTRAINT data_schemas_name_not_empty CHECK (length(btrim(name)) > 0),
+    CONSTRAINT data_schemas_description_not_empty CHECK (length(btrim(description)) > 0),
+    CONSTRAINT data_schemas_json_schema_is_object CHECK (jsonb_typeof(json_schema) = 'object')
+);
+
 CREATE TABLE user_goals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+    schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL,
     domain TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -120,10 +139,12 @@ CREATE TABLE user_goals (
 CREATE TABLE user_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL,
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     title TEXT NOT NULL,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding vector(768),
     occurred_at TIMESTAMPTZ NOT NULL,
     source TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -137,6 +158,7 @@ CREATE TABLE user_records (
 CREATE TABLE user_insights (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL,
     domain TEXT NOT NULL,
     summary TEXT NOT NULL,
     reasoning TEXT NOT NULL,
@@ -275,6 +297,9 @@ CREATE INDEX tasks_project_idx ON tasks (project_id);
 CREATE INDEX user_goals_user_domain_idx ON user_goals (user_id, domain, status);
 CREATE INDEX user_records_domain_idx ON user_records (user_id, domain, occurred_at DESC);
 CREATE INDEX user_records_gin_data ON user_records USING gin (data);
+CREATE INDEX user_records_user_schema_idx ON user_records (user_id, schema_id, occurred_at DESC);
+CREATE INDEX data_schemas_lookup_idx ON data_schemas (user_id, namespace, name);
+CREATE INDEX data_schemas_gin_schema ON data_schemas USING gin (json_schema);
 CREATE INDEX user_insights_user_idx ON user_insights (user_id, domain, outcome_status);
 CREATE INDEX client_devices_user_active_idx ON client_devices (user_id, is_active);
 CREATE INDEX actions_user_state_idx ON actions (user_id, state);

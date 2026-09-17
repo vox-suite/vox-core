@@ -14,12 +14,14 @@ use vox_core::{
 async fn main() {
     tracing_subscriber::fmt::init();
     let config = Config::from_env().expect("Vox Core configuration is invalid");
+
     let db = Db::connect(&config.database_url)
         .await
         .expect("Vox Core database is unavailable");
     db.migrate()
         .await
         .expect("Vox Core database migration failed");
+
     let agent = Arc::new(
         ConversationAgent::with_db(&config, db.clone())
             .expect("Vox Core agent configuration is invalid"),

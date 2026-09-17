@@ -1,10 +1,12 @@
 CREATE TABLE user_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL,
     domain TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     title TEXT NOT NULL,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding vector(768),
     occurred_at TIMESTAMPTZ NOT NULL,
     source TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
