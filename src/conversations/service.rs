@@ -124,6 +124,7 @@ impl ConversationService {
             .await?;
         self.append_message(conversation_id, "assistant", text.trim())
             .await?;
+        let _ = self.memory.refresh(user_id).await;
         Ok(RespondResponse {
             conversation_id,
             text,
