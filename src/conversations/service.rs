@@ -8,9 +8,13 @@ use crate::{
     identity::{IdentityService, UserId},
     memory::MemoryService,
 };
+use futures_util::{Stream, StreamExt, stream};
 use sqlx::Row;
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 use uuid::Uuid;
+
+pub type ConversationTextStream =
+    Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
 
 #[derive(Clone)]
 pub struct ConversationService {
@@ -129,6 +133,110 @@ impl ConversationService {
             conversation_id,
             text,
         })
+    }
+
+    pub async fn respond_stream(
+        &self,
+        request: RespondRequest,
+    ) -> Result<ConversationTextStream, ConversationError> {
+        if request.identity.channel.trim().is_empty()
+            || request.identity.external_id.trim().is_empty()
+            || request.external_conversation_id.trim().is_empty()
+            || request.text.trim().is_empty()
+        {
+            return Err(ConversationError::Invalid);
+        }
+        let user_id = self.identities.resolve(&request.identity).await?;
+
+        if let Some(init_ctx) = &request.initiation_context {
+            if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
+                let wa_name_clean = wa_name.trim();
+                if !wa_name_clean.is_empty() {
+                    let _ = sqlx::query(
+                        "UPDATE user_profiles \
+                         SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
+                             updated_at = now() \
+                         WHERE user_id = $2 AND (facts->>'name' IS NULL OR facts->>'name' = '')",
+                    )
+                    .bind(wa_name_clean)
+                    .bind(user_id.0)
+                    .execute(self.db.pool())
+                    .await;
+                }
+            }
+        }
+
+        let known_name: Option<String> = sqlx::query_scalar(
+            "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
+        )
+        .bind(user_id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .flatten();
+
+        let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+        let needs_onboarding = !has_name;
+
+        let conversation_id = self
+            .resolve_conversation(
+                user_id,
+                &request.identity.channel,
+                &request.external_conversation_id,
+            )
+            .await?;
+
+        let prior_messages = self.load_recent_messages(conversation_id).await?;
+
+        self.append_message(conversation_id, "user", request.text.trim())
+            .await?;
+
+        let user_context = self.memory.load(user_id).await?;
+
+        let stream = self
+            .agent
+            .respond_stream(ConversationPrompt {
+                user_id,
+                channel: request.identity.channel.clone(),
+                user_context,
+                recent_messages: prior_messages,
+                user_text: request.text,
+                initiation_context: request.initiation_context,
+                needs_onboarding,
+            })
+            .await?;
+
+        let service = self.clone();
+        let out_stream = stream::unfold(
+            (stream, String::new(), false, service, conversation_id, user_id),
+            |(mut stream, mut full_text, mut finished, service, conv_id, uid)| async move {
+                if finished {
+                    return None;
+                }
+                match stream.next().await {
+                    Some(Ok(chunk)) => {
+                        full_text.push_str(&chunk);
+                        Some((Ok(chunk), (stream, full_text, false, service, conv_id, uid)))
+                    }
+                    Some(Err(err)) => {
+                        Some((
+                            Err(ConversationError::Agent(err)),
+                            (stream, full_text, true, service, conv_id, uid),
+                        ))
+                    }
+                    None => {
+                        let text_to_save = full_text.trim().to_string();
+                        if !text_to_save.is_empty() {
+                            let _ = service.append_message(conv_id, "assistant", &text_to_save).await;
+                            let _ = service.memory.refresh(uid).await;
+                        }
+                        finished = true;
+                        None
+                    }
+                }
+            },
+        );
+
+        Ok(Box::pin(out_stream))
     }
 
     pub async fn complete(
