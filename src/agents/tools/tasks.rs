@@ -112,6 +112,14 @@ impl Tool for CreateTask {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            title = %args.title,
+            project = ?args.project_name,
+            due_at = ?args.due_at,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(TaskToolError::NotConfigured)?;
         let title = args.title.trim();
         if title.is_empty() {
@@ -240,6 +248,13 @@ impl Tool for ListTasks {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            status = ?args.status,
+            project_id = ?args.project_id,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(TaskToolError::NotConfigured)?;
         let status_filter = args.status.as_deref().unwrap_or("pending");
         let limit = args.limit.unwrap_or(20).clamp(1, 100);
@@ -375,6 +390,13 @@ impl Tool for GetTask {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            task_id = ?args.task_id,
+            title_query = ?args.title_query,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(TaskToolError::NotConfigured)?;
         let row = if let Some(tid_str) = args.task_id {
             let tid = Uuid::parse_str(tid_str.trim())
@@ -498,6 +520,13 @@ impl Tool for UpdateTask {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            task_id = %args.task_id,
+            status = ?args.status,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(TaskToolError::NotConfigured)?;
         let tid = Uuid::parse_str(args.task_id.trim())
             .map_err(|_| TaskToolError::InvalidInput("Invalid task UUID".into()))?;

@@ -78,6 +78,11 @@ impl Tool for ListDevices {
         _context: &mut rig::prelude::ToolContext,
         _args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(DeviceToolError::NotConfigured)?;
         let rows = sqlx::query(
             "SELECT id, device_identifier, platform, device_name, is_active, last_seen_at, telemetry \
@@ -170,6 +175,13 @@ impl Tool for DispatchDeviceCommand {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            command_type = %args.command_type,
+            target_device = ?args.target_device,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(DeviceToolError::NotConfigured)?;
         let cmd_type = args.command_type.trim();
         let payload = args.command_payload.unwrap_or_else(|| json!({}));

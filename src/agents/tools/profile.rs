@@ -82,6 +82,12 @@ impl Tool for GetUserInfo {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            include_persona = ?args.include_persona,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProfileToolError::NotConfigured)?;
         let row = sqlx::query(
             "SELECT facts, persona, version FROM user_profiles WHERE user_id = $1",
@@ -169,6 +175,14 @@ impl Tool for UpdateUserInfo {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            name = ?args.name,
+            has_facts = args.facts.is_some(),
+            has_persona = args.persona.is_some(),
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProfileToolError::NotConfigured)?;
         let mut updates = args.facts.unwrap_or_default();
         if let Some(name) = args.name {

@@ -56,6 +56,12 @@ impl Tool for TriggerOutboundCall {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            reason = %args.reason,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or_else(|| io::Error::other("Database unavailable"))?;
 
         let reason = args.reason.trim();

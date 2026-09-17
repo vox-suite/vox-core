@@ -103,6 +103,7 @@ impl Tool for SearchPlaces {
             .as_deref()
             .ok_or(GoogleMapsError::MissingApiKey)?;
         let started_at = std::time::Instant::now();
+        tracing::info!(tool = Self::NAME, query = %args.query, "Tool called");
         let mut body = json!({ "textQuery": args.query });
 
         if let (Some(latitude), Some(longitude)) = (args.latitude, args.longitude) {
@@ -113,8 +114,6 @@ impl Tool for SearchPlaces {
                 }
             });
         }
-
-        eprintln!("agent_tool event=start tool=search_places");
 
         let response = self
             .client
@@ -138,10 +137,11 @@ impl Tool for SearchPlaces {
         let output = serde_json::to_string(&reduce_places_response(response))
             .expect("serializing JSON values cannot fail");
 
-        eprintln!(
-            "agent_tool event=complete tool=search_places elapsed_ms={} response_bytes={}",
-            started_at.elapsed().as_millis(),
-            output.len()
+        tracing::info!(
+            tool = Self::NAME,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            response_bytes = output.len(),
+            "Tool completed successfully"
         );
 
         Ok(output)
@@ -219,7 +219,13 @@ impl Tool for GetRoute {
             "units": "METRIC"
         });
 
-        eprintln!("agent_tool event=start tool=get_route travel_mode={travel_mode}");
+        tracing::info!(
+            tool = Self::NAME,
+            origin = %args.origin,
+            destination = %args.destination,
+            travel_mode,
+            "Tool called"
+        );
 
         let response = self
             .client
@@ -230,20 +236,15 @@ impl Tool for GetRoute {
             .send()
             .await?;
 
-        eprintln!(
-            "agent_tool event=response tool=get_route status={} elapsed_ms={}",
-            response.status(),
-            started_at.elapsed().as_millis()
-        );
-
         let response = response.error_for_status()?.json::<Value>().await?;
         let output = serde_json::to_string(&reduce_routes_response(response))
             .expect("serializing JSON values cannot fail");
 
-        eprintln!(
-            "agent_tool event=complete tool=get_route elapsed_ms={} response_bytes={}",
-            started_at.elapsed().as_millis(),
-            output.len()
+        tracing::info!(
+            tool = Self::NAME,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            response_bytes = output.len(),
+            "Tool completed successfully"
         );
 
         Ok(output)

@@ -100,6 +100,14 @@ impl Tool for CreateUserRecord {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            domain = %args.domain,
+            entity_type = %args.entity_type,
+            title = %args.title,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(RecordToolError::NotConfigured)?;
         let domain = args.domain.trim();
         let entity_type = args.entity_type.trim();
@@ -189,6 +197,13 @@ impl Tool for ListUserRecords {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            domain = ?args.domain,
+            entity_type = ?args.entity_type,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(RecordToolError::NotConfigured)?;
         let limit = args.limit.unwrap_or(15).clamp(1, 50);
 
@@ -323,6 +338,13 @@ impl Tool for ManageUserGoal {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            domain = %args.domain,
+            title = %args.title,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(RecordToolError::NotConfigured)?;
         let domain = args.domain.trim();
         let title = args.title.trim();

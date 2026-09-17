@@ -91,6 +91,12 @@ impl Tool for CreateProject {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            name = %args.name,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProjectToolError::NotConfigured)?;
         let name = args.name.trim();
         if name.is_empty() {
@@ -164,6 +170,12 @@ impl Tool for ListProjects {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            status = ?args.status,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProjectToolError::NotConfigured)?;
         let status_filter = args.status.as_deref().unwrap_or("active");
 
@@ -268,6 +280,13 @@ impl Tool for GetProject {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            project_id = ?args.project_id,
+            name = ?args.name,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProjectToolError::NotConfigured)?;
         let row = if let Some(pid_str) = args.project_id {
             let pid = Uuid::parse_str(pid_str.trim())
@@ -399,6 +418,13 @@ impl Tool for UpdateProject {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        tracing::info!(
+            tool = Self::NAME,
+            user_id = %self.user_id.0,
+            project_id = %args.project_id,
+            status = ?args.status,
+            "Tool called"
+        );
         let db = self.db.as_ref().ok_or(ProjectToolError::NotConfigured)?;
         let pid = Uuid::parse_str(args.project_id.trim())
             .map_err(|_| ProjectToolError::InvalidInput("Invalid project UUID".into()))?;
