@@ -75,45 +75,19 @@ impl ConversationService {
             if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
                 let wa_name_clean = wa_name.trim();
                 if !wa_name_clean.is_empty() {
-                    let _ = sqlx::query(
-                        "UPDATE user_profiles \
-                         SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
-                             updated_at = now() \
-                         WHERE user_id = $2 AND (facts->>'name' IS NULL OR facts->>'name' = '')",
-                    )
-                    .bind(wa_name_clean)
-                    .bind(user_id.0)
-                    .execute(self.db.pool())
-                    .await;
+                    let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
                 }
             }
         }
 
-        // Check if user's name is known in facts
-        let mut known_name: Option<String> = sqlx::query_scalar(
-            "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
-        )
-        .bind(user_id.0)
-        .fetch_optional(self.db.pool())
-        .await?
-        .flatten();
-
+        // Fast lookup of user's name via Redis cache (falls back to PostgreSQL)
+        let mut known_name = self.memory.get_user_name(user_id).await?;
         let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
 
-        // Fast-path name extraction: If user states their name during onboarding, save it immediately
-        // so Gemini can generate the conversational greeting directly without a blocking update_user_info roundtrip.
+        // Fast-path name extraction: If user states their name during onboarding, save to Redis + DB
         if !has_name {
             if let Some(extracted_name) = extract_name_from_text(&request.text) {
-                let _ = sqlx::query(
-                    "UPDATE user_profiles \
-                     SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
-                         updated_at = now() \
-                     WHERE user_id = $2",
-                )
-                .bind(&extracted_name)
-                .bind(user_id.0)
-                .execute(self.db.pool())
-                .await;
+                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
                 has_name = true;
                 known_name = Some(extracted_name);
             }
@@ -134,6 +108,30 @@ impl ConversationService {
 
         self.append_message(conversation_id, "user", request.text.trim())
             .await?;
+
+        // Inbound call opening fast-path: Greet immediately (<1ms) using cached name from Redis
+        let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
+        let is_inbound_connect = is_voice
+            && prior_messages.is_empty()
+            && (request.text.trim() == "The call just connected. Greet the user."
+                || request.initiation_context.as_deref()
+                    == Some("The call just connected. Greet the user."));
+
+        if is_inbound_connect {
+            let greeting = if let Some(ref name) = known_name {
+                format!("Hello {}! How can I help you today?", name.trim())
+            } else {
+                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_string()
+            };
+
+            self.append_message(conversation_id, "assistant", &greeting).await?;
+            let _ = self.memory.refresh(user_id).await;
+            return Ok(RespondResponse {
+                conversation_id,
+                text: greeting,
+            });
+        }
+
         let text = self
             .agent
             .respond(ConversationPrompt {
@@ -172,44 +170,19 @@ impl ConversationService {
             if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
                 let wa_name_clean = wa_name.trim();
                 if !wa_name_clean.is_empty() {
-                    let _ = sqlx::query(
-                        "UPDATE user_profiles \
-                         SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
-                             updated_at = now() \
-                         WHERE user_id = $2 AND (facts->>'name' IS NULL OR facts->>'name' = '')",
-                    )
-                    .bind(wa_name_clean)
-                    .bind(user_id.0)
-                    .execute(self.db.pool())
-                    .await;
+                    let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
                 }
             }
         }
 
-        let mut known_name: Option<String> = sqlx::query_scalar(
-            "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
-        )
-        .bind(user_id.0)
-        .fetch_optional(self.db.pool())
-        .await?
-        .flatten();
-
+        // Fast lookup of user's name via Redis cache (falls back to PostgreSQL)
+        let mut known_name = self.memory.get_user_name(user_id).await?;
         let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
 
-        // Fast-path name extraction: If user states their name during onboarding, save it immediately
-        // so Gemini can generate the conversational greeting directly without a blocking update_user_info roundtrip.
+        // Fast-path name extraction: If user states their name during onboarding, save to Redis + DB
         if !has_name {
             if let Some(extracted_name) = extract_name_from_text(&request.text) {
-                let _ = sqlx::query(
-                    "UPDATE user_profiles \
-                     SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
-                         updated_at = now() \
-                     WHERE user_id = $2",
-                )
-                .bind(&extracted_name)
-                .bind(user_id.0)
-                .execute(self.db.pool())
-                .await;
+                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
                 has_name = true;
                 known_name = Some(extracted_name);
             }
@@ -229,6 +202,38 @@ impl ConversationService {
 
         self.append_message(conversation_id, "user", request.text.trim())
             .await?;
+
+        // Inbound call opening fast-path: Stream greeting immediately (<1ms) using cached name from Redis
+        let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
+        let is_inbound_connect = is_voice
+            && prior_messages.is_empty()
+            && (request.text.trim() == "The call just connected. Greet the user."
+                || request.initiation_context.as_deref()
+                    == Some("The call just connected. Greet the user."));
+
+        if is_inbound_connect {
+            let greeting = if let Some(ref name) = known_name {
+                format!("Hello {}! How can I help you today?", name.trim())
+            } else {
+                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_string()
+            };
+
+            self.append_message(conversation_id, "assistant", &greeting).await?;
+            let _ = self.memory.refresh(user_id).await;
+
+            let chunks = if let Some(ref name) = known_name {
+                vec![
+                    Ok(format!("Hello {}! ", name.trim())),
+                    Ok("How can I help you today?".to_string()),
+                ]
+            } else {
+                vec![
+                    Ok("Hello! I'm Vox, your personal AI assistant. ".to_string()),
+                    Ok("What should I call you?".to_string()),
+                ]
+            };
+            return Ok(Box::pin(futures_util::stream::iter(chunks)));
+        }
 
         let user_context = self.memory.load(user_id).await?;
 

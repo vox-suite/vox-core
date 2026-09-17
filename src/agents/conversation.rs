@@ -270,7 +270,7 @@ impl ConversationAgent {
     }
 }
 
-fn spoken_response(response: &str) -> String {
+pub fn spoken_response(response: &str) -> String {
     let mut spoken = Vec::new();
     for line in response.lines() {
         let mut line = line.trim();
@@ -298,7 +298,129 @@ fn spoken_response(response: &str) -> String {
                 .map(str::to_owned),
         );
     }
-    spoken.join(" ")
+    let combined = spoken.join(" ");
+    let with_currency = normalize_currency(&combined);
+    expand_abbreviations(&with_currency)
+}
+
+fn normalize_currency(text: &str) -> String {
+    let mut words = Vec::new();
+    for token in text.split_whitespace() {
+        let clean = token.trim_end_matches([',', '.', '!', '?', ';', ':']);
+        let punctuation = &token[clean.len()..];
+
+        if let Some(stripped) = clean.strip_prefix('$') {
+            if let Some((dollars, cents)) = stripped.split_once('.') {
+                if dollars.chars().all(|c| c.is_ascii_digit())
+                    && cents.chars().all(|c| c.is_ascii_digit())
+                    && !dollars.is_empty()
+                    && !cents.is_empty()
+                {
+                    words.push(format!("{dollars} dollars and {cents} cents{punctuation}"));
+                    continue;
+                }
+            } else if stripped.chars().all(|c| c.is_ascii_digit()) && !stripped.is_empty() {
+                words.push(format!("{stripped} dollars{punctuation}"));
+                continue;
+            }
+        } else if let Some(stripped) = clean.strip_prefix('₹') {
+            if stripped.chars().all(|c| c.is_ascii_digit()) && !stripped.is_empty() {
+                words.push(format!("{stripped} rupees{punctuation}"));
+                continue;
+            }
+        }
+        words.push(token.to_string());
+    }
+    words.join(" ")
+}
+
+fn expand_abbreviations(text: &str) -> String {
+    let mut words = Vec::new();
+    for token in text.split_whitespace() {
+        let clean = token.trim_end_matches([',', ';', ':']);
+        let punctuation = &token[clean.len()..];
+        let expanded = match clean {
+            "vs." | "Vs." => "versus",
+            "Jan." => "January",
+            "Feb." => "February",
+            "Mar." => "March",
+            "Apr." => "April",
+            "Aug." => "August",
+            "Sept." => "September",
+            "Oct." => "October",
+            "Nov." => "November",
+            "Dec." => "December",
+            "Dr." => "Doctor",
+            "Mr." => "Mister",
+            "Mrs." => "Missus",
+            "approx." => "approximately",
+            _ => clean,
+        };
+        if expanded != clean {
+            words.push(format!("{expanded}{punctuation}"));
+        } else {
+            words.push(token.to_string());
+        }
+    }
+    words.join(" ")
+}
+
+pub fn split_spoken_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut start = 0;
+
+    let mut i = 0;
+    while i < len {
+        let c = chars[i];
+        if c == '.' || c == '!' || c == '?' {
+            let next_is_boundary = i + 1 == len || chars[i + 1].is_whitespace();
+
+            if next_is_boundary {
+                let is_decimal = if c == '.' && i > 0 && i + 1 < len {
+                    chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()
+                } else {
+                    false
+                };
+
+                let prefix: String = chars[start..i].iter().collect();
+                let last_word = prefix.split_whitespace().last().unwrap_or("");
+                let is_abbr = matches!(
+                    last_word.to_ascii_lowercase().as_str(),
+                    "mr" | "mrs" | "ms" | "dr" | "prof" | "sr" | "jr" | "vs" | "eg" | "ie" | "etc" | "st" | "ave" | "oct" | "nov" | "dec" | "jan" | "feb" | "mar" | "apr" | "aug" | "sept"
+                );
+
+                if !is_decimal && !is_abbr {
+                    let candidate: String = chars[start..=i].iter().collect();
+                    let trimmed = candidate.trim().to_string();
+                    if trimmed.chars().any(|ch| ch.is_alphabetic()) {
+                        sentences.push(trimmed);
+                        start = i + 1;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if start < len {
+        let remaining: String = chars[start..].iter().collect();
+        let trimmed = remaining.trim().to_string();
+        if trimmed.chars().any(|ch| ch.is_alphabetic()) {
+            sentences.push(trimmed);
+        } else if !trimmed.is_empty() && !sentences.is_empty() {
+            let last_idx = sentences.len() - 1;
+            sentences[last_idx].push(' ');
+            sentences[last_idx].push_str(&trimmed);
+        }
+    }
+
+    if sentences.is_empty() && text.trim().chars().any(|ch| ch.is_alphabetic()) {
+        sentences.push(text.trim().to_string());
+    }
+
+    sentences
 }
 
 fn remove_markdown_links(value: &str) -> String {
@@ -341,25 +463,12 @@ impl ConversationResponder for ConversationAgent {
         let is_voice = is_voice_channel(&prompt.channel);
         let text = self.generate_response(prompt).await?;
         if is_voice {
-            let mut chunks = Vec::new();
-            let mut remaining = text.as_str();
-            while let Some(pos) = remaining.find(|c| c == '.' || c == '!' || c == '?') {
-                let (sentence, rest) = remaining.split_at(pos + 1);
-                let trimmed = sentence.trim();
-                if !trimmed.is_empty() {
-                    chunks.push(format!("{trimmed} "));
-                }
-                remaining = rest;
-            }
-            let trimmed_rest = remaining.trim();
-            if !trimmed_rest.is_empty() {
-                chunks.push(trimmed_rest.to_string());
-            }
-            if chunks.is_empty() {
-                chunks.push(text);
-            }
-            let items: Vec<Result<String, AgentError>> = chunks.into_iter().map(Ok).collect();
-            Ok(Box::pin(futures_util::stream::iter(items)))
+            let sentences = split_spoken_sentences(&text);
+            let chunks: Vec<Result<String, AgentError>> = sentences
+                .into_iter()
+                .map(|s| Ok(format!("{s} ")))
+                .collect();
+            Ok(Box::pin(futures_util::stream::iter(chunks)))
         } else {
             Ok(Box::pin(futures_util::stream::once(async move { Ok(text) })))
         }
@@ -400,5 +509,33 @@ mod tests {
             spoken_response("It looks busy near your office, so I'd leave ten minutes early."),
             "It looks busy near your office, so I'd leave ten minutes early."
         );
+    }
+
+    #[test]
+    fn normalizes_currency_and_abbreviations_for_speech() {
+        assert_eq!(
+            spoken_response("Apple stock is currently at $235.40. India vs. West Indies on Oct. 2."),
+            "Apple stock is currently at 235 dollars and 40 cents. India versus West Indies on October 2."
+        );
+    }
+
+    #[test]
+    fn splits_spoken_sentences_without_breaking_decimals_or_producing_letterless_chunks() {
+        use super::split_spoken_sentences;
+
+        let sentences = split_spoken_sentences(
+            "Apple is at $235.40 right now. India plays on Oct. 2, 2025. That is great!",
+        );
+        assert_eq!(
+            sentences,
+            vec![
+                "Apple is at $235.40 right now.",
+                "India plays on Oct. 2, 2025.",
+                "That is great!"
+            ]
+        );
+        for s in sentences {
+            assert!(s.chars().any(|c| c.is_alphabetic()));
+        }
     }
 }

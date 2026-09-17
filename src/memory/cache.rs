@@ -12,6 +12,8 @@ pub enum CacheError {
 pub trait ContextCache: Send + Sync {
     async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError>;
     async fn set(&self, user_id: UserId, value: &str) -> Result<(), CacheError>;
+    async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, CacheError>;
+    async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), CacheError>;
 }
 
 pub struct RedisContextCache {
@@ -40,6 +42,22 @@ impl ContextCache for RedisContextCache {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
             .set(format!("vox:user-context:{}", user_id.0), value)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        connection
+            .get(format!("vox:user-name:{}", user_id.0))
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        connection
+            .set(format!("vox:user-name:{}", user_id.0), name)
             .await
             .map_err(Into::into)
     }
