@@ -90,7 +90,7 @@ impl ConversationService {
         }
 
         // Check if user's name is known in facts
-        let known_name: Option<String> = sqlx::query_scalar(
+        let mut known_name: Option<String> = sqlx::query_scalar(
             "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
         )
         .bind(user_id.0)
@@ -98,7 +98,27 @@ impl ConversationService {
         .await?
         .flatten();
 
-        let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+        let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+
+        // Fast-path name extraction: If user states their name during onboarding, save it immediately
+        // so Gemini can generate the conversational greeting directly without a blocking update_user_info roundtrip.
+        if !has_name {
+            if let Some(extracted_name) = extract_name_from_text(&request.text) {
+                let _ = sqlx::query(
+                    "UPDATE user_profiles \
+                     SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
+                         updated_at = now() \
+                     WHERE user_id = $2",
+                )
+                .bind(&extracted_name)
+                .bind(user_id.0)
+                .execute(self.db.pool())
+                .await;
+                has_name = true;
+                known_name = Some(extracted_name);
+            }
+        }
+
         let needs_onboarding = !has_name;
 
         let conversation_id = self
@@ -166,7 +186,7 @@ impl ConversationService {
             }
         }
 
-        let known_name: Option<String> = sqlx::query_scalar(
+        let mut known_name: Option<String> = sqlx::query_scalar(
             "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
         )
         .bind(user_id.0)
@@ -174,7 +194,27 @@ impl ConversationService {
         .await?
         .flatten();
 
-        let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+        let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+
+        // Fast-path name extraction: If user states their name during onboarding, save it immediately
+        // so Gemini can generate the conversational greeting directly without a blocking update_user_info roundtrip.
+        if !has_name {
+            if let Some(extracted_name) = extract_name_from_text(&request.text) {
+                let _ = sqlx::query(
+                    "UPDATE user_profiles \
+                     SET facts = jsonb_set(facts, '{name}', to_jsonb($1::text), true), \
+                         updated_at = now() \
+                     WHERE user_id = $2",
+                )
+                .bind(&extracted_name)
+                .bind(user_id.0)
+                .execute(self.db.pool())
+                .await;
+                has_name = true;
+                known_name = Some(extracted_name);
+            }
+        }
+
         let needs_onboarding = !has_name;
 
         let conversation_id = self
@@ -355,5 +395,52 @@ impl ConversationService {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+}
+
+/// Extracts a user's stated name from an introductory or onboarding message
+/// (e.g. "My name is Rahul", "I'm Rahul", "Call me Rahul") to bypass synchronous tool calls.
+pub fn extract_name_from_text(text: &str) -> Option<String> {
+    let t = text.trim();
+    let lower = t.to_ascii_lowercase();
+
+    let prefixes = [
+        "my name is ",
+        "i am ",
+        "i'm ",
+        "call me ",
+        "this is ",
+        "it's ",
+        "it is ",
+    ];
+
+    for prefix in prefixes {
+        if lower.starts_with(prefix) {
+            let candidate = t[prefix.len()..].trim().trim_end_matches(['.', '!', '?']);
+            let word_count = candidate.split_whitespace().count();
+            if !candidate.is_empty()
+                && word_count >= 1
+                && word_count <= 3
+                && !candidate.contains(['\n', '\r', '\t', '{', '}', '[', ']'])
+            {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_name_from_text() {
+        assert_eq!(extract_name_from_text("My name is Rahul."), Some("Rahul".into()));
+        assert_eq!(extract_name_from_text("my name is rahul"), Some("rahul".into()));
+        assert_eq!(extract_name_from_text("I'm Rahul Sharma"), Some("Rahul Sharma".into()));
+        assert_eq!(extract_name_from_text("Call me John Doe"), Some("John Doe".into()));
+        assert_eq!(extract_name_from_text("Nope."), None);
+        assert_eq!(extract_name_from_text("Hello there"), None);
     }
 }
