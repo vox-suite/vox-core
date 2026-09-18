@@ -655,8 +655,24 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
     let t = text.trim();
     let lower = t.to_ascii_lowercase();
 
+    // Strip common conversational greeting prefixes like "hi", "hello", "hey"
+    let mut cleaned_lower = lower.as_str();
+    let mut cleaned_orig = t;
+    for greeting in &[
+        "hi,", "hi", "hello,", "hello", "hey,", "hey",
+        "good morning,", "good morning", "good evening,", "good evening", "good afternoon,", "good afternoon"
+    ] {
+        if let Some(rest) = cleaned_lower.strip_prefix(greeting) {
+            let offset = t.len() - rest.trim_start().len();
+            cleaned_orig = t[offset..].trim_start();
+            cleaned_lower = rest.trim_start();
+            break;
+        }
+    }
+
     let prefixes = [
         "my name is ",
+        "name is ",
         "i am ",
         "i'm ",
         "call me ",
@@ -666,8 +682,8 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
     ];
 
     for prefix in prefixes {
-        if lower.starts_with(prefix) {
-            let candidate = t[prefix.len()..].trim().trim_end_matches(['.', '!', '?']);
+        if cleaned_lower.starts_with(prefix) {
+            let candidate = cleaned_orig[prefix.len()..].trim().trim_end_matches(['.', '!', '?']);
             let word_count = candidate.split_whitespace().count();
             if !candidate.is_empty()
                 && word_count >= 1
@@ -678,6 +694,23 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
             }
         }
     }
+
+    // Direct name utterance fallback: if it's 1-2 words and not a generic conversational phrase
+    let trimmed = cleaned_orig.trim().trim_end_matches(['.', '!', '?']);
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() >= 1 && words.len() <= 2 && trimmed.len() <= 30 {
+        if words.iter().all(|w| w.chars().next().map_or(false, |c| c.is_alphabetic())) {
+            let lower_single = trimmed.to_ascii_lowercase();
+            let non_names = [
+                "yes", "no", "nope", "yeah", "yup", "ok", "okay", "sure", "thanks", "thank you",
+                "hello", "hi", "bye", "goodbye", "who is this", "what is this", "help", "who are you"
+            ];
+            if !non_names.contains(&lower_single.as_str()) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
     None
 }
 
@@ -691,6 +724,9 @@ mod tests {
         assert_eq!(extract_name_from_text("my name is rahul"), Some("rahul".into()));
         assert_eq!(extract_name_from_text("I'm Rahul Sharma"), Some("Rahul Sharma".into()));
         assert_eq!(extract_name_from_text("Call me John Doe"), Some("John Doe".into()));
+        assert_eq!(extract_name_from_text("Hi, my name is Rahul"), Some("Rahul".into()));
+        assert_eq!(extract_name_from_text("Hey, I'm Rahul"), Some("Rahul".into()));
+        assert_eq!(extract_name_from_text("Rahul"), Some("Rahul".into()));
         assert_eq!(extract_name_from_text("Nope."), None);
         assert_eq!(extract_name_from_text("Hello there"), None);
     }
