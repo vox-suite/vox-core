@@ -1,4 +1,4 @@
-use super::{AgentError, prompts::*, tools};
+use super::{AgentError, tools};
 use crate::{config::Config, db::Db, identity::UserId};
 use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};

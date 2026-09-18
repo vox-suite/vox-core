@@ -253,7 +253,7 @@ impl ConversationService {
         let service = self.clone();
         let out_stream = stream::unfold(
             (stream, String::new(), false, service, conversation_id, user_id),
-            |(mut stream, mut full_text, mut finished, service, conv_id, uid)| async move {
+            |(mut stream, mut full_text, finished, service, conv_id, uid)| async move {
                 if finished {
                     return None;
                 }
