@@ -7,8 +7,12 @@ use crate::{
     db::Db,
     identity::{IdentityService, UserId},
     memory::MemoryService,
+    voiceprint::{
+        VoiceSignature, extract_phone_digits, verify_phone_match, verify_voice_match_with_jev,
+    },
 };
 use futures_util::{Stream, StreamExt, stream};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{pin::Pin, sync::Arc};
 use uuid::Uuid;
@@ -16,12 +20,36 @@ use uuid::Uuid;
 pub type ConversationTextStream =
     Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum VerificationState {
+    AwaitingName {
+        original_user_id: UserId,
+        original_user_name: String,
+        voice_signature: Option<VoiceSignature>,
+    },
+    AwaitingPhoneConfirm {
+        original_user_id: UserId,
+        candidate_user_id: UserId,
+        candidate_name: String,
+        voice_signature: Option<VoiceSignature>,
+    },
+}
+
+pub enum VoiceVerificationOutcome {
+    Intercept(String),
+    Continue {
+        active_user_id: UserId,
+        needs_onboarding: bool,
+    },
+}
+
 #[derive(Clone)]
 pub struct ConversationService {
     db: Db,
     agent: Arc<dyn ConversationResponder>,
     identities: IdentityService,
     memory: MemoryService,
+    jev: Option<crate::jev::JevClient>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,7 +82,13 @@ impl ConversationService {
             db,
             agent,
             memory,
+            jev: None,
         }
+    }
+
+    pub fn with_jev(mut self, jev: crate::jev::JevClient) -> Self {
+        self.jev = Some(jev);
+        self
     }
 
     pub async fn respond(
@@ -80,22 +114,7 @@ impl ConversationService {
             }
         }
 
-        // Fast lookup of user's name via Redis cache (falls back to PostgreSQL)
-        let mut known_name = self.memory.get_user_name(user_id).await?;
-        let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
-
-        // Fast-path name extraction: If user states their name during onboarding, save to Redis + DB
-        if !has_name {
-            if let Some(extracted_name) = extract_name_from_text(&request.text) {
-                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
-                has_name = true;
-                known_name = Some(extracted_name);
-            }
-        }
-
-        let needs_onboarding = !has_name;
-
-        let conversation_id = self
+        let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
                 user_id,
                 &request.identity.channel,
@@ -109,6 +128,27 @@ impl ConversationService {
         self.append_message(conversation_id, "user", request.text.trim())
             .await?;
 
+        let outcome = self
+            .process_voice_verification(active_user_id, conversation_id, &request, &prior_messages)
+            .await?;
+
+        let needs_onboarding = match outcome {
+            VoiceVerificationOutcome::Intercept(reply) => {
+                self.append_message(conversation_id, "assistant", &reply).await?;
+                return Ok(RespondResponse {
+                    conversation_id,
+                    text: reply,
+                });
+            }
+            VoiceVerificationOutcome::Continue {
+                active_user_id: resolved_uid,
+                needs_onboarding,
+            } => {
+                active_user_id = resolved_uid;
+                needs_onboarding
+            }
+        };
+
         // Inbound call opening fast-path: Greet immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
@@ -118,6 +158,7 @@ impl ConversationService {
                     == Some("The call just connected. Greet the user."));
 
         if is_inbound_connect {
+            let known_name = self.memory.get_user_name(active_user_id).await?;
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
@@ -125,7 +166,7 @@ impl ConversationService {
             };
 
             self.append_message(conversation_id, "assistant", &greeting).await?;
-            let _ = self.memory.refresh(user_id).await;
+            let _ = self.memory.refresh(active_user_id).await;
             return Ok(RespondResponse {
                 conversation_id,
                 text: greeting,
@@ -135,9 +176,9 @@ impl ConversationService {
         let text = self
             .agent
             .respond(ConversationPrompt {
-                user_id,
+                user_id: active_user_id,
                 channel: request.identity.channel.clone(),
-                user_context: self.memory.load(user_id).await?,
+                user_context: self.memory.load(active_user_id).await?,
                 recent_messages: prior_messages,
                 user_text: request.text,
                 initiation_context: request.initiation_context,
@@ -146,7 +187,7 @@ impl ConversationService {
             .await?;
         self.append_message(conversation_id, "assistant", text.trim())
             .await?;
-        let _ = self.memory.refresh(user_id).await;
+        let _ = self.memory.refresh(active_user_id).await;
         Ok(RespondResponse {
             conversation_id,
             text,
@@ -175,22 +216,7 @@ impl ConversationService {
             }
         }
 
-        // Fast lookup of user's name via Redis cache (falls back to PostgreSQL)
-        let mut known_name = self.memory.get_user_name(user_id).await?;
-        let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
-
-        // Fast-path name extraction: If user states their name during onboarding, save to Redis + DB
-        if !has_name {
-            if let Some(extracted_name) = extract_name_from_text(&request.text) {
-                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
-                has_name = true;
-                known_name = Some(extracted_name);
-            }
-        }
-
-        let needs_onboarding = !has_name;
-
-        let conversation_id = self
+        let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
                 user_id,
                 &request.identity.channel,
@@ -203,6 +229,25 @@ impl ConversationService {
         self.append_message(conversation_id, "user", request.text.trim())
             .await?;
 
+        let outcome = self
+            .process_voice_verification(active_user_id, conversation_id, &request, &prior_messages)
+            .await?;
+
+        let needs_onboarding = match outcome {
+            VoiceVerificationOutcome::Intercept(reply) => {
+                self.append_message(conversation_id, "assistant", &reply).await?;
+                let chunks = vec![Ok(reply)];
+                return Ok(Box::pin(futures_util::stream::iter(chunks)));
+            }
+            VoiceVerificationOutcome::Continue {
+                active_user_id: resolved_uid,
+                needs_onboarding,
+            } => {
+                active_user_id = resolved_uid;
+                needs_onboarding
+            }
+        };
+
         // Inbound call opening fast-path: Stream greeting immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
@@ -212,6 +257,7 @@ impl ConversationService {
                     == Some("The call just connected. Greet the user."));
 
         if is_inbound_connect {
+            let known_name = self.memory.get_user_name(active_user_id).await?;
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
@@ -219,7 +265,7 @@ impl ConversationService {
             };
 
             self.append_message(conversation_id, "assistant", &greeting).await?;
-            let _ = self.memory.refresh(user_id).await;
+            let _ = self.memory.refresh(active_user_id).await;
 
             let chunks = if let Some(ref name) = known_name {
                 vec![
@@ -235,12 +281,12 @@ impl ConversationService {
             return Ok(Box::pin(futures_util::stream::iter(chunks)));
         }
 
-        let user_context = self.memory.load(user_id).await?;
+        let user_context = self.memory.load(active_user_id).await?;
 
         let stream = self
             .agent
             .respond_stream(ConversationPrompt {
-                user_id,
+                user_id: active_user_id,
                 channel: request.identity.channel.clone(),
                 user_context,
                 recent_messages: prior_messages,
@@ -252,7 +298,7 @@ impl ConversationService {
 
         let service = self.clone();
         let out_stream = stream::unfold(
-            (stream, String::new(), false, service, conversation_id, user_id),
+            (stream, String::new(), false, service, conversation_id, active_user_id),
             |(mut stream, mut full_text, finished, service, conv_id, uid)| async move {
                 if finished {
                     return None;
@@ -283,6 +329,215 @@ impl ConversationService {
         Ok(Box::pin(out_stream))
     }
 
+    async fn process_voice_verification(
+        &self,
+        user_id: UserId,
+        conversation_id: ConversationId,
+        request: &RespondRequest,
+        prior_messages: &[PromptMessage],
+    ) -> Result<VoiceVerificationOutcome, ConversationError> {
+        let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
+        if !is_voice {
+            let mut known_name = self.memory.get_user_name(user_id).await?;
+            let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+            return Ok(VoiceVerificationOutcome::Continue {
+                active_user_id: user_id,
+                needs_onboarding: !has_name,
+            });
+        }
+
+        let parsed_sig = request
+            .voice_signature
+            .as_deref()
+            .and_then(VoiceSignature::from_raw);
+
+        // 1. Check existing verification state (Redis + message fallback)
+        let state_opt: Option<VerificationState> = if let Some(state_json) = self.memory.get_verification_state(conversation_id.0).await {
+            serde_json::from_str(&state_json).ok()
+        } else {
+            // Fallback: detect from last assistant message in prior_messages
+            if let Some(last_msg) = prior_messages.last().filter(|m| m.role == "assistant") {
+                let text = last_msg.text.trim();
+                if text.starts_with("Your voice is not matching with ") && text.ends_with("What is your name?") {
+                    let name_part = text
+                        .strip_prefix("Your voice is not matching with ")
+                        .and_then(|s| s.strip_suffix(". What is your name?"))
+                        .unwrap_or("")
+                        .trim();
+                    Some(VerificationState::AwaitingName {
+                        original_user_id: user_id,
+                        original_user_name: name_part.to_string(),
+                        voice_signature: parsed_sig.clone(),
+                    })
+                } else if text.starts_with("I found a matching profile for ") && text.ends_with("Can you tell me your phone number to confirm?") {
+                    let name_part = text
+                        .strip_prefix("I found a matching profile for ")
+                        .and_then(|s| s.strip_suffix(" in my system. Can you tell me your phone number to confirm?"))
+                        .unwrap_or("")
+                        .trim();
+                    if let Ok(Some(cand_uid)) = self.memory.find_user_by_name(name_part).await {
+                        Some(VerificationState::AwaitingPhoneConfirm {
+                            original_user_id: user_id,
+                            candidate_user_id: cand_uid,
+                            candidate_name: name_part.to_string(),
+                            voice_signature: parsed_sig.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // 2. Handle active verification state transitions
+        match state_opt {
+            Some(VerificationState::AwaitingPhoneConfirm {
+                original_user_id: _,
+                candidate_user_id,
+                candidate_name,
+                voice_signature,
+            }) => {
+                let candidate_phones = self.memory.voiceprints().get_user_phones(candidate_user_id).await?;
+                let matched = candidate_phones
+                    .iter()
+                    .any(|p| verify_phone_match(&request.text, p));
+
+                let sig_to_save = parsed_sig.or(voice_signature);
+
+                if matched {
+                    // Verified existing user! Switch conversation user to candidate_user_id
+                    self.memory.voiceprints().update_conversation_user(conversation_id.0, candidate_user_id).await?;
+                    if let Some(ref sig) = sig_to_save {
+                        let _ = self.memory.set_voice_signature(candidate_user_id, sig).await;
+                    }
+                    self.memory.clear_verification_state(conversation_id.0).await;
+                    let _ = self.memory.refresh(candidate_user_id).await;
+                    let reply = format!(
+                        "Awesome, verified! Hello {}! I've connected to your profile. How can I help you today?",
+                        candidate_name
+                    );
+                    return Ok(VoiceVerificationOutcome::Intercept(reply));
+                } else {
+                    // Number didn't match -> create new user profile for this person
+                    let new_user = self.memory.voiceprints().create_user_with_name(&candidate_name).await?;
+                    self.memory.voiceprints().update_conversation_user(conversation_id.0, new_user).await?;
+                    if let Some(ref sig) = sig_to_save {
+                        let _ = self.memory.set_voice_signature(new_user, sig).await;
+                    }
+                    self.memory.clear_verification_state(conversation_id.0).await;
+                    let _ = self.memory.refresh(new_user).await;
+                    let reply = format!(
+                        "No worries, that number didn't match, so I've created a new profile for you, {}. How can I help you today?",
+                        candidate_name
+                    );
+                    return Ok(VoiceVerificationOutcome::Intercept(reply));
+                }
+            }
+
+            Some(VerificationState::AwaitingName {
+                original_user_id,
+                original_user_name: _,
+                voice_signature,
+            }) => {
+                let stated_name = extract_name_from_text(&request.text).unwrap_or_else(|| {
+                    request.text.trim().trim_end_matches(['.', '!', '?']).to_string()
+                });
+
+                let sig_to_save = parsed_sig.or(voice_signature);
+
+                // Look up in DB / Redis if candidate user already exists
+                let existing_user = self.memory.find_user_by_name(&stated_name).await?;
+
+                if let Some(cand_uid) = existing_user {
+                    let next_state = VerificationState::AwaitingPhoneConfirm {
+                        original_user_id,
+                        candidate_user_id: cand_uid,
+                        candidate_name: stated_name.clone(),
+                        voice_signature: sig_to_save,
+                    };
+                    if let Ok(json) = serde_json::to_string(&next_state) {
+                        self.memory.set_verification_state(conversation_id.0, &json).await;
+                    }
+                    let reply = format!(
+                        "I found a matching profile for {} in my system. Can you tell me your phone number to confirm?",
+                        stated_name
+                    );
+                    return Ok(VoiceVerificationOutcome::Intercept(reply));
+                } else {
+                    // Not found in DB/Redis -> create fresh user profile
+                    let new_user = self.memory.voiceprints().create_user_with_name(&stated_name).await?;
+                    self.memory.voiceprints().update_conversation_user(conversation_id.0, new_user).await?;
+                    if let Some(ref sig) = sig_to_save {
+                        let _ = self.memory.set_voice_signature(new_user, sig).await;
+                    }
+                    self.memory.clear_verification_state(conversation_id.0).await;
+                    let _ = self.memory.refresh(new_user).await;
+                    let reply = format!(
+                        "Nice to meet you {}! I've created a new profile for you. How can I help you today?",
+                        stated_name
+                    );
+                    return Ok(VoiceVerificationOutcome::Intercept(reply));
+                }
+            }
+
+            None => {}
+        }
+
+        // 3. Normal turn processing / Voice biometric matching check
+        let mut known_name = self.memory.get_user_name(user_id).await?;
+        let mut has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+
+        // Check if user is introducing themselves on first call
+        if !has_name {
+            if let Some(extracted_name) = extract_name_from_text(&request.text) {
+                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
+                if let Some(ref sig) = parsed_sig {
+                    let _ = self.memory.set_voice_signature(user_id, sig).await;
+                }
+                has_name = true;
+                known_name = Some(extracted_name.clone());
+                let reply = format!("Nice to meet you {}! How can I help you today?", extracted_name);
+                return Ok(VoiceVerificationOutcome::Intercept(reply));
+            }
+        }
+
+        // Check voice biometric match if name is known
+        if let Some(ref name) = known_name {
+            let stored_sig = self.memory.get_voice_signature(user_id).await?;
+            if let Some(ref sig) = parsed_sig {
+                if let Some(ref stored) = stored_sig {
+                    let similarity = sig.cosine_similarity(stored);
+                    let matches = verify_voice_match_with_jev(self.jev.as_ref(), similarity, name).await;
+                    if !matches {
+                        // Voice mismatch detected!
+                        let state = VerificationState::AwaitingName {
+                            original_user_id: user_id,
+                            original_user_name: name.clone(),
+                            voice_signature: Some(sig.clone()),
+                        };
+                        if let Ok(json) = serde_json::to_string(&state) {
+                            self.memory.set_verification_state(conversation_id.0, &json).await;
+                        }
+                        let reply = format!("Your voice is not matching with {}. What is your name?", name);
+                        return Ok(VoiceVerificationOutcome::Intercept(reply));
+                    }
+                } else {
+                    // First time caller with known name speaks with voice signature -> enroll!
+                    let _ = self.memory.set_voice_signature(user_id, sig).await;
+                }
+            }
+        }
+
+        Ok(VoiceVerificationOutcome::Continue {
+            active_user_id: user_id,
+            needs_onboarding: !has_name,
+        })
+    }
+
     pub async fn complete(
         &self,
         request: CompleteConversationRequest,
@@ -294,13 +549,10 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         let conversation = sqlx::query(
-            "SELECT c.id FROM conversations c \
-             JOIN user_identities ui ON ui.user_id = c.user_id \
-             WHERE c.channel = $1 AND c.external_id = $2 AND ui.channel = $1 AND ui.external_id = $3",
+            "SELECT id FROM conversations WHERE channel = $1 AND external_id = $2",
         )
         .bind(request.identity.channel.trim())
         .bind(request.external_conversation_id.trim())
-        .bind(request.identity.external_id.trim())
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -354,7 +606,7 @@ impl ConversationService {
         user_id: UserId,
         channel: &str,
         external_id: &str,
-    ) -> Result<ConversationId, ConversationError> {
+    ) -> Result<(ConversationId, UserId), ConversationError> {
         let row = sqlx::query(
             "INSERT INTO conversations (user_id, channel, external_id) VALUES ($1, $2, $3) \
              ON CONFLICT (channel, external_id) DO UPDATE SET external_id = EXCLUDED.external_id RETURNING id, user_id",
@@ -365,10 +617,7 @@ impl ConversationService {
         .fetch_one(self.db.pool())
         .await?;
         let stored_user: Uuid = row.get("user_id");
-        if stored_user != user_id.0 {
-            return Err(ConversationError::IdentityConflict);
-        }
-        Ok(ConversationId(row.get("id")))
+        Ok((ConversationId(row.get("id")), UserId(stored_user)))
     }
 
     async fn append_message(
@@ -446,5 +695,23 @@ mod tests {
         assert_eq!(extract_name_from_text("Call me John Doe"), Some("John Doe".into()));
         assert_eq!(extract_name_from_text("Nope."), None);
         assert_eq!(extract_name_from_text("Hello there"), None);
+    }
+
+    #[test]
+    fn test_verification_state_serialization() {
+        let state = VerificationState::AwaitingName {
+            original_user_id: UserId(Uuid::new_v4()),
+            original_user_name: "Rahul".into(),
+            voice_signature: Some(VoiceSignature::new(vec![0.1, 0.2, 0.3])),
+        };
+        let serialized = serde_json::to_string(&state).unwrap();
+        let deserialized: VerificationState = serde_json::from_str(&serialized).unwrap();
+        match deserialized {
+            VerificationState::AwaitingName { original_user_name, voice_signature, .. } => {
+                assert_eq!(original_user_name, "Rahul");
+                assert_eq!(voice_signature.unwrap().features, vec![0.1, 0.2, 0.3]);
+            }
+            _ => panic!("unexpected state"),
+        }
     }
 }

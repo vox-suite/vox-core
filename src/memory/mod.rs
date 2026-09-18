@@ -1,22 +1,36 @@
 pub mod cache;
 pub mod projection;
 
-use crate::{db::Db, identity::UserId};
+use crate::{
+    db::Db,
+    identity::UserId,
+    voiceprint::{VoiceSignature, VoiceprintService},
+};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MemoryService {
     db: Db,
     cache: Option<Arc<dyn cache::ContextCache>>,
+    voiceprints: VoiceprintService,
 }
 
 impl MemoryService {
     pub fn new(db: Db, cache: Option<Arc<dyn cache::ContextCache>>) -> Self {
-        Self { db, cache }
+        let voiceprints = VoiceprintService::new(db.clone());
+        Self {
+            db,
+            cache,
+            voiceprints,
+        }
     }
 
     pub fn cache(&self) -> Option<&Arc<dyn cache::ContextCache>> {
         self.cache.as_ref()
+    }
+
+    pub fn voiceprints(&self) -> &VoiceprintService {
+        &self.voiceprints
     }
 
     pub async fn load(&self, user_id: UserId) -> Result<String, sqlx::Error> {
@@ -50,6 +64,7 @@ impl MemoryService {
         if let Some(ref n) = name {
             if let Some(cache) = &self.cache {
                 let _ = cache.set_user_name(user_id, n).await;
+                let _ = cache.set_user_id_by_name(n, user_id).await;
             }
         }
 
@@ -72,9 +87,95 @@ impl MemoryService {
 
         if let Some(cache) = &self.cache {
             let _ = cache.set_user_name(user_id, trimmed).await;
+            let _ = cache.set_user_id_by_name(trimmed, user_id).await;
         }
 
         Ok(())
+    }
+
+    pub async fn get_voice_signature(
+        &self,
+        user_id: UserId,
+    ) -> Result<Option<VoiceSignature>, sqlx::Error> {
+        if let Some(cache) = &self.cache
+            && let Ok(Some(raw)) = cache.get_voice_signature(user_id).await
+        {
+            if let Some(sig) = VoiceSignature::from_raw(&raw) {
+                return Ok(Some(sig));
+            }
+        }
+
+        let sig = self.voiceprints.get_voiceprint(user_id).await?;
+        if let Some(ref s) = sig {
+            if let Some(cache) = &self.cache {
+                let _ = cache.set_voice_signature(user_id, &s.to_json()).await;
+            }
+        }
+        Ok(sig)
+    }
+
+    pub async fn set_voice_signature(
+        &self,
+        user_id: UserId,
+        signature: &VoiceSignature,
+    ) -> Result<(), sqlx::Error> {
+        self.voiceprints
+            .save_voiceprint(user_id, signature, 3000)
+            .await?;
+        if let Some(cache) = &self.cache {
+            let _ = cache
+                .set_voice_signature(user_id, &signature.to_json())
+                .await;
+        }
+        Ok(())
+    }
+
+    pub async fn find_user_by_name(&self, name: &str) -> Result<Option<UserId>, sqlx::Error> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(cache) = &self.cache
+            && let Ok(Some(uid)) = cache.get_user_id_by_name(trimmed).await
+        {
+            return Ok(Some(uid));
+        }
+
+        let user_id = self.voiceprints.find_user_by_name(trimmed).await?;
+        if let Some(uid) = user_id {
+            if let Some(cache) = &self.cache {
+                let _ = cache.set_user_id_by_name(trimmed, uid).await;
+            }
+        }
+        Ok(user_id)
+    }
+
+    pub async fn get_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+    ) -> Option<String> {
+        if let Some(cache) = &self.cache {
+            cache.get_verification_state(conversation_id).await.ok().flatten()
+        } else {
+            None
+        }
+    }
+
+    pub async fn set_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+        state: &str,
+    ) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.set_verification_state(conversation_id, state).await;
+        }
+    }
+
+    pub async fn clear_verification_state(&self, conversation_id: uuid::Uuid) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.clear_verification_state(conversation_id).await;
+        }
     }
 
     pub async fn refresh(&self, user_id: UserId) -> Result<(), sqlx::Error> {
@@ -89,6 +190,7 @@ impl MemoryService {
             .await
             {
                 let _ = cache.set_user_name(user_id, &name).await;
+                let _ = cache.set_user_id_by_name(&name, user_id).await;
             }
         }
         Ok(())

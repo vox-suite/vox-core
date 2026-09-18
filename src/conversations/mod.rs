@@ -14,6 +14,8 @@ pub struct RespondRequest {
     pub external_conversation_id: String,
     pub text: String,
     pub initiation_context: Option<String>,
+    #[serde(default)]
+    pub voice_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

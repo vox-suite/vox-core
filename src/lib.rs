@@ -12,4 +12,5 @@ pub mod jobs;
 pub mod memory;
 pub mod schedules;
 pub mod summaries;
+pub mod voiceprint;
 pub mod workers;
