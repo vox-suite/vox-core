@@ -108,7 +108,7 @@ impl ContextCache for RedisContextCache {
         let id_str: Option<String> = connection
             .get(format!("vox:user-by-name:{}", name.trim().to_lowercase()))
             .await
-            .map_err(Into::into)?;
+            .map_err(CacheError::Redis)?;
         if let Some(s) = id_str {
             if let Ok(uid) = uuid::Uuid::parse_str(&s) {
                 return Ok(Some(UserId(uid)));

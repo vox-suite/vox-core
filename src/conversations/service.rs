@@ -8,7 +8,7 @@ use crate::{
     identity::{IdentityService, UserId},
     memory::MemoryService,
     voiceprint::{
-        VoiceSignature, extract_phone_digits, verify_phone_match, verify_voice_match_with_jev,
+        VoiceSignature, verify_phone_match, verify_voice_match_with_jev,
     },
 };
 use futures_util::{Stream, StreamExt, stream};
@@ -338,7 +338,7 @@ impl ConversationService {
     ) -> Result<VoiceVerificationOutcome, ConversationError> {
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         if !is_voice {
-            let mut known_name = self.memory.get_user_name(user_id).await?;
+            let known_name = self.memory.get_user_name(user_id).await?;
             let has_name = known_name.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
             return Ok(VoiceVerificationOutcome::Continue {
                 active_user_id: user_id,
@@ -498,8 +498,6 @@ impl ConversationService {
                 if let Some(ref sig) = parsed_sig {
                     let _ = self.memory.set_voice_signature(user_id, sig).await;
                 }
-                has_name = true;
-                known_name = Some(extracted_name.clone());
                 let reply = format!("Nice to meet you {}! How can I help you today?", extracted_name);
                 return Ok(VoiceVerificationOutcome::Intercept(reply));
             }
