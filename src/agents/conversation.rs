@@ -120,89 +120,97 @@ impl ConversationAgent {
                 .default_max_turns(2)
                 .build()
         } else if is_voice {
-            let mut builder = client.agent(&self.model).preamble(preamble);
-
             match routed_domain {
-                crate::jev::ToolDomain::WebSearch => {
-                    builder = builder.tool(tools::web_search::WebSearch::new(
+                crate::jev::ToolDomain::WebSearch => client
+                    .agent(&self.model)
+                    .preamble(preamble)
+                    .tool(tools::web_search::WebSearch::new(
                         self.http.clone(),
                         self.exa_api_key.clone(),
-                    ));
-                }
-                crate::jev::ToolDomain::Maps => {
-                    builder = builder
-                        .tool(tools::google_maps::SearchPlaces::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::GetRoute::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ));
-                }
-                crate::jev::ToolDomain::TasksAndRecords => {
-                    builder = builder
-                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::records::CreateUserRecord::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::records::ListUserRecords::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::profile::UpdateUserInfo::new(self.db.clone(), prompt.user_id));
-                }
-                crate::jev::ToolDomain::Calendar => {
-                    builder = builder
-                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
-                        .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id));
-                }
-                _ => {
-                    builder = builder
-                        .tool(tools::web_search::WebSearch::new(
-                            self.http.clone(),
-                            self.exa_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::SearchPlaces::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::GetRoute::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::profile::GetUserInfo::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::profile::UpdateUserInfo::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::tasks::CreateTask::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::tasks::ListTasks::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::CreateUserRecord::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::ListUserRecords::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::devices::DispatchDeviceCommand::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::calls::TriggerOutboundCall::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ));
-                }
+                    ))
+                    .default_max_turns(6)
+                    .build(),
+                crate::jev::ToolDomain::Maps => client
+                    .agent(&self.model)
+                    .preamble(preamble)
+                    .tool(tools::google_maps::SearchPlaces::new(
+                        self.http.clone(),
+                        self.google_maps_api_key.clone(),
+                    ))
+                    .tool(tools::google_maps::GetRoute::new(
+                        self.http.clone(),
+                        self.google_maps_api_key.clone(),
+                    ))
+                    .default_max_turns(6)
+                    .build(),
+                crate::jev::ToolDomain::TasksAndRecords => client
+                    .agent(&self.model)
+                    .preamble(preamble)
+                    .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::records::CreateUserRecord::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::records::ListUserRecords::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::profile::UpdateUserInfo::new(self.db.clone(), prompt.user_id))
+                    .default_max_turns(6)
+                    .build(),
+                crate::jev::ToolDomain::Calendar => client
+                    .agent(&self.model)
+                    .preamble(preamble)
+                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
+                    .default_max_turns(6)
+                    .build(),
+                _ => client
+                    .agent(&self.model)
+                    .preamble(preamble)
+                    .tool(tools::web_search::WebSearch::new(
+                        self.http.clone(),
+                        self.exa_api_key.clone(),
+                    ))
+                    .tool(tools::google_maps::SearchPlaces::new(
+                        self.http.clone(),
+                        self.google_maps_api_key.clone(),
+                    ))
+                    .tool(tools::google_maps::GetRoute::new(
+                        self.http.clone(),
+                        self.google_maps_api_key.clone(),
+                    ))
+                    .tool(tools::profile::GetUserInfo::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::profile::UpdateUserInfo::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::tasks::CreateTask::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::tasks::ListTasks::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::records::CreateUserRecord::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::records::ListUserRecords::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::devices::DispatchDeviceCommand::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::calls::TriggerOutboundCall::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .default_max_turns(6)
+                    .build(),
             }
-            builder.default_max_turns(6).build()
         } else {
             client
                 .agent(&self.model)

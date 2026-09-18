@@ -274,7 +274,6 @@ impl ConversationService {
                             let _ = service.append_message(conv_id, "assistant", &text_to_save).await;
                             let _ = service.memory.refresh(uid).await;
                         }
-                        finished = true;
                         None
                     }
                 }
