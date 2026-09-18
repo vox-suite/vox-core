@@ -7,6 +7,7 @@ pub const MAX_CONTEXT_BYTES: usize = 16 * 1024;
 
 #[derive(Serialize)]
 struct UserContextProjection {
+    current_time_utc: String,
     profile: Value,
     commitments: Vec<String>,
     decisions: Vec<String>,
@@ -28,6 +29,7 @@ pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
     .fetch_all(db.pool())
     .await?;
     let mut projection = UserContextProjection {
+        current_time_utc: chrono::Utc::now().to_rfc3339(),
         profile,
         commitments: rows
             .iter()

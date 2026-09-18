@@ -307,8 +307,10 @@ impl ConversationAgent {
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
+        let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "User context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}",
+            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}",
+            current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },

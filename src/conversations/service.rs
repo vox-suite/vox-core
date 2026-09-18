@@ -152,10 +152,10 @@ impl ConversationService {
         // Inbound call opening fast-path: Greet immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
-            && prior_messages.is_empty()
             && (request.text.trim() == "The call just connected. Greet the user."
-                || request.initiation_context.as_deref()
-                    == Some("The call just connected. Greet the user."));
+                || (prior_messages.is_empty()
+                    && request.initiation_context.as_deref()
+                        == Some("The call just connected. Greet the user.")));
 
         if is_inbound_connect {
             let known_name = self.memory.get_user_name(active_user_id).await?;
@@ -251,10 +251,10 @@ impl ConversationService {
         // Inbound call opening fast-path: Stream greeting immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
-            && prior_messages.is_empty()
             && (request.text.trim() == "The call just connected. Greet the user."
-                || request.initiation_context.as_deref()
-                    == Some("The call just connected. Greet the user."));
+                || (prior_messages.is_empty()
+                    && request.initiation_context.as_deref()
+                        == Some("The call just connected. Greet the user.")));
 
         if is_inbound_connect {
             let known_name = self.memory.get_user_name(active_user_id).await?;

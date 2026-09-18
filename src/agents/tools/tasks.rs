@@ -165,8 +165,16 @@ impl Tool for CreateTask {
         let due_at_parsed: Option<chrono::DateTime<chrono::Utc>> = args
             .due_at
             .as_deref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
+            .and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .or_else(|| {
+                        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+                            .ok()
+                            .map(|naive| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc))
+                    })
+            });
 
         let task_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO tasks (user_id, project_id, title, raw_instruction, status, execution_type, due_at) \
