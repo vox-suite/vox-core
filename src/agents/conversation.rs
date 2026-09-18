@@ -36,6 +36,7 @@ pub struct ConversationAgent {
     exa_api_key: String,
     google_maps_api_key: Option<String>,
     db: Option<Db>,
+    tool_router: Option<crate::jev::ToolRouter>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -56,6 +57,12 @@ impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
         let dependencies =
             tools::dependencies::ToolDependencies::new().map_err(|_| AgentError::Provider)?;
+        let tool_router = if let Some(ref api_key) = config.jev_api_key {
+            let client = crate::jev::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
+            Some(crate::jev::ToolRouter::new(client))
+        } else {
+            None
+        };
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
@@ -63,6 +70,7 @@ impl ConversationAgent {
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
             db: None,
+            tool_router,
         })
     }
 
@@ -70,6 +78,11 @@ impl ConversationAgent {
         let mut agent = Self::new(config)?;
         agent.db = Some(db);
         Ok(agent)
+    }
+
+    pub fn with_tool_router(mut self, router: crate::jev::ToolRouter) -> Self {
+        self.tool_router = Some(router);
+        self
     }
 
     async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
@@ -84,67 +97,112 @@ impl ConversationAgent {
             prompt.needs_onboarding,
         );
 
-        let agent = if is_call_opening {
-            // Call opening fast-path: greeting does not require tools.
-            // Eliminates tool declarations, reducing TTFT from ~3.5s to <800ms.
+        let routed_domain = if is_call_opening {
+            crate::jev::ToolDomain::None
+        } else if let Some(router) = &self.tool_router {
+            match router.classify(&prompt.user_text).await {
+                Ok((domain, _confidence)) => domain,
+                Err(err) => {
+                    tracing::warn!(%err, "Jev tool router classification failed, falling back to all tools");
+                    crate::jev::ToolDomain::All
+                }
+            }
+        } else {
+            crate::jev::ToolDomain::All
+        };
+
+        let agent = if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
+            // Fast-path: 0 tools declared for pure conversation or greetings.
+            // Eliminates tool declarations, reducing TTFT from ~4.5s to <500ms.
             client
                 .agent(&self.model)
                 .preamble(preamble)
                 .default_max_turns(2)
                 .build()
         } else if is_voice {
-            // Voice channel: only include tools relevant to spoken telephone interactions.
-            // Excluding administrative tools (schemas, projects, goals) significantly reduces
-            // prompt size and Gemini tool evaluation latency.
-            client
-                .agent(&self.model)
-                .preamble(preamble)
-                .tool(tools::web_search::WebSearch::new(
-                    self.http.clone(),
-                    self.exa_api_key.clone(),
-                ))
-                .tool(tools::google_maps::SearchPlaces::new(
-                    self.http.clone(),
-                    self.google_maps_api_key.clone(),
-                ))
-                .tool(tools::google_maps::GetRoute::new(
-                    self.http.clone(),
-                    self.google_maps_api_key.clone(),
-                ))
-                .tool(tools::profile::GetUserInfo::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::profile::UpdateUserInfo::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::CreateTask::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::ListTasks::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::CreateUserRecord::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::ListUserRecords::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::devices::DispatchDeviceCommand::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::calls::TriggerOutboundCall::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .default_max_turns(6)
-                .build()
+            let mut builder = client.agent(&self.model).preamble(preamble);
+
+            match routed_domain {
+                crate::jev::ToolDomain::WebSearch => {
+                    builder = builder.tool(tools::web_search::WebSearch::new(
+                        self.http.clone(),
+                        self.exa_api_key.clone(),
+                    ));
+                }
+                crate::jev::ToolDomain::Maps => {
+                    builder = builder
+                        .tool(tools::google_maps::SearchPlaces::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::GetRoute::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ));
+                }
+                crate::jev::ToolDomain::TasksAndRecords => {
+                    builder = builder
+                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::records::CreateUserRecord::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::records::ListUserRecords::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::profile::UpdateUserInfo::new(self.db.clone(), prompt.user_id));
+                }
+                crate::jev::ToolDomain::Calendar => {
+                    builder = builder
+                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
+                        .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id));
+                }
+                _ => {
+                    builder = builder
+                        .tool(tools::web_search::WebSearch::new(
+                            self.http.clone(),
+                            self.exa_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::SearchPlaces::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::GetRoute::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::profile::GetUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::tasks::CreateTask::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::tasks::ListTasks::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::CreateUserRecord::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::ListUserRecords::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::devices::DispatchDeviceCommand::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::calls::TriggerOutboundCall::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ));
+                }
+            }
+            builder.default_max_turns(6).build()
         } else {
             client
                 .agent(&self.model)

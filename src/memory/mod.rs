@@ -81,15 +81,14 @@ impl MemoryService {
         let value = projection::build(&self.db, user_id).await?;
         if let Some(cache) = &self.cache {
             let _ = cache.set(user_id, &value).await;
-            if let Ok(Some(name)) = sqlx::query_scalar::<_, Option<String>>(
+            if let Ok(Some(Some(name))) = sqlx::query_scalar::<_, Option<String>>(
                 "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
             )
             .bind(user_id.0)
-            .fetch_one(self.db.pool())
+            .fetch_optional(self.db.pool())
             .await
-            && let Some(name_str) = name
             {
-                let _ = cache.set_user_name(user_id, &name_str).await;
+                let _ = cache.set_user_name(user_id, &name).await;
             }
         }
         Ok(())

@@ -3,6 +3,7 @@ use crate::{
     agents::event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
     db::Db,
     identity::UserId,
+    jev::JevClient,
     memory::MemoryService,
 };
 use chrono::{DateTime, Utc};
@@ -15,6 +16,7 @@ pub struct ScheduleHandler {
     db: Db,
     planner: Arc<dyn EventPlanning>,
     memory: MemoryService,
+    jev: Option<JevClient>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +40,21 @@ impl ScheduleHandler {
             db,
             planner,
             memory,
+            jev: None,
+        }
+    }
+
+    pub fn with_jev(
+        db: Db,
+        planner: Arc<dyn EventPlanning>,
+        memory: MemoryService,
+        jev: Option<JevClient>,
+    ) -> Self {
+        Self {
+            db,
+            planner,
+            memory,
+            jev,
         }
     }
 
@@ -54,6 +71,27 @@ impl ScheduleHandler {
         let row = row.ok_or(ScheduleHandlerError::NotFound)?;
         let user_id = UserId(row.get("user_id"));
         let instruction: String = row.get("instruction");
+
+        // Jev System 1 Pre-Filter: check if this occurrence requires an external action or phone call
+        if let Some(jev) = &self.jev {
+            let state = serde_json::json!({
+                "instruction": instruction,
+                "occurrence_at": occurrence_at.to_rfc3339(),
+            });
+            if let Ok(needs_planning) = jev.noul(
+                state,
+                "Does this scheduled task instruction specifically require taking an external action, dispatching an alert, or placing a telephone call?",
+            ).await {
+                if needs_planning < 0.20 {
+                    tracing::info!(
+                        schedule_id = %schedule_id.0,
+                        needs_planning,
+                        "Jev System 1: scheduled occurrence requires no external action, skipping Gemini planner"
+                    );
+                    return Ok(());
+                }
+            }
+        }
 
         let actions = self
             .planner

@@ -7,6 +7,7 @@ use crate::{
     conversations::ConversationId,
     db::Db,
     identity::UserId,
+    jev::JevClient,
     memory::MemoryService,
 };
 use sqlx::Row;
@@ -18,6 +19,7 @@ pub struct SummaryHandler {
     db: Db,
     summarizer: Arc<dyn Summarizing>,
     memory: MemoryService,
+    jev: Option<JevClient>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +43,21 @@ impl SummaryHandler {
             db,
             summarizer,
             memory,
+            jev: None,
+        }
+    }
+
+    pub fn with_jev(
+        db: Db,
+        summarizer: Arc<dyn Summarizing>,
+        memory: MemoryService,
+        jev: Option<JevClient>,
+    ) -> Self {
+        Self {
+            db,
+            summarizer,
+            memory,
+            jev,
         }
     }
 
@@ -82,6 +99,37 @@ impl SummaryHandler {
                 text: row.get("text"),
             })
             .collect();
+
+        // Jev System 1 Pre-Filter: check if interaction contains meaningful updates
+        if let Some(jev) = &self.jev {
+            let mut transcript = String::new();
+            for m in &messages {
+                transcript.push_str(&format!("{}: {}\n", m.role, m.text));
+            }
+
+            if let Ok(prob) = jev.noul(
+                serde_json::json!({ "transcript": transcript }),
+                "Does this interaction contain new user biographical facts, commitments, tasks, or decisions worth persisting?",
+            ).await {
+                if prob < 0.20 {
+                    tracing::info!(
+                        conversation_id = %conversation_id.0,
+                        prob,
+                        "Jev System 1: skipped trivial conversation summarization"
+                    );
+                    sqlx::query(
+                        "INSERT INTO conversation_summaries (conversation_id, user_id, recap, profile_updates, commitments, decisions) \
+                         VALUES ($1, $2, 'Brief interaction with no actionable updates.', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb) \
+                         ON CONFLICT (conversation_id) DO NOTHING",
+                    )
+                    .bind(conversation_id.0)
+                    .bind(user_id)
+                    .execute(self.db.pool())
+                    .await?;
+                    return Ok(());
+                }
+            }
+        }
 
         let summary = self
             .summarizer

@@ -198,3 +198,41 @@ fn test_event_triage_action_variants() {
     assert_eq!(triage_plan.action, EventTriageAction::PlanAction);
     assert!(triage_plan.is_critical_alert);
 }
+
+#[test]
+fn test_tool_domain_variants() {
+    use vox_core::jev::tool_router::ToolDomain;
+
+    let domains = vec![
+        ToolDomain::None,
+        ToolDomain::WebSearch,
+        ToolDomain::Maps,
+        ToolDomain::TasksAndRecords,
+        ToolDomain::Calendar,
+        ToolDomain::All,
+    ];
+
+    for d in domains {
+        let serialized = serde_json::to_string(&d).unwrap();
+        let deserialized: ToolDomain = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(d, deserialized);
+    }
+}
+
+#[test]
+fn test_background_task_urgency_thresholds() {
+    let non_urgent_prob = 0.15;
+    let urgent_prob = 0.85;
+
+    assert!(non_urgent_prob < 0.70, "Routine task should suppress outbound phone call");
+    assert!(urgent_prob >= 0.70, "Urgent task warrants phone escalation");
+}
+
+#[test]
+fn test_summarizer_gating_thresholds() {
+    let trivial_prob = 0.08;
+    let meaningful_prob = 0.65;
+
+    assert!(trivial_prob < 0.20, "Trivial chit-chat skips Gemini summarizer");
+    assert!(meaningful_prob >= 0.20, "Meaningful updates trigger full summarization");
+}

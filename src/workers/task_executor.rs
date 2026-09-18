@@ -1,6 +1,7 @@
 use crate::{
     config::Config,
     db::Db,
+    jev::JevClient,
 };
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde_json::json;
@@ -12,6 +13,7 @@ pub struct TaskExecutorHandler {
     db: Db,
     api_key: String,
     model: String,
+    jev: Option<JevClient>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,10 +28,23 @@ pub enum TaskExecutorError {
 
 impl TaskExecutorHandler {
     pub fn new(db: Db, config: &Config) -> Self {
+        let jev = config.jev_api_key.as_ref().map(|k| {
+            JevClient::new(k.clone(), Some(config.jev_base_url.clone()))
+        });
         Self {
             db,
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
+            jev,
+        }
+    }
+
+    pub fn with_jev(db: Db, config: &Config, jev: Option<JevClient>) -> Self {
+        Self {
+            db,
+            api_key: config.gemini_api_key.clone(),
+            model: config.gemini_model.clone(),
+            jev,
         }
     }
 
@@ -100,7 +115,7 @@ impl TaskExecutorHandler {
         .execute(self.db.pool())
         .await?;
 
-        // Enqueue outbound call to inform the user if they have a phone identity
+        // Enqueue outbound call to inform the user if they have a phone identity and it is urgent
         self.notify_user_via_call(user_id, task_id, &title, response.trim()).await?;
 
         Ok(())
@@ -124,8 +139,30 @@ impl TaskExecutorHandler {
             return Ok(());
         }
 
+        // Jev System 1 Urgency Gate: Avoid placing intrusive live telephone calls for routine tasks
+        if let Some(jev) = &self.jev {
+            let state = json!({
+                "task_title": title,
+                "task_summary": summary,
+            });
+            if let Ok(urgency) = jev.noul(
+                state,
+                "Does this task result represent an urgent emergency, critical real-world deadline, or explicit user demand to be phoned immediately?",
+            ).await {
+                if urgency < 0.70 {
+                    tracing::info!(
+                        task_id = %task_id,
+                        urgency,
+                        "Jev System 1: task outcome is non-urgent, suppressing live outbound phone call"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
         let idempotency_key = format!("task_complete_call:{}:{}", task_id, Uuid::new_v4());
-        let payload = json!({
+        let payload = json!(
+            {
             "reason": format!("Autonomous task completed: {}", title),
             "opening_instruction": format!("Inform the user that their task '{}' has finished: {}", title, summary)
         });
