@@ -44,12 +44,11 @@ pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + S
 #[async_trait]
 pub trait ConversationResponder: Send + Sync {
     async fn respond(&self, prompt: ConversationPrompt) -> Result<String, AgentError>;
-    async fn respond_stream(
-        &self,
-        prompt: ConversationPrompt,
-    ) -> Result<AgentStream, AgentError> {
+    async fn respond_stream(&self, prompt: ConversationPrompt) -> Result<AgentStream, AgentError> {
         let text = self.respond(prompt).await?;
-        Ok(Box::pin(futures_util::stream::once(async move { Ok(text) })))
+        Ok(Box::pin(futures_util::stream::once(
+            async move { Ok(text) },
+        )))
     }
 }
 
@@ -58,7 +57,8 @@ impl ConversationAgent {
         let dependencies =
             tools::dependencies::ToolDependencies::new().map_err(|_| AgentError::Provider)?;
         let tool_router = if let Some(ref api_key) = config.jev_api_key {
-            let client = crate::jev::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
+            let client =
+                crate::jev::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
             Some(crate::jev::ToolRouter::new(client))
         } else {
             None
@@ -85,17 +85,18 @@ impl ConversationAgent {
         self
     }
 
-    async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
+    async fn build_agent_and_input(
+        &self,
+        prompt: &ConversationPrompt,
+    ) -> Result<(rig::agent::Agent, String, bool), AgentError> {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
 
         let is_voice = is_voice_channel(&prompt.channel);
         let preamble = preamble_for_channel(&prompt.channel);
-        let is_call_opening = is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
-        let onboarding_instruction = onboarding_instruction(
-            &prompt.channel,
-            is_call_opening,
-            prompt.needs_onboarding,
-        );
+        let is_call_opening =
+            is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
+        let onboarding_instruction =
+            onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding);
 
         let routed_domain = if is_call_opening {
             crate::jev::ToolDomain::None
@@ -111,57 +112,133 @@ impl ConversationAgent {
             crate::jev::ToolDomain::All
         };
 
-        let agent = if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
-            // Fast-path: 0 tools declared for pure conversation or greetings.
-            // Eliminates tool declarations, reducing TTFT from ~4.5s to <500ms.
-            client
-                .agent(&self.model)
-                .preamble(preamble)
-                .default_max_turns(2)
-                .build()
-        } else if is_voice {
-            match routed_domain {
-                crate::jev::ToolDomain::WebSearch => client
+        let agent =
+            if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
+                // Fast-path: 0 tools declared for pure conversation or greetings.
+                // Eliminates tool declarations, reducing TTFT from ~4.5s to <500ms.
+                client
                     .agent(&self.model)
                     .preamble(preamble)
-                    .tool(tools::web_search::WebSearch::new(
-                        self.http.clone(),
-                        self.exa_api_key.clone(),
-                    ))
-                    .default_max_turns(6)
-                    .build(),
-                crate::jev::ToolDomain::Maps => client
-                    .agent(&self.model)
-                    .preamble(preamble)
-                    .tool(tools::google_maps::SearchPlaces::new(
-                        self.http.clone(),
-                        self.google_maps_api_key.clone(),
-                    ))
-                    .tool(tools::google_maps::GetRoute::new(
-                        self.http.clone(),
-                        self.google_maps_api_key.clone(),
-                    ))
-                    .default_max_turns(6)
-                    .build(),
-                crate::jev::ToolDomain::TasksAndRecords => client
-                    .agent(&self.model)
-                    .preamble(preamble)
-                    .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::records::CreateUserRecord::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::records::ListUserRecords::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::profile::UpdateUserInfo::new(self.db.clone(), prompt.user_id))
-                    .default_max_turns(6)
-                    .build(),
-                crate::jev::ToolDomain::Calendar => client
-                    .agent(&self.model)
-                    .preamble(preamble)
-                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::profile::GetUserInfo::new(self.db.clone(), prompt.user_id))
-                    .default_max_turns(6)
-                    .build(),
-                _ => client
+                    .default_max_turns(2)
+                    .build()
+            } else if is_voice {
+                match routed_domain {
+                    crate::jev::ToolDomain::WebSearch => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::web_search::WebSearch::new(
+                            self.http.clone(),
+                            self.exa_api_key.clone(),
+                        ))
+                        .default_max_turns(6)
+                        .build(),
+                    crate::jev::ToolDomain::Maps => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::google_maps::SearchPlaces::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::GetRoute::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .default_max_turns(6)
+                        .build(),
+                    crate::jev::ToolDomain::TasksAndRecords => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::tasks::CreateTask::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::tasks::ListTasks::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::CreateUserRecord::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::ListUserRecords::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::profile::GetUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .default_max_turns(6)
+                        .build(),
+                    crate::jev::ToolDomain::Calendar => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::tasks::ListTasks::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::profile::GetUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .default_max_turns(6)
+                        .build(),
+                    _ => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::web_search::WebSearch::new(
+                            self.http.clone(),
+                            self.exa_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::SearchPlaces::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::google_maps::GetRoute::new(
+                            self.http.clone(),
+                            self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::profile::GetUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::tasks::CreateTask::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::tasks::ListTasks::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::CreateUserRecord::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::records::ListUserRecords::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::devices::DispatchDeviceCommand::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::calls::TriggerOutboundCall::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .default_max_turns(6)
+                        .build(),
+                }
+            } else {
+                client
                     .agent(&self.model)
                     .preamble(preamble)
                     .tool(tools::web_search::WebSearch::new(
@@ -184,11 +261,40 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
+                    .tool(tools::projects::CreateProject::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::projects::ListProjects::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::projects::GetProject::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::projects::UpdateProject::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
                     .tool(tools::tasks::CreateTask::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
                     .tool(tools::tasks::ListTasks::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.user_id))
+                    .tool(tools::tasks::UpdateTask::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::records::DefineDataSchema::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::records::ListDataSchemas::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
@@ -200,6 +306,14 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
+                    .tool(tools::records::ManageUserGoal::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
+                    .tool(tools::devices::ListDevices::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
                     .tool(tools::devices::DispatchDeviceCommand::new(
                         self.db.clone(),
                         prompt.user_id,
@@ -208,100 +322,9 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .default_max_turns(6)
-                    .build(),
-            }
-        } else {
-            client
-                .agent(&self.model)
-                .preamble(preamble)
-                .tool(tools::web_search::WebSearch::new(
-                    self.http.clone(),
-                    self.exa_api_key.clone(),
-                ))
-                .tool(tools::google_maps::SearchPlaces::new(
-                    self.http.clone(),
-                    self.google_maps_api_key.clone(),
-                ))
-                .tool(tools::google_maps::GetRoute::new(
-                    self.http.clone(),
-                    self.google_maps_api_key.clone(),
-                ))
-                .tool(tools::profile::GetUserInfo::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::profile::UpdateUserInfo::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::projects::CreateProject::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::projects::ListProjects::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::projects::GetProject::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::projects::UpdateProject::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::CreateTask::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::ListTasks::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::GetTask::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::tasks::UpdateTask::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::DefineDataSchema::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::ListDataSchemas::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::CreateUserRecord::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::ListUserRecords::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::records::ManageUserGoal::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::devices::ListDevices::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::devices::DispatchDeviceCommand::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .tool(tools::calls::TriggerOutboundCall::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                ))
-                .default_max_turns(10)
-                .build()
-        };
+                    .default_max_turns(10)
+                    .build()
+            };
 
         let mut history = String::new();
         for msg in &prompt.recent_messages {
@@ -317,6 +340,12 @@ impl ConversationAgent {
             prompt.user_text,
             onboarding_instruction
         );
+        Ok((agent, input, is_voice))
+    }
+
+    async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
+        let is_voice = is_voice_channel(&prompt.channel);
+        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
         let start = std::time::Instant::now();
         let response = agent
             .prompt(input)
@@ -335,6 +364,34 @@ impl ConversationAgent {
         } else {
             Ok(response)
         }
+    }
+
+    async fn generate_stream(&self, prompt: ConversationPrompt) -> Result<AgentStream, AgentError> {
+        use futures_util::StreamExt;
+        use rig::agent::MultiTurnStreamItem;
+        use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+
+        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+        let stream = agent.stream_prompt(input).await;
+
+        let text_stream = stream.filter_map(|item_res| async move {
+            match item_res {
+                Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t))) => {
+                    if !t.text.is_empty() {
+                        Some(Ok(t.text))
+                    } else {
+                        None
+                    }
+                }
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::error!(%err, "Gemini stream error");
+                    Some(Err(AgentError::Provider))
+                }
+            }
+        });
+
+        Ok(Box::pin(text_stream))
     }
 }
 
@@ -392,10 +449,12 @@ fn normalize_currency(text: &str) -> String {
                 continue;
             }
         } else if let Some(stripped) = clean.strip_prefix('₹')
-            && stripped.chars().all(|c| c.is_ascii_digit()) && !stripped.is_empty() {
-                words.push(format!("{stripped} rupees{punctuation}"));
-                continue;
-            }
+            && stripped.chars().all(|c| c.is_ascii_digit())
+            && !stripped.is_empty()
+        {
+            words.push(format!("{stripped} rupees{punctuation}"));
+            continue;
+        }
         words.push(token.to_string());
     }
     words.join(" ")
@@ -455,7 +514,27 @@ pub fn split_spoken_sentences(text: &str) -> Vec<String> {
                 let last_word = prefix.split_whitespace().last().unwrap_or("");
                 let is_abbr = matches!(
                     last_word.to_ascii_lowercase().as_str(),
-                    "mr" | "mrs" | "ms" | "dr" | "prof" | "sr" | "jr" | "vs" | "eg" | "ie" | "etc" | "st" | "ave" | "oct" | "nov" | "dec" | "jan" | "feb" | "mar" | "apr" | "aug" | "sept"
+                    "mr" | "mrs"
+                        | "ms"
+                        | "dr"
+                        | "prof"
+                        | "sr"
+                        | "jr"
+                        | "vs"
+                        | "eg"
+                        | "ie"
+                        | "etc"
+                        | "st"
+                        | "ave"
+                        | "oct"
+                        | "nov"
+                        | "dec"
+                        | "jan"
+                        | "feb"
+                        | "mar"
+                        | "apr"
+                        | "aug"
+                        | "sept"
                 );
 
                 if !is_decimal && !is_abbr {
@@ -523,30 +602,14 @@ impl ConversationResponder for ConversationAgent {
         self.generate_response(prompt).await
     }
 
-    async fn respond_stream(
-        &self,
-        prompt: ConversationPrompt,
-    ) -> Result<AgentStream, AgentError> {
-        let is_voice = is_voice_channel(&prompt.channel);
-        let text = self.generate_response(prompt).await?;
-        if is_voice {
-            let sentences = split_spoken_sentences(&text);
-            let chunks: Vec<Result<String, AgentError>> = sentences
-                .into_iter()
-                .map(|s| Ok(format!("{s} ")))
-                .collect();
-            Ok(Box::pin(futures_util::stream::iter(chunks)))
-        } else {
-            Ok(Box::pin(futures_util::stream::once(async move { Ok(text) })))
-        }
+    async fn respond_stream(&self, prompt: ConversationPrompt) -> Result<AgentStream, AgentError> {
+        self.generate_stream(prompt).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        VOICE_CALL_PREAMBLE, spoken_response,
-    };
+    use super::{VOICE_CALL_PREAMBLE, spoken_response};
 
     #[test]
     fn prompt_requires_natural_speech_only() {
@@ -581,7 +644,9 @@ mod tests {
     #[test]
     fn normalizes_currency_and_abbreviations_for_speech() {
         assert_eq!(
-            spoken_response("Apple stock is currently at $235.40. India vs. West Indies on Oct. 2."),
+            spoken_response(
+                "Apple stock is currently at $235.40. India vs. West Indies on Oct. 2."
+            ),
             "Apple stock is currently at 235 dollars and 40 cents. India versus West Indies on October 2."
         );
     }

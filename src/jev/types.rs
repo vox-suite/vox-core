@@ -80,10 +80,7 @@ impl Question {
 
     /// Creates a choice question where each option has null criteria.
     pub fn choice_simple(instructions: impl Into<Value>, options: &[&str]) -> Self {
-        let criteria = options
-            .iter()
-            .map(|opt| (opt.to_string(), None))
-            .collect();
+        let criteria = options.iter().map(|opt| (opt.to_string(), None)).collect();
         Self::Choice {
             instructions: instructions.into(),
             criteria,
@@ -158,9 +155,7 @@ impl Answer {
     pub fn as_score(&self) -> Option<(f64, f64)> {
         match self {
             Self::Score {
-                score,
-                confidence,
-                ..
+                score, confidence, ..
             } => Some((*score, *confidence)),
             _ => None,
         }

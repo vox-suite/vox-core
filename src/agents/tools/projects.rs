@@ -65,8 +65,7 @@ impl Tool for CreateProject {
     type Error = ProjectToolError;
 
     fn description(&self) -> String {
-        "Create a new project to group and organize tasks, goals, and plans."
-            .to_owned()
+        "Create a new project to group and organize tasks, goals, and plans.".to_owned()
     }
 
     fn parameters(&self) -> Value {
@@ -100,7 +99,9 @@ impl Tool for CreateProject {
         let db = self.db.as_ref().ok_or(ProjectToolError::NotConfigured)?;
         let name = args.name.trim();
         if name.is_empty() {
-            return Err(ProjectToolError::InvalidInput("Project name cannot be empty".into()));
+            return Err(ProjectToolError::InvalidInput(
+                "Project name cannot be empty".into(),
+            ));
         }
         let desc = args.description.as_deref().unwrap_or("").trim();
 
@@ -309,7 +310,9 @@ impl Tool for GetProject {
             .fetch_optional(db.pool())
             .await?
         } else {
-            return Err(ProjectToolError::InvalidInput("Must provide either project_id or name".into()));
+            return Err(ProjectToolError::InvalidInput(
+                "Must provide either project_id or name".into(),
+            ));
         };
 
         let r = match row {
@@ -446,7 +449,9 @@ impl Tool for UpdateProject {
         .await?;
 
         if res.rows_affected() == 0 {
-            return Err(ProjectToolError::NotFound("Project not found or not owned by user".into()));
+            return Err(ProjectToolError::NotFound(
+                "Project not found or not owned by user".into(),
+            ));
         }
 
         Ok(json!({

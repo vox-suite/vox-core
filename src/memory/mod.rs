@@ -53,13 +53,12 @@ impl MemoryService {
             return Ok(Some(name));
         }
 
-        let name: Option<String> = sqlx::query_scalar(
-            "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
-        )
-        .bind(user_id.0)
-        .fetch_optional(self.db.pool())
-        .await?
-        .flatten();
+        let name: Option<String> =
+            sqlx::query_scalar("SELECT facts->>'name' FROM user_profiles WHERE user_id = $1")
+                .bind(user_id.0)
+                .fetch_optional(self.db.pool())
+                .await?
+                .flatten();
 
         if let Some(ref n) = name
             && let Some(cache) = &self.cache {
@@ -146,22 +145,19 @@ impl MemoryService {
         Ok(user_id)
     }
 
-    pub async fn get_verification_state(
-        &self,
-        conversation_id: uuid::Uuid,
-    ) -> Option<String> {
+    pub async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Option<String> {
         if let Some(cache) = &self.cache {
-            cache.get_verification_state(conversation_id).await.ok().flatten()
+            cache
+                .get_verification_state(conversation_id)
+                .await
+                .ok()
+                .flatten()
         } else {
             None
         }
     }
 
-    pub async fn set_verification_state(
-        &self,
-        conversation_id: uuid::Uuid,
-        state: &str,
-    ) {
+    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
         if let Some(cache) = &self.cache {
             let _ = cache.set_verification_state(conversation_id, state).await;
         }

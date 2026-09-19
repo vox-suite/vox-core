@@ -51,11 +51,9 @@ pub async fn respond_stream(
                     let data = serde_json::json!({ "delta": delta }).to_string();
                     Ok::<_, std::convert::Infallible>(format!("data: {data}\n\n"))
                 }
-                Err(_) => {
-                    Ok::<_, std::convert::Infallible>(
-                        "event: error\ndata: {\"error\":\"agent error\"}\n\n".to_string(),
-                    )
-                }
+                Err(_) => Ok::<_, std::convert::Infallible>(
+                    "event: error\ndata: {\"error\":\"agent error\"}\n\n".to_string(),
+                ),
             });
             let done_stream = futures_util::stream::once(async move {
                 Ok::<_, std::convert::Infallible>("data: [DONE]\n\n".to_string())

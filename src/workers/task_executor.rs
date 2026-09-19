@@ -1,8 +1,4 @@
-use crate::{
-    config::Config,
-    db::Db,
-    jev::JevClient,
-};
+use crate::{config::Config, db::Db, jev::JevClient};
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde_json::json;
 use sqlx::Row;
@@ -28,9 +24,10 @@ pub enum TaskExecutorError {
 
 impl TaskExecutorHandler {
     pub fn new(db: Db, config: &Config) -> Self {
-        let jev = config.jev_api_key.as_ref().map(|k| {
-            JevClient::new(k.clone(), Some(config.jev_base_url.clone()))
-        });
+        let jev = config
+            .jev_api_key
+            .as_ref()
+            .map(|k| JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
         Self {
             db,
             api_key: config.gemini_api_key.clone(),
@@ -116,7 +113,8 @@ impl TaskExecutorHandler {
         .await?;
 
         // Enqueue outbound call to inform the user if they have a phone identity and it is urgent
-        self.notify_user_via_call(user_id, task_id, &title, response.trim()).await?;
+        self.notify_user_via_call(user_id, task_id, &title, response.trim())
+            .await?;
 
         Ok(())
     }

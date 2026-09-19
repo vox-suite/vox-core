@@ -89,12 +89,11 @@ impl Tool for GetUserInfo {
             "Tool called"
         );
         let db = self.db.as_ref().ok_or(ProfileToolError::NotConfigured)?;
-        let row = sqlx::query(
-            "SELECT facts, persona, version FROM user_profiles WHERE user_id = $1",
-        )
-        .bind(self.user_id.0)
-        .fetch_optional(db.pool())
-        .await?;
+        let row =
+            sqlx::query("SELECT facts, persona, version FROM user_profiles WHERE user_id = $1")
+                .bind(self.user_id.0)
+                .fetch_optional(db.pool())
+                .await?;
 
         match row {
             Some(r) => {
@@ -227,12 +226,11 @@ impl Tool for UpdateUserInfo {
 
         tx.commit().await?;
 
-        let updated_row = sqlx::query(
-            "SELECT facts, persona FROM user_profiles WHERE user_id = $1",
-        )
-        .bind(self.user_id.0)
-        .fetch_one(db.pool())
-        .await?;
+        let updated_row =
+            sqlx::query("SELECT facts, persona FROM user_profiles WHERE user_id = $1")
+                .bind(self.user_id.0)
+                .fetch_one(db.pool())
+                .await?;
 
         let current_facts: Value = updated_row.get("facts");
         let current_persona: Value = updated_row.get("persona");

@@ -113,7 +113,10 @@ async fn test_full_voice_verification_and_identity_switch_flow() {
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(text2, "Your voice is not matching with Rahul. What is your name?");
+    assert_eq!(
+        text2,
+        "Your voice is not matching with Rahul. What is your name?"
+    );
 
     // -------------------------------------------------------------------------
     // Step 3: Girlfriend introduces herself as "Priya"
@@ -157,7 +160,10 @@ async fn test_full_voice_verification_and_identity_switch_flow() {
         .as_str()
         .unwrap()
         .to_string();
-    assert!(text4.contains("Awesome, verified! Hello Priya!"), "got: {text4}");
+    assert!(
+        text4.contains("Awesome, verified! Hello Priya!"),
+        "got: {text4}"
+    );
 
     // Verify database: Conversation user was updated to Priya's UUID!
     let conv_user: uuid::Uuid = sqlx::query_scalar(

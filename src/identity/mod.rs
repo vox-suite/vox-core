@@ -48,7 +48,11 @@ impl IdentityService {
         if channel == "phone" || channel == "whatsapp" {
             let normalized = Self::normalize_phone(external_id);
             if !normalized.is_empty() {
-                let other_channel = if channel == "whatsapp" { "phone" } else { "whatsapp" };
+                let other_channel = if channel == "whatsapp" {
+                    "phone"
+                } else {
+                    "whatsapp"
+                };
                 let existing_user = sqlx::query_scalar::<_, Uuid>(
                     "SELECT user_id FROM user_identities \
                      WHERE channel = $1 AND regexp_replace(external_id, '[^0-9]', '', 'g') = $2 \

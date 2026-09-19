@@ -107,7 +107,12 @@ impl EventHandler {
                             && let Ok(class_res) = classifier.classify(user_id.0, &payload).await {
                                 match class_res {
                                     SchemaClassificationResult::Existing { schema, confidence } => {
-                                        if validate_data_against_schema(&schema.json_schema, &payload).is_ok() {
+                                        if validate_data_against_schema(
+                                            &schema.json_schema,
+                                            &payload,
+                                        )
+                                        .is_ok()
+                                        {
                                             tracing::info!(
                                                 event_id = %event_id.0,
                                                 schema = %schema.qualified_name,

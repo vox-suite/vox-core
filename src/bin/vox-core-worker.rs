@@ -14,11 +14,7 @@ use vox_core::{
     },
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
     summaries::handler::SummaryHandler,
-    workers::{
-        Worker,
-        task_executor::TaskExecutorHandler,
-        whatsapp_sweeper::WhatsAppSweeper,
-    },
+    workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
 };
 
 #[tokio::main]
@@ -41,17 +37,31 @@ async fn main() {
     let memory = MemoryService::new(db.clone(), cache);
 
     let (triager, schema_classifier, jev_client) = if let Some(ref api_key) = config.jev_api_key {
-        let client = vox_core::jev::client::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
+        let client = vox_core::jev::client::JevClient::new(
+            api_key.clone(),
+            Some(config.jev_base_url.clone()),
+        );
         (
-            Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(client.clone()))),
-            Some(Arc::new(vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()))),
+            Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(
+                client.clone(),
+            ))),
+            Some(Arc::new(
+                vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()),
+            )),
             Some(client),
         )
     } else {
         (None, None, None)
     };
-    let events = EventHandler::with_jev(db.clone(), planner.clone(), memory.clone(), triager, schema_classifier);
-    let schedules = ScheduleHandler::with_jev(db.clone(), planner, memory.clone(), jev_client.clone());
+    let events = EventHandler::with_jev(
+        db.clone(),
+        planner.clone(),
+        memory.clone(),
+        triager,
+        schema_classifier,
+    );
+    let schedules =
+        ScheduleHandler::with_jev(db.clone(), planner, memory.clone(), jev_client.clone());
     let ticker = ScheduleTicker::new(db.clone());
 
     let bridge_url = config
