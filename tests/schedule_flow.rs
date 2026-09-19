@@ -136,7 +136,7 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
     let once = service
         .create_at(
             CreateScheduleRequest {
-                identity,
+                identity: identity.clone(),
                 instruction: "One-time reminder".into(),
                 schedule_kind: ScheduleKind::Once,
                 run_at: Some(now + Duration::hours(1)),
@@ -153,6 +153,7 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
             .update_at(
                 once.id,
                 UpdateScheduleRequest {
+                    identity: identity.clone(),
                     state: Some("paused".into()),
                     run_at: Some(now + Duration::hours(2)),
                     recurrence_expression: None,
@@ -166,6 +167,7 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
         .update_at(
             once.id,
             UpdateScheduleRequest {
+                identity,
                 state: Some("paused".into()),
                 run_at: None,
                 recurrence_expression: None,

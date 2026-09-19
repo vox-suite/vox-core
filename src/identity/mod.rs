@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_HOST_USER_ID_BYTES: usize = 512;
+const LEGACY_DEPLOYMENT_KEY: &str = "vox.legacy.deployment";
+const LEGACY_HOST_APP_KEY: &str = "vox.legacy.channel-host";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -23,6 +25,12 @@ pub struct HostOrganizationId(pub Uuid);
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct UserContextId(pub Uuid);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ResourceOwner {
+    pub user_context_id: UserContextId,
+    pub user_id: UserId,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ChannelIdentity {
@@ -58,6 +66,15 @@ pub struct ResolvedUserContext {
     pub id: UserContextId,
     pub user_id: UserId,
     pub subject: UserContextSubject,
+}
+
+impl ResolvedUserContext {
+    pub fn owner(&self) -> ResourceOwner {
+        ResourceOwner {
+            user_context_id: self.id,
+            user_id: self.user_id,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -213,6 +230,67 @@ impl IdentityService {
         } else {
             Err(IdentityError::AccessDenied)
         }
+    }
+
+    /// Resolve a legacy channel assertion and attach its canonical owner.
+    ///
+    /// This is the compatibility interface for conversations, events, and
+    /// schedules while their callers migrate to authenticated host assertions.
+    pub async fn resolve_legacy_owner(
+        &self,
+        identity: &ChannelIdentity,
+    ) -> Result<ResourceOwner, IdentityError> {
+        let user_id = self.resolve(identity).await?;
+        self.owner_for_user(user_id).await
+    }
+
+    /// Return the one canonical owner for an existing internal user, creating a
+    /// reserved legacy context when a pre-migration caller has not done so yet.
+    pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
+        if let Some(context_id) =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
+                .bind(user_id.0)
+                .fetch_optional(self.db.pool())
+                .await?
+        {
+            return Ok(ResourceOwner {
+                user_context_id: UserContextId(context_id),
+                user_id,
+            });
+        }
+
+        let mut tx = self.db.pool().begin().await?;
+        let scope = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT d.id, h.id \
+             FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = $1 AND h.external_key = $2",
+        )
+        .bind(LEGACY_DEPLOYMENT_KEY)
+        .bind(LEGACY_HOST_APP_KEY)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(IdentityError::ScopeNotFound)?;
+
+        let context_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO user_contexts (\
+                deployment_id, host_app_id, host_user_id, user_id\
+             ) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id \
+             RETURNING id",
+        )
+        .bind(scope.0)
+        .bind(scope.1)
+        .bind(user_id.0.to_string())
+        .bind(user_id.0)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(ResourceOwner {
+            user_context_id: UserContextId(context_id),
+            user_id,
+        })
     }
 
     async fn find_context(

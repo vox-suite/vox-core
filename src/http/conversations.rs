@@ -27,6 +27,7 @@ pub async fn respond(
         Err(ConversationError::Agent(_)) => StatusCode::BAD_GATEWAY.into_response(),
         Err(
             ConversationError::Database(_)
+            | ConversationError::Identity(_)
             | ConversationError::IdentityConflict
             | ConversationError::NotFound,
         ) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -72,6 +73,7 @@ pub async fn respond_stream(
         Err(ConversationError::Agent(_)) => StatusCode::BAD_GATEWAY.into_response(),
         Err(
             ConversationError::Database(_)
+            | ConversationError::Identity(_)
             | ConversationError::IdentityConflict
             | ConversationError::NotFound,
         ) => StatusCode::SERVICE_UNAVAILABLE.into_response(),

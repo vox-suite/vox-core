@@ -1,5 +1,9 @@
 use super::{AgentError, tools};
-use crate::{config::Config, db::Db, identity::UserId};
+use crate::{
+    config::Config,
+    db::Db,
+    identity::{ResourceOwner, UserId},
+};
 use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
@@ -21,6 +25,7 @@ pub struct PromptMessage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConversationPrompt {
     pub user_id: UserId,
+    pub owner: ResourceOwner,
     pub channel: String,
     pub user_context: String,
     pub recent_messages: Vec<PromptMessage>,
@@ -148,14 +153,8 @@ impl ConversationAgent {
                     crate::jev::ToolDomain::TasksAndRecords => client
                         .agent(&self.model)
                         .preamble(preamble)
-                        .tool(tools::tasks::CreateTask::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::tasks::ListTasks::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                         .tool(tools::records::CreateUserRecord::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -177,10 +176,7 @@ impl ConversationAgent {
                     crate::jev::ToolDomain::Calendar => client
                         .agent(&self.model)
                         .preamble(preamble)
-                        .tool(tools::tasks::ListTasks::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                         .tool(tools::profile::GetUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -210,14 +206,8 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::tasks::CreateTask::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::tasks::ListTasks::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                         .tool(tools::records::CreateUserRecord::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -228,11 +218,11 @@ impl ConversationAgent {
                         ))
                         .tool(tools::devices::DispatchDeviceCommand::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.owner,
                         ))
                         .tool(tools::calls::TriggerOutboundCall::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.owner,
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -277,19 +267,10 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::tasks::CreateTask::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::tasks::ListTasks::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.user_id))
-                    .tool(tools::tasks::UpdateTask::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
+                    .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                    .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
+                    .tool(tools::tasks::UpdateTask::new(self.db.clone(), prompt.owner))
                     .tool(tools::records::DefineDataSchema::new(
                         self.db.clone(),
                         prompt.user_id,
@@ -316,11 +297,11 @@ impl ConversationAgent {
                     ))
                     .tool(tools::devices::DispatchDeviceCommand::new(
                         self.db.clone(),
-                        prompt.user_id,
+                        prompt.owner,
                     ))
                     .tool(tools::calls::TriggerOutboundCall::new(
                         self.db.clone(),
-                        prompt.user_id,
+                        prompt.owner,
                     ))
                     .default_max_turns(10)
                     .build()

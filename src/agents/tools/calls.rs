@@ -1,4 +1,4 @@
-use crate::{db::Db, identity::UserId};
+use crate::{db::Db, identity::ResourceOwner};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,12 +14,12 @@ pub struct TriggerCallArgs {
 #[derive(Clone)]
 pub struct TriggerOutboundCall {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl TriggerOutboundCall {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -58,7 +58,8 @@ impl Tool for TriggerOutboundCall {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             reason = %args.reason,
             "Tool called"
         );
@@ -76,7 +77,11 @@ impl Tool for TriggerOutboundCall {
             ));
         }
 
-        let idempotency_key = format!("manual_call:{}:{}", self.user_id.0, Uuid::new_v4());
+        let idempotency_key = format!(
+            "manual_call:{}:{}",
+            self.owner.user_context_id.0,
+            Uuid::new_v4()
+        );
 
         let payload = json!({
             "reason": reason,
@@ -90,11 +95,12 @@ impl Tool for TriggerOutboundCall {
             .map_err(|e| io::Error::other(e.to_string()))?;
 
         let action_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actions (user_id, kind, payload, state, idempotency_key) \
-             VALUES ($1, 'outbound_call', $2, 'pending', $3) \
+            "INSERT INTO actions (user_context_id, user_id, kind, payload, state, idempotency_key) \
+             VALUES ($1, $2, 'outbound_call', $3, 'pending', $4) \
              RETURNING id",
         )
-        .bind(self.user_id.0)
+        .bind(self.owner.user_context_id.0)
+        .bind(self.owner.user_id.0)
         .bind(payload)
         .bind(idempotency_key)
         .fetch_one(&mut *tx)

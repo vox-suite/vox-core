@@ -44,4 +44,19 @@ async fn migration_creates_the_complete_core_schema() {
             "missing {expected}"
         );
     }
+
+    let scoped_resources: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name FROM information_schema.columns \
+         WHERE table_schema = 'public' AND column_name = 'user_context_id' \
+         ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list context-owned resources");
+    for expected in ["actions", "conversations", "scheduled_tasks", "tasks"] {
+        assert!(
+            scoped_resources.iter().any(|table| table == expected),
+            "{expected} is missing canonical user-context ownership"
+        );
+    }
 }

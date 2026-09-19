@@ -1,4 +1,7 @@
-use crate::{db::Db, identity::UserId};
+use crate::{
+    db::Db,
+    identity::{ResourceOwner, UserId},
+};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -128,12 +131,12 @@ pub struct DispatchDeviceCommandArgs {
 #[derive(Clone)]
 pub struct DispatchDeviceCommand {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl DispatchDeviceCommand {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -177,7 +180,8 @@ impl Tool for DispatchDeviceCommand {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             command_type = %args.command_type,
             target_device = ?args.target_device,
             "Tool called"
@@ -193,7 +197,7 @@ impl Tool for DispatchDeviceCommand {
              WHERE user_id = $1 AND is_active = true AND (platform ILIKE '%' || $2 || '%' OR device_name ILIKE '%' || $2 || '%') \
              ORDER BY last_seen_at DESC LIMIT 1",
         )
-        .bind(self.user_id.0)
+        .bind(self.owner.user_id.0)
         .bind(device_target)
         .fetch_optional(db.pool())
         .await?;
@@ -204,7 +208,11 @@ impl Tool for DispatchDeviceCommand {
             .map(|d| d.get("device_name"))
             .unwrap_or_else(|| "default_mac".into());
 
-        let idempotency_key = format!("client_cmd:{}:{}", self.user_id.0, Uuid::new_v4());
+        let idempotency_key = format!(
+            "client_cmd:{}:{}",
+            self.owner.user_context_id.0,
+            Uuid::new_v4()
+        );
 
         let action_payload = json!({
             "command_type": cmd_type,
@@ -213,11 +221,12 @@ impl Tool for DispatchDeviceCommand {
         });
 
         let action_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actions (user_id, target_device_id, kind, payload, state, idempotency_key) \
-             VALUES ($1, $2, 'client_command', $3, 'pending', $4) \
+            "INSERT INTO actions (user_context_id, user_id, target_device_id, kind, payload, state, idempotency_key) \
+             VALUES ($1, $2, $3, 'client_command', $4, 'pending', $5) \
              RETURNING id",
         )
-        .bind(self.user_id.0)
+        .bind(self.owner.user_context_id.0)
+        .bind(self.owner.user_id.0)
         .bind(device_id)
         .bind(&action_payload)
         .bind(&idempotency_key)

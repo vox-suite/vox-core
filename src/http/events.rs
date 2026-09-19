@@ -21,6 +21,8 @@ pub async fn ingest(
     match service.ingest(request).await {
         Ok(response) => (StatusCode::ACCEPTED, Json(response)).into_response(),
         Err(EventError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
-        Err(EventError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(EventError::Database(_) | EventError::Identity(_)) => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
     }
 }

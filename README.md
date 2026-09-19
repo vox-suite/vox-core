@@ -47,6 +47,10 @@ isolation contract is documented in
 [`docs/user-context.md`](docs/user-context.md). Existing channel identity remains
 available during the migration window.
 
+Conversation, schedule, task, and action ownership migration and compatibility
+rules are documented in
+[`docs/resource-context-migration.md`](docs/resource-context-migration.md).
+
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
 
 ## Read-only Redis administration

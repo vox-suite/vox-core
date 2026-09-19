@@ -2,7 +2,7 @@ use super::ScheduleId;
 use crate::{
     agents::event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
     db::Db,
-    identity::UserId,
+    identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
     memory::MemoryService,
 };
@@ -63,13 +63,22 @@ impl ScheduleHandler {
         schedule_id: ScheduleId,
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
-        let row = sqlx::query("SELECT user_id, instruction FROM scheduled_tasks WHERE id = $1")
-            .bind(schedule_id.0)
-            .fetch_optional(self.db.pool())
-            .await?;
+        let row = sqlx::query(
+            "SELECT s.user_id, COALESCE(s.user_context_id, c.id) AS user_context_id, s.instruction \
+             FROM scheduled_tasks s \
+             JOIN user_contexts c ON c.user_id = s.user_id \
+             WHERE s.id = $1",
+        )
+        .bind(schedule_id.0)
+        .fetch_optional(self.db.pool())
+        .await?;
 
         let row = row.ok_or(ScheduleHandlerError::NotFound)?;
         let user_id = UserId(row.get("user_id"));
+        let owner = ResourceOwner {
+            user_context_id: UserContextId(row.get("user_context_id")),
+            user_id,
+        };
         let instruction: String = row.get("instruction");
 
         // Jev System 1 Pre-Filter: check if this occurrence requires an external action or phone call
@@ -123,10 +132,12 @@ impl ScheduleHandler {
                 occurrence_at.to_rfc3339()
             );
             let inserted = sqlx::query_scalar::<_, Uuid>(
-                "INSERT INTO actions (user_id, schedule_id, kind, payload, idempotency_key) \
-                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
+                "INSERT INTO actions (user_context_id, user_id, schedule_id, kind, payload, idempotency_key) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
             )
-            .bind(user_id.0)
+            .bind(owner.user_context_id.0)
+            .bind(owner.user_id.0)
             .bind(schedule_id.0)
             .bind(kind)
             .bind(payload)

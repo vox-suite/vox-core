@@ -1,4 +1,4 @@
-use crate::{db::Db, identity::UserId};
+use crate::{db::Db, identity::ResourceOwner};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -53,12 +53,12 @@ pub struct CreateTaskArgs {
 #[derive(Clone)]
 pub struct CreateTask {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl CreateTask {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -114,7 +114,8 @@ impl Tool for CreateTask {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             title = %args.title,
             project = ?args.project_name,
             due_at = ?args.due_at,
@@ -133,16 +134,26 @@ impl Tool for CreateTask {
         let mut bound_project_id: Option<Uuid> = None;
 
         if let Some(pid_str) = args.project_id {
-            if let Ok(pid) = Uuid::parse_str(pid_str.trim()) {
-                bound_project_id = Some(pid);
+            let pid = Uuid::parse_str(pid_str.trim())
+                .map_err(|_| TaskToolError::InvalidInput("Invalid project UUID".into()))?;
+            let owned = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1 AND user_id = $2)",
+            )
+            .bind(pid)
+            .bind(self.owner.user_id.0)
+            .fetch_one(db.pool())
+            .await?;
+            if !owned {
+                return Err(TaskToolError::NotFound("Project not found".into()));
             }
+            bound_project_id = Some(pid);
         } else if let Some(pname) = args.project_name {
             let pname_clean = pname.trim();
             if !pname_clean.is_empty() {
                 let existing = sqlx::query_scalar::<_, Uuid>(
                     "SELECT id FROM projects WHERE user_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1",
                 )
-                .bind(self.user_id.0)
+                .bind(self.owner.user_id.0)
                 .bind(pname_clean)
                 .fetch_optional(db.pool())
                 .await?;
@@ -155,7 +166,7 @@ impl Tool for CreateTask {
                          VALUES ($1, $2, 'Auto-created project', 'active') \
                          RETURNING id",
                     )
-                    .bind(self.user_id.0)
+                    .bind(self.owner.user_id.0)
                     .bind(pname_clean)
                     .fetch_one(db.pool())
                     .await?;
@@ -182,11 +193,12 @@ impl Tool for CreateTask {
             });
 
         let task_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO tasks (user_id, project_id, title, raw_instruction, status, execution_type, due_at) \
-             VALUES ($1, $2, $3, $4, 'pending', $5, $6) \
+            "INSERT INTO tasks (user_context_id, user_id, project_id, title, raw_instruction, status, execution_type, due_at) \
+             VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7) \
              RETURNING id",
         )
-        .bind(self.user_id.0)
+        .bind(self.owner.user_context_id.0)
+        .bind(self.owner.user_id.0)
         .bind(bound_project_id)
         .bind(title)
         .bind(raw_instruction)
@@ -215,12 +227,12 @@ pub struct ListTasksArgs {
 #[derive(Clone)]
 pub struct ListTasks {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl ListTasks {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -263,7 +275,8 @@ impl Tool for ListTasks {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             status = ?args.status,
             project_id = ?args.project_id,
             "Tool called"
@@ -281,10 +294,12 @@ impl Tool for ListTasks {
                     "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                      FROM tasks t \
                      LEFT JOIN projects p ON p.id = t.project_id \
-                     WHERE t.user_id = $1 AND t.project_id = $2 \
-                     ORDER BY t.created_at DESC LIMIT $3",
+                     WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                       AND t.project_id = $3 \
+                     ORDER BY t.created_at DESC LIMIT $4",
                 )
-                .bind(self.user_id.0)
+                .bind(self.owner.user_id.0)
+                .bind(self.owner.user_context_id.0)
                 .bind(pid)
                 .bind(limit)
                 .fetch_all(db.pool())
@@ -294,10 +309,12 @@ impl Tool for ListTasks {
                     "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                      FROM tasks t \
                      LEFT JOIN projects p ON p.id = t.project_id \
-                     WHERE t.user_id = $1 AND t.project_id = $2 AND t.status = $3 \
-                     ORDER BY t.created_at DESC LIMIT $4",
+                     WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                       AND t.project_id = $3 AND t.status = $4 \
+                     ORDER BY t.created_at DESC LIMIT $5",
                 )
-                .bind(self.user_id.0)
+                .bind(self.owner.user_id.0)
+                .bind(self.owner.user_context_id.0)
                 .bind(pid)
                 .bind(status_filter)
                 .bind(limit)
@@ -309,10 +326,11 @@ impl Tool for ListTasks {
                 "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 \
-                 ORDER BY t.created_at DESC LIMIT $2",
+                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                 ORDER BY t.created_at DESC LIMIT $3",
             )
-            .bind(self.user_id.0)
+            .bind(self.owner.user_id.0)
+            .bind(self.owner.user_context_id.0)
             .bind(limit)
             .fetch_all(db.pool())
             .await?
@@ -321,10 +339,12 @@ impl Tool for ListTasks {
                 "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 AND t.status = $2 \
-                 ORDER BY t.created_at DESC LIMIT $3",
+                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                   AND t.status = $3 \
+                 ORDER BY t.created_at DESC LIMIT $4",
             )
-            .bind(self.user_id.0)
+            .bind(self.owner.user_id.0)
+            .bind(self.owner.user_context_id.0)
             .bind(status_filter)
             .bind(limit)
             .fetch_all(db.pool())
@@ -362,12 +382,12 @@ pub struct GetTaskArgs {
 #[derive(Clone)]
 pub struct GetTask {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl GetTask {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -405,7 +425,8 @@ impl Tool for GetTask {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             task_id = ?args.task_id,
             title_query = ?args.title_query,
             "Tool called"
@@ -420,10 +441,12 @@ impl Tool for GetTask {
                  p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.id = $1 AND t.user_id = $2",
+                 WHERE t.id = $1 AND t.user_id = $2 \
+                   AND (t.user_context_id = $3 OR t.user_context_id IS NULL)",
             )
             .bind(tid)
-            .bind(self.user_id.0)
+            .bind(self.owner.user_id.0)
+            .bind(self.owner.user_context_id.0)
             .fetch_optional(db.pool())
             .await?
         } else if let Some(q) = args.title_query {
@@ -433,10 +456,12 @@ impl Tool for GetTask {
                  p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 AND t.title ILIKE '%' || $2 || '%' \
+                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                   AND t.title ILIKE '%' || $3 || '%' \
                  ORDER BY t.created_at DESC LIMIT 1",
             )
-            .bind(self.user_id.0)
+            .bind(self.owner.user_id.0)
+            .bind(self.owner.user_context_id.0)
             .bind(q.trim())
             .fetch_optional(db.pool())
             .await?
@@ -484,12 +509,12 @@ pub struct UpdateTaskArgs {
 #[derive(Clone)]
 pub struct UpdateTask {
     db: Option<Db>,
-    user_id: UserId,
+    owner: ResourceOwner,
 }
 
 impl UpdateTask {
-    pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
+        Self { db, owner }
     }
 }
 
@@ -537,7 +562,8 @@ impl Tool for UpdateTask {
     ) -> Result<Self::Output, Self::Error> {
         tracing::info!(
             tool = Self::NAME,
-            user_id = %self.user_id.0,
+            user_id = %self.owner.user_id.0,
+            user_context_id = %self.owner.user_context_id.0,
             task_id = %args.task_id,
             status = ?args.status,
             "Tool called"
@@ -554,15 +580,18 @@ impl Tool for UpdateTask {
              feasibility_reasoning = COALESCE($2, feasibility_reasoning), \
              execution_result = COALESCE($3, execution_result), \
              completed_at = CASE WHEN $4 THEN now() ELSE completed_at END, \
+             user_context_id = COALESCE(user_context_id, $7), \
              updated_at = now() \
-             WHERE id = $5 AND user_id = $6",
+             WHERE id = $5 AND user_id = $6 \
+               AND (user_context_id = $7 OR user_context_id IS NULL)",
         )
         .bind(args.status.as_deref())
         .bind(args.feasibility_reasoning.as_deref())
         .bind(args.execution_result)
         .bind(is_completing)
         .bind(tid)
-        .bind(self.user_id.0)
+        .bind(self.owner.user_id.0)
+        .bind(self.owner.user_context_id.0)
         .execute(db.pool())
         .await?;
 

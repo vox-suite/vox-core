@@ -5,7 +5,7 @@ use crate::{
         conversation::{ConversationPrompt, ConversationResponder, PromptMessage},
     },
     db::Db,
-    identity::{IdentityService, UserId},
+    identity::{IdentityError, IdentityService, ResourceOwner, UserId},
     memory::MemoryService,
     voiceprint::{VoiceSignature, verify_phone_match, verify_voice_match_with_jev},
 };
@@ -62,6 +62,8 @@ pub enum ConversationError {
     Agent(#[from] AgentError),
     #[error("conversation identity conflict")]
     IdentityConflict,
+    #[error("conversation identity unavailable")]
+    Identity(#[from] IdentityError),
 }
 
 impl ConversationService {
@@ -100,20 +102,25 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        let user_id = self.identities.resolve(&request.identity).await?;
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        let user_id = owner.user_id;
 
         // Seed name if provided via initiation_context (e.g. from WhatsApp profile)
         if let Some(init_ctx) = &request.initiation_context
-            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
-                let wa_name_clean = wa_name.trim();
-                if !wa_name_clean.is_empty() {
-                    let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
-                }
+            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:")
+        {
+            let wa_name_clean = wa_name.trim();
+            if !wa_name_clean.is_empty() {
+                let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
             }
+        }
 
         let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
-                user_id,
+                owner,
                 &request.identity.channel,
                 &request.external_conversation_id,
             )
@@ -146,6 +153,7 @@ impl ConversationService {
                 needs_onboarding
             }
         };
+        let active_owner = self.identities.owner_for_user(active_user_id).await?;
 
         // Inbound call opening fast-path: Greet immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
@@ -176,6 +184,7 @@ impl ConversationService {
             .agent
             .respond(ConversationPrompt {
                 user_id: active_user_id,
+                owner: active_owner,
                 channel: request.identity.channel.clone(),
                 user_context: self.memory.load(active_user_id).await?,
                 recent_messages: prior_messages,
@@ -204,19 +213,24 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        let user_id = self.identities.resolve(&request.identity).await?;
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        let user_id = owner.user_id;
 
         if let Some(init_ctx) = &request.initiation_context
-            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
-                let wa_name_clean = wa_name.trim();
-                if !wa_name_clean.is_empty() {
-                    let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
-                }
+            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:")
+        {
+            let wa_name_clean = wa_name.trim();
+            if !wa_name_clean.is_empty() {
+                let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
             }
+        }
 
         let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
-                user_id,
+                owner,
                 &request.identity.channel,
                 &request.external_conversation_id,
             )
@@ -246,6 +260,7 @@ impl ConversationService {
                 needs_onboarding
             }
         };
+        let active_owner = self.identities.owner_for_user(active_user_id).await?;
 
         // Inbound call opening fast-path: Stream greeting immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
@@ -287,6 +302,7 @@ impl ConversationService {
             .agent
             .respond_stream(ConversationPrompt {
                 user_id: active_user_id,
+                owner: active_owner,
                 channel: request.identity.channel.clone(),
                 user_context,
                 recent_messages: prior_messages,
@@ -552,18 +568,17 @@ impl ConversationService {
             .is_some();
 
         // Check if user is introducing themselves on first call
-        if !has_name
-            && let Some(extracted_name) = extract_name_from_text(&request.text) {
-                let _ = self.memory.set_user_name(user_id, &extracted_name).await;
-                if let Some(ref sig) = parsed_sig {
-                    let _ = self.memory.set_voice_signature(user_id, sig).await;
-                }
-                let reply = format!(
-                    "Nice to meet you {}! How can I help you today?",
-                    extracted_name
-                );
-                return Ok(VoiceVerificationOutcome::Intercept(reply));
+        if !has_name && let Some(extracted_name) = extract_name_from_text(&request.text) {
+            let _ = self.memory.set_user_name(user_id, &extracted_name).await;
+            if let Some(ref sig) = parsed_sig {
+                let _ = self.memory.set_voice_signature(user_id, sig).await;
             }
+            let reply = format!(
+                "Nice to meet you {}! How can I help you today?",
+                extracted_name
+            );
+            return Ok(VoiceVerificationOutcome::Intercept(reply));
+        }
 
         // Check voice biometric match if name is known
         if let Some(ref name) = known_name {
@@ -614,12 +629,22 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        let conversation =
-            sqlx::query("SELECT id FROM conversations WHERE channel = $1 AND external_id = $2")
-                .bind(request.identity.channel.trim())
-                .bind(request.external_conversation_id.trim())
-                .fetch_optional(self.db.pool())
-                .await?;
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        let conversation = sqlx::query(
+            "SELECT id FROM conversations \
+             WHERE channel = $1 AND external_id = $2 \
+               AND user_id = $3 \
+               AND (user_context_id = $4 OR user_context_id IS NULL)",
+        )
+        .bind(request.identity.channel.trim())
+        .bind(request.external_conversation_id.trim())
+        .bind(owner.user_id.0)
+        .bind(owner.user_context_id.0)
+        .fetch_optional(self.db.pool())
+        .await?;
 
         let conversation_id = match conversation {
             Some(row) => row.get::<Uuid, _>("id"),
@@ -668,20 +693,52 @@ impl ConversationService {
 
     async fn resolve_conversation(
         &self,
-        user_id: UserId,
+        owner: ResourceOwner,
         channel: &str,
         external_id: &str,
     ) -> Result<(ConversationId, UserId), ConversationError> {
-        let row = sqlx::query(
-            "INSERT INTO conversations (user_id, channel, external_id) VALUES ($1, $2, $3) \
-             ON CONFLICT (channel, external_id) DO UPDATE SET external_id = EXCLUDED.external_id RETURNING id, user_id",
+        let mut tx = self.db.pool().begin().await?;
+        let existing = sqlx::query(
+            "SELECT id, user_id, user_context_id FROM conversations \
+             WHERE user_id = $1 AND channel = $2 AND external_id = $3 \
+               AND (user_context_id = $4 OR user_context_id IS NULL) \
+             FOR UPDATE",
         )
-        .bind(user_id.0)
+        .bind(owner.user_id.0)
         .bind(channel.trim())
         .bind(external_id.trim())
-        .fetch_one(self.db.pool())
+        .bind(owner.user_context_id.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(row) = existing {
+            let conversation_id: Uuid = row.get("id");
+            if row.get::<Option<Uuid>, _>("user_context_id").is_none() {
+                sqlx::query("UPDATE conversations SET user_context_id = $1 WHERE id = $2")
+                    .bind(owner.user_context_id.0)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            return Ok((ConversationId(conversation_id), UserId(row.get("user_id"))));
+        }
+
+        let row = sqlx::query(
+            "INSERT INTO conversations (user_context_id, user_id, channel, external_id) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (user_context_id, channel, external_id) \
+             DO UPDATE SET external_id = EXCLUDED.external_id \
+             RETURNING id, user_id",
+        )
+        .bind(owner.user_context_id.0)
+        .bind(owner.user_id.0)
+        .bind(channel.trim())
+        .bind(external_id.trim())
+        .fetch_one(&mut *tx)
         .await?;
         let stored_user: Uuid = row.get("user_id");
+        tx.commit().await?;
         Ok((ConversationId(row.get("id")), UserId(stored_user)))
     }
 

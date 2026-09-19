@@ -21,6 +21,7 @@ use vox_core::{
     bridge_client::{BridgeClientError, BridgeDispatch, OutboundCallRequest, OutboundCallResponse},
     db::Db,
     http::{AppState, router},
+    identity::{IdentityService, UserId},
 };
 
 struct FakeBridge {
@@ -64,13 +65,21 @@ async fn setup() -> (Db, Uuid) {
         .unwrap();
     sqlx::query("INSERT INTO user_identities (user_id, channel, external_id) VALUES ($1, 'phone', '+919999999996')")
         .bind(user_id).execute(db.pool()).await.unwrap();
+    let owner = IdentityService::new(db.clone())
+        .owner_for_user(UserId(user_id))
+        .await
+        .unwrap();
     let action_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO actions (user_id, kind, payload, idempotency_key) VALUES ($1, 'outbound_call', $2, $3) RETURNING id",
+        "INSERT INTO actions (user_context_id, user_id, kind, payload, idempotency_key) \
+         VALUES ($1, $2, 'outbound_call', $3, $4) RETURNING id",
     )
+    .bind(owner.user_context_id.0)
     .bind(user_id)
     .bind(serde_json::json!({"reason":"Warning", "opening_instruction":"Explain the warning"}))
     .bind(Uuid::new_v4().to_string())
-    .fetch_one(db.pool()).await.unwrap();
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     (db, action_id)
 }
 

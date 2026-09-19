@@ -1,5 +1,8 @@
 use super::{EventId, IngestEventRequest, IngestEventResponse};
-use crate::{db::Db, identity::IdentityService};
+use crate::{
+    db::Db,
+    identity::{IdentityError, IdentityService},
+};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -15,6 +18,8 @@ pub enum EventError {
     Invalid,
     #[error("event storage unavailable")]
     Database(#[from] sqlx::Error),
+    #[error("event identity unavailable")]
+    Identity(#[from] IdentityError),
 }
 
 impl EventService {
@@ -36,7 +41,11 @@ impl EventService {
         {
             return Err(EventError::Invalid);
         }
-        let user_id = self.identities.resolve(&request.identity).await?;
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        let user_id = owner.user_id;
         let mut tx = self.db.pool().begin().await?;
         let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO events (user_id, idempotency_key, event_type, occurred_at, payload) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
