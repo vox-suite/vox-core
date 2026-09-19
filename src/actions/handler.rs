@@ -36,7 +36,11 @@ impl ActionHandler {
     pub async fn handle(&self, action_id: ActionId) -> Result<(), ActionHandlerError> {
         let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
-            "SELECT user_id, kind, payload, state FROM actions WHERE id = $1 FOR UPDATE",
+            "SELECT a.user_id, COALESCE(a.user_context_id, c.id) AS user_context_id, \
+                    a.kind, a.payload, a.state \
+             FROM actions a \
+             JOIN user_contexts c ON c.user_id = a.user_id \
+             WHERE a.id = $1 FOR UPDATE OF a",
         )
         .bind(action_id.0)
         .fetch_optional(&mut *tx)
@@ -52,6 +56,14 @@ impl ActionHandler {
             return Err(ActionHandlerError::InvalidPayload);
         }
         let user_id: Uuid = row.get("user_id");
+        let user_context_id: Uuid = row.get("user_context_id");
+        sqlx::query(
+            "UPDATE actions SET user_context_id = COALESCE(user_context_id, $1) WHERE id = $2",
+        )
+        .bind(user_context_id)
+        .bind(action_id.0)
+        .execute(&mut *tx)
+        .await?;
         let payload: serde_json::Value = row.get("payload");
         let reason = required_string(&payload, "reason")?;
         let opening_instruction = required_string(&payload, "opening_instruction")?;
@@ -63,9 +75,12 @@ impl ActionHandler {
         .await?
         .ok_or(ActionHandlerError::IdentityNotFound)?;
         let conversation_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO conversations (user_id, channel, external_id) VALUES ($1, 'phone', $2) \
-             ON CONFLICT (channel, external_id) DO UPDATE SET external_id = EXCLUDED.external_id RETURNING id",
+            "INSERT INTO conversations (user_context_id, user_id, channel, external_id) \
+             VALUES ($1, $2, 'phone', $3) \
+             ON CONFLICT (user_context_id, channel, external_id) \
+             DO UPDATE SET external_id = EXCLUDED.external_id RETURNING id",
         )
+        .bind(user_context_id)
         .bind(user_id)
         .bind(format!("outbound:{}", action_id.0))
         .fetch_one(&mut *tx)

@@ -1,7 +1,10 @@
 use super::{
     CreateScheduleRequest, ScheduleId, ScheduleKind, ScheduleResponse, UpdateScheduleRequest,
 };
-use crate::{db::Db, identity::IdentityService};
+use crate::{
+    db::Db,
+    identity::{IdentityError, IdentityService},
+};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
@@ -22,6 +25,8 @@ pub enum ScheduleError {
     NotFound,
     #[error("schedule storage unavailable")]
     Database(#[from] sqlx::Error),
+    #[error("schedule identity unavailable")]
+    Identity(#[from] IdentityError),
 }
 
 impl ScheduleService {
@@ -52,7 +57,10 @@ impl ScheduleService {
             return Err(ScheduleError::Invalid);
         }
         let timezone = Tz::from_str(request.timezone.trim()).map_err(|_| ScheduleError::Invalid)?;
-        let user_id = self.identities.resolve(&request.identity).await?;
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
         let (next_run_at, recurrence_expression) = match request.schedule_kind {
             ScheduleKind::Once => {
                 if request.recurrence_expression.is_some() {
@@ -79,11 +87,12 @@ impl ScheduleService {
             }
         };
         let row = sqlx::query(
-            "INSERT INTO scheduled_tasks (user_id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'active') \
+            "INSERT INTO scheduled_tasks (user_context_id, user_id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active') \
              RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
         )
-        .bind(user_id.0)
+        .bind(owner.user_context_id.0)
+        .bind(owner.user_id.0)
         .bind(request.instruction.trim())
         .bind(request.schedule_kind.as_str())
         .bind(recurrence_expression)
@@ -114,11 +123,24 @@ impl ScheduleService {
         if operation_count != 1 {
             return Err(ScheduleError::Invalid);
         }
+        if request.identity.channel.trim().is_empty()
+            || request.identity.external_id.trim().is_empty()
+        {
+            return Err(ScheduleError::Invalid);
+        }
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
         let row = sqlx::query(
             "SELECT schedule_kind, recurrence_expression, timezone, next_run_at, state \
-             FROM scheduled_tasks WHERE id = $1",
+             FROM scheduled_tasks \
+             WHERE id = $1 AND user_id = $2 \
+               AND (user_context_id = $3 OR user_context_id IS NULL)",
         )
         .bind(id.0)
+        .bind(owner.user_id.0)
+        .bind(owner.user_context_id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ScheduleError::NotFound)?;
@@ -154,15 +176,21 @@ impl ScheduleService {
             recurrence_expression = Some(expression);
         }
         let row = sqlx::query(
-            "UPDATE scheduled_tasks SET state = $1, next_run_at = $2, recurrence_expression = $3, updated_at = now() \
-             WHERE id = $4 RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
+            "UPDATE scheduled_tasks SET state = $1, next_run_at = $2, recurrence_expression = $3, \
+                    user_context_id = COALESCE(user_context_id, $6), updated_at = now() \
+             WHERE id = $4 AND user_id = $5 \
+               AND (user_context_id = $6 OR user_context_id IS NULL) \
+             RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
         )
         .bind(state)
         .bind(next_run_at)
         .bind(recurrence_expression)
         .bind(id.0)
-        .fetch_one(self.db.pool())
-        .await?;
+        .bind(owner.user_id.0)
+        .bind(owner.user_context_id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(ScheduleError::NotFound)?;
         schedule_response(row)
     }
 }

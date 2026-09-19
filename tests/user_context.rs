@@ -50,13 +50,14 @@ async fn canonical_contexts_isolate_deployments_hosts_organizations_and_users() 
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
     let db = Db::connect(&database_url).await.expect("connect database");
     db.migrate().await.expect("migrate database");
-    sqlx::query("TRUNCATE platform_deployments, users CASCADE")
+    sqlx::query("TRUNCATE users CASCADE")
         .execute(db.pool())
         .await
         .unwrap();
 
-    let deployment_a = register_deployment(&db, "deployment-a").await;
-    let deployment_b = register_deployment(&db, "deployment-b").await;
+    let suffix = Uuid::new_v4();
+    let deployment_a = register_deployment(&db, &format!("deployment-a-{suffix}")).await;
+    let deployment_b = register_deployment(&db, &format!("deployment-b-{suffix}")).await;
     let host_a = register_host(&db, deployment_a, "host-a").await;
     let host_b = register_host(&db, deployment_a, "host-b").await;
     let host_c = register_host(&db, deployment_b, "host-a").await;
@@ -157,12 +158,13 @@ async fn context_resolution_rejects_unregistered_or_mismatched_scopes() {
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
     let db = Db::connect(&database_url).await.expect("connect database");
     db.migrate().await.expect("migrate database");
-    sqlx::query("TRUNCATE platform_deployments, users CASCADE")
+    sqlx::query("TRUNCATE users CASCADE")
         .execute(db.pool())
         .await
         .unwrap();
 
-    let deployment = register_deployment(&db, "scope-deployment").await;
+    let deployment =
+        register_deployment(&db, &format!("scope-deployment-{}", Uuid::new_v4())).await;
     let host_a = register_host(&db, deployment, "scope-host-a").await;
     let host_b = register_host(&db, deployment, "scope-host-b").await;
     let organization = register_organization(&db, deployment, host_a, "scope-org").await;

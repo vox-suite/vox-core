@@ -47,6 +47,7 @@ pub struct CreateScheduleRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UpdateScheduleRequest {
+    pub identity: ChannelIdentity,
     pub state: Option<String>,
     pub run_at: Option<DateTime<Utc>>,
     pub recurrence_expression: Option<String>,

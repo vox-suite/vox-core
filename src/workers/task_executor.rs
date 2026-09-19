@@ -1,4 +1,9 @@
-use crate::{config::Config, db::Db, jev::JevClient};
+use crate::{
+    config::Config,
+    db::Db,
+    identity::{ResourceOwner, UserContextId, UserId},
+    jev::JevClient,
+};
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde_json::json;
 use sqlx::Row;
@@ -47,8 +52,11 @@ impl TaskExecutorHandler {
 
     pub async fn handle(&self, task_id: Uuid) -> Result<(), TaskExecutorError> {
         let task_row = sqlx::query(
-            "SELECT user_id, title, raw_instruction, execution_type, status \
-             FROM tasks WHERE id = $1",
+            "SELECT t.user_id, COALESCE(t.user_context_id, c.id) AS user_context_id, \
+                    t.title, t.raw_instruction, t.execution_type, t.status \
+             FROM tasks t \
+             JOIN user_contexts c ON c.user_id = t.user_id \
+             WHERE t.id = $1",
         )
         .bind(task_id)
         .fetch_optional(self.db.pool())
@@ -60,15 +68,23 @@ impl TaskExecutorHandler {
             return Ok(());
         }
 
-        let user_id: Uuid = task_row.get("user_id");
+        let owner = ResourceOwner {
+            user_context_id: UserContextId(task_row.get("user_context_id")),
+            user_id: UserId(task_row.get("user_id")),
+        };
         let title: String = task_row.get("title");
         let instruction: String = task_row.get("raw_instruction");
 
         // Mark task as executing
-        sqlx::query("UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1")
-            .bind(task_id)
-            .execute(self.db.pool())
-            .await?;
+        sqlx::query(
+            "UPDATE tasks SET status = 'executing', \
+                    user_context_id = COALESCE(user_context_id, $1), updated_at = now() \
+             WHERE id = $2",
+        )
+        .bind(owner.user_context_id.0)
+        .bind(task_id)
+        .execute(self.db.pool())
+        .await?;
 
         // Run autonomous execution using Gemini
         let client = gemini::Client::new(&self.api_key)
@@ -113,7 +129,7 @@ impl TaskExecutorHandler {
         .await?;
 
         // Enqueue outbound call to inform the user if they have a phone identity and it is urgent
-        self.notify_user_via_call(user_id, task_id, &title, response.trim())
+        self.notify_user_via_call(owner, task_id, &title, response.trim())
             .await?;
 
         Ok(())
@@ -121,7 +137,7 @@ impl TaskExecutorHandler {
 
     async fn notify_user_via_call(
         &self,
-        user_id: Uuid,
+        owner: ResourceOwner,
         task_id: Uuid,
         title: &str,
         summary: &str,
@@ -129,7 +145,7 @@ impl TaskExecutorHandler {
         let has_phone: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = $1 AND channel = 'phone')",
         )
-        .bind(user_id)
+        .bind(owner.user_id.0)
         .fetch_one(self.db.pool())
         .await?;
 
@@ -167,11 +183,12 @@ impl TaskExecutorHandler {
         let mut tx = self.db.pool().begin().await?;
 
         let action_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actions (user_id, task_id, kind, payload, state, idempotency_key) \
-             VALUES ($1, $2, 'outbound_call', $3, 'pending', $4) \
+            "INSERT INTO actions (user_context_id, user_id, task_id, kind, payload, state, idempotency_key) \
+             VALUES ($1, $2, $3, 'outbound_call', $4, 'pending', $5) \
              RETURNING id",
         )
-        .bind(user_id)
+        .bind(owner.user_context_id.0)
+        .bind(owner.user_id.0)
         .bind(task_id)
         .bind(payload)
         .bind(idempotency_key)

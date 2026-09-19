@@ -25,7 +25,9 @@ pub async fn create(
         Ok(schedule) => (StatusCode::CREATED, Json(schedule)).into_response(),
         Err(ScheduleError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ScheduleError::NotFound) => StatusCode::NOT_FOUND.into_response(),
-        Err(ScheduleError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(ScheduleError::Database(_) | ScheduleError::Identity(_)) => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
     }
 }
 
@@ -45,6 +47,8 @@ pub async fn update(
         Ok(schedule) => (StatusCode::OK, Json(schedule)).into_response(),
         Err(ScheduleError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ScheduleError::NotFound) => StatusCode::NOT_FOUND.into_response(),
-        Err(ScheduleError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(ScheduleError::Database(_) | ScheduleError::Identity(_)) => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
     }
 }

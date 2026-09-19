@@ -1,4 +1,7 @@
-use crate::{db::Db, identity::UserId};
+use crate::{
+    db::Db,
+    identity::{IdentityError, IdentityService, UserId},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -57,15 +60,17 @@ impl VoiceSignature {
 
         // 1. JSON object with `features` field
         if let Ok(sig) = serde_json::from_str::<VoiceSignature>(trimmed)
-            && !sig.features.is_empty() {
-                return Some(sig);
-            }
+            && !sig.features.is_empty()
+        {
+            return Some(sig);
+        }
 
         // 2. JSON array of floats `[0.1, 0.2, ...]`
         if let Ok(features) = serde_json::from_str::<Vec<f32>>(trimmed)
-            && !features.is_empty() {
-                return Some(Self::new(features));
-            }
+            && !features.is_empty()
+        {
+            return Some(Self::new(features));
+        }
 
         // 3. Comma-separated floats `0.1, 0.2, ...`
         let parsed: Vec<f32> = trimmed
@@ -192,7 +197,12 @@ impl VoiceprintService {
         .await?;
 
         tx.commit().await?;
-        Ok(UserId(user_id))
+        let user_id = UserId(user_id);
+        IdentityService::new(self.db.clone())
+            .owner_for_user(user_id)
+            .await
+            .map_err(identity_storage_error)?;
+        Ok(user_id)
     }
 
     /// Updates the active user of a conversation session when identity switches during a call.
@@ -201,13 +211,25 @@ impl VoiceprintService {
         conversation_id: Uuid,
         user_id: UserId,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE conversations SET user_id = $1 WHERE id = $2")
+        let owner = IdentityService::new(self.db.clone())
+            .owner_for_user(user_id)
+            .await
+            .map_err(identity_storage_error)?;
+        sqlx::query("UPDATE conversations SET user_id = $1, user_context_id = $2 WHERE id = $3")
             .bind(user_id.0)
+            .bind(owner.user_context_id.0)
             .bind(conversation_id)
             .execute(self.db.pool())
             .await?;
 
         Ok(())
+    }
+}
+
+fn identity_storage_error(error: IdentityError) -> sqlx::Error {
+    match error {
+        IdentityError::Database(error) => error,
+        other => sqlx::Error::Protocol(other.to_string()),
     }
 }
 
