@@ -81,8 +81,8 @@ impl ScheduleHandler {
             if let Ok(needs_planning) = jev.noul(
                 state,
                 "Does this scheduled task instruction specifically require taking an external action, dispatching an alert, or placing a telephone call?",
-            ).await {
-                if needs_planning < 0.20 {
+            ).await
+                && needs_planning < 0.20 {
                     tracing::info!(
                         schedule_id = %schedule_id.0,
                         needs_planning,
@@ -90,7 +90,6 @@ impl ScheduleHandler {
                     );
                     return Ok(());
                 }
-            }
         }
 
         let actions = self

@@ -148,8 +148,8 @@ impl TaskExecutorHandler {
             if let Ok(urgency) = jev.noul(
                 state,
                 "Does this task result represent an urgent emergency, critical real-world deadline, or explicit user demand to be phoned immediately?",
-            ).await {
-                if urgency < 0.70 {
+            ).await
+                && urgency < 0.70 {
                     tracing::info!(
                         task_id = %task_id,
                         urgency,
@@ -157,7 +157,6 @@ impl TaskExecutorHandler {
                     );
                     return Ok(());
                 }
-            }
         }
 
         let idempotency_key = format!("task_complete_call:{}:{}", task_id, Uuid::new_v4());

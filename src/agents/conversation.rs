@@ -391,12 +391,11 @@ fn normalize_currency(text: &str) -> String {
                 words.push(format!("{stripped} dollars{punctuation}"));
                 continue;
             }
-        } else if let Some(stripped) = clean.strip_prefix('₹') {
-            if stripped.chars().all(|c| c.is_ascii_digit()) && !stripped.is_empty() {
+        } else if let Some(stripped) = clean.strip_prefix('₹')
+            && stripped.chars().all(|c| c.is_ascii_digit()) && !stripped.is_empty() {
                 words.push(format!("{stripped} rupees{punctuation}"));
                 continue;
             }
-        }
         words.push(token.to_string());
     }
     words.join(" ")
@@ -546,7 +545,7 @@ impl ConversationResponder for ConversationAgent {
 #[cfg(test)]
 mod tests {
     use super::{
-        GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, is_voice_channel, spoken_response,
+        VOICE_CALL_PREAMBLE, spoken_response,
     };
 
     #[test]

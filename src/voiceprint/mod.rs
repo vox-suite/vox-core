@@ -56,18 +56,16 @@ impl VoiceSignature {
         }
 
         // 1. JSON object with `features` field
-        if let Ok(sig) = serde_json::from_str::<VoiceSignature>(trimmed) {
-            if !sig.features.is_empty() {
+        if let Ok(sig) = serde_json::from_str::<VoiceSignature>(trimmed)
+            && !sig.features.is_empty() {
                 return Some(sig);
             }
-        }
 
         // 2. JSON array of floats `[0.1, 0.2, ...]`
-        if let Ok(features) = serde_json::from_str::<Vec<f32>>(trimmed) {
-            if !features.is_empty() {
+        if let Ok(features) = serde_json::from_str::<Vec<f32>>(trimmed)
+            && !features.is_empty() {
                 return Some(Self::new(features));
             }
-        }
 
         // 3. Comma-separated floats `0.1, 0.2, ...`
         let parsed: Vec<f32> = trimmed
@@ -274,11 +272,9 @@ pub async fn verify_voice_match_with_jev(
                 ],
             )
             .await
-        {
-            if confidence >= 0.70 {
+            && confidence >= 0.70 {
                 return choice == "match";
             }
-        }
     }
 
     // 3. Fallback threshold

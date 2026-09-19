@@ -137,14 +137,13 @@ impl SchemaClassifier {
             });
         }
 
-        if confidence >= FAST_PATH_CONFIDENCE_THRESHOLD {
-            if let Some(matched_schema) = schemas.into_iter().find(|s| s.qualified_name == choice) {
+        if confidence >= FAST_PATH_CONFIDENCE_THRESHOLD
+            && let Some(matched_schema) = schemas.into_iter().find(|s| s.qualified_name == choice) {
                 return Ok(SchemaClassificationResult::Existing {
                     schema: matched_schema,
                     confidence,
                 });
             }
-        }
 
         Ok(SchemaClassificationResult::Novel {
             suggested_category: Some(choice),

@@ -102,9 +102,9 @@ impl EventHandler {
                     }
 
                     // Direct ingestion fast-path for structured data records
-                    if triage.action == EventTriageAction::StoreRecord {
-                        if let Some(classifier) = &self.schema_classifier {
-                            if let Ok(class_res) = classifier.classify(user_id.0, &payload).await {
+                    if triage.action == EventTriageAction::StoreRecord
+                        && let Some(classifier) = &self.schema_classifier
+                            && let Ok(class_res) = classifier.classify(user_id.0, &payload).await {
                                 match class_res {
                                     SchemaClassificationResult::Existing { schema, confidence } => {
                                         if validate_data_against_schema(&schema.json_schema, &payload).is_ok() {
@@ -145,8 +145,6 @@ impl EventHandler {
                                     }
                                 }
                             }
-                        }
-                    }
                 }
                 Err(err) => {
                     tracing::warn!(%err, "Jev triage evaluation failed, falling back to System 2 planner");

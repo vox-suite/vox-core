@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use serde_json::json;
 use vox_core::jev::{
-    types::{Answer, Question, SystemOneRequest, SystemOneResponse},
+    types::{Question, SystemOneRequest, SystemOneResponse},
     event_triage::{EventTriageAction, EventTriageResult},
     schema_classifier::{
         SchemaClassificationResult, SchemaDescriptor,

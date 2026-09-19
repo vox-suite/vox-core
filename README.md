@@ -25,6 +25,16 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 VOX_ENV_FILE=.env.example docker compose --env-file .env.example config
 ```
 
+Platform V1 authority and outcome semantics are executable without a database or
+production provider:
+
+```sh
+cargo test --locked --test platform_conformance
+```
+
+See [`docs/conformance.md`](docs/conformance.md) for the versioned fixture,
+adapter contract, stable error vocabulary, and semantic coverage map.
+
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
 
 ## Read-only Redis administration
