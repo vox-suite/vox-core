@@ -1,4 +1,4 @@
-use super::{client::JevClient, JevError};
+use super::{JevError, client::JevClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -28,12 +28,36 @@ impl ToolRouter {
         let state = json!({ "user_prompt": prompt });
         let instructions = "Select the single external capability required to satisfy the user's request, or 'none' if it can be answered conversationally.";
         let options = &[
-            ("none", Some("Pure conversation, clarification, smalltalk, greetings, goodbyes, or questions answerable from context")),
-            ("web_search", Some("Live news, stock prices, sports scores, weather, general web search, or live facts")),
-            ("maps", Some("Places, cafes, restaurants, driving duration, distance, traffic, or routes")),
-            ("tasks_and_records", Some("Creating or checking tasks, reminders, logging notes, updating facts, or personal records")),
-            ("calendar", Some("Checking upcoming schedule, calendar events, meetings, or availability")),
-            ("all", Some("Complex or multi-intent request requiring a combination of multiple tools")),
+            (
+                "none",
+                Some(
+                    "Pure conversation, clarification, smalltalk, greetings, goodbyes, or questions answerable from context",
+                ),
+            ),
+            (
+                "web_search",
+                Some(
+                    "Live news, stock prices, sports scores, weather, general web search, or live facts",
+                ),
+            ),
+            (
+                "maps",
+                Some("Places, cafes, restaurants, driving duration, distance, traffic, or routes"),
+            ),
+            (
+                "tasks_and_records",
+                Some(
+                    "Creating or checking tasks, reminders, logging notes, updating facts, or personal records",
+                ),
+            ),
+            (
+                "calendar",
+                Some("Checking upcoming schedule, calendar events, meetings, or availability"),
+            ),
+            (
+                "all",
+                Some("Complex or multi-intent request requiring a combination of multiple tools"),
+            ),
         ];
 
         let (choice, confidence, _) = self.jev.choice(state, instructions, options).await?;

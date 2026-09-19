@@ -1,12 +1,12 @@
-use std::collections::HashMap;
 use serde_json::json;
+use std::collections::HashMap;
 use vox_core::jev::{
-    types::{Answer, Question, SystemOneRequest, SystemOneResponse},
     event_triage::{EventTriageAction, EventTriageResult},
     schema_classifier::{
+        FAST_PATH_CONFIDENCE_THRESHOLD, NOVEL_CATEGORY_SENTINEL, NOVELTY_CONFIDENCE_THRESHOLD,
         SchemaClassificationResult, SchemaDescriptor,
-        FAST_PATH_CONFIDENCE_THRESHOLD, NOVELTY_CONFIDENCE_THRESHOLD, NOVEL_CATEGORY_SENTINEL,
     },
+    types::{Answer, Question, SystemOneRequest, SystemOneResponse},
 };
 
 #[test]
@@ -42,7 +42,10 @@ fn test_choice_question_serialization() {
 
 #[test]
 fn test_score_question_serialization() {
-    let q = Question::score("How frustrated is the customer?", &["Calm", "Frustrated", "Very angry"]);
+    let q = Question::score(
+        "How frustrated is the customer?",
+        &["Calm", "Frustrated", "Very angry"],
+    );
     let val = serde_json::to_value(&q).unwrap();
     assert_eq!(val["type"], "score");
     assert_eq!(val["instructions"], "How frustrated is the customer?");
@@ -65,7 +68,10 @@ fn test_system_one_request_structure() {
 
     let serialized = serde_json::to_value(&req).unwrap();
     assert_eq!(serialized["model"], "jev-latest");
-    assert_eq!(serialized["state"], "Help! My payouts have been failing for 3 days.");
+    assert_eq!(
+        serialized["state"],
+        "Help! My payouts have been failing for 3 days."
+    );
     assert!(serialized["questions"]["is_urgent"].is_object());
 }
 
@@ -224,7 +230,10 @@ fn test_background_task_urgency_thresholds() {
     let non_urgent_prob = 0.15;
     let urgent_prob = 0.85;
 
-    assert!(non_urgent_prob < 0.70, "Routine task should suppress outbound phone call");
+    assert!(
+        non_urgent_prob < 0.70,
+        "Routine task should suppress outbound phone call"
+    );
     assert!(urgent_prob >= 0.70, "Urgent task warrants phone escalation");
 }
 
@@ -233,6 +242,12 @@ fn test_summarizer_gating_thresholds() {
     let trivial_prob = 0.08;
     let meaningful_prob = 0.65;
 
-    assert!(trivial_prob < 0.20, "Trivial chit-chat skips Gemini summarizer");
-    assert!(meaningful_prob >= 0.20, "Meaningful updates trigger full summarization");
+    assert!(
+        trivial_prob < 0.20,
+        "Trivial chit-chat skips Gemini summarizer"
+    );
+    assert!(
+        meaningful_prob >= 0.20,
+        "Meaningful updates trigger full summarization"
+    );
 }

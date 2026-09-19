@@ -516,10 +516,8 @@ impl Tool for CreateUserRecord {
             }
         }
 
-        let domain = resolved_domain
-            .unwrap_or_else(|| "general".to_string());
-        let entity_type = resolved_entity_type
-            .unwrap_or_else(|| "record".to_string());
+        let domain = resolved_domain.unwrap_or_else(|| "general".to_string());
+        let entity_type = resolved_entity_type.unwrap_or_else(|| "record".to_string());
         let source = args.source.unwrap_or_else(|| "agent".to_string());
 
         let occurred_at = if let Some(ts_str) = args.occurred_at {

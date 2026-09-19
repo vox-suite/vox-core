@@ -1,4 +1,4 @@
-use super::{client::JevClient, JevError};
+use super::{JevError, client::JevClient};
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,7 +46,10 @@ impl SchemaClassifier {
     }
 
     /// Fetches all active schemas registered for a user (or system standard).
-    pub async fn load_user_schemas(&self, user_id: Uuid) -> Result<Vec<SchemaDescriptor>, sqlx::Error> {
+    pub async fn load_user_schemas(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<SchemaDescriptor>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, namespace, name, description, json_schema \
              FROM data_schemas \

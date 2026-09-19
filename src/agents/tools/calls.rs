@@ -62,13 +62,18 @@ impl Tool for TriggerOutboundCall {
             reason = %args.reason,
             "Tool called"
         );
-        let db = self.db.as_ref().ok_or_else(|| io::Error::other("Database unavailable"))?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Database unavailable"))?;
 
         let reason = args.reason.trim();
         let opening = args.opening_instruction.trim();
 
         if reason.is_empty() || opening.is_empty() {
-            return Err(io::Error::other("reason and opening_instruction are required"));
+            return Err(io::Error::other(
+                "reason and opening_instruction are required",
+            ));
         }
 
         let idempotency_key = format!("manual_call:{}:{}", self.user_id.0, Uuid::new_v4());
@@ -78,7 +83,11 @@ impl Tool for TriggerOutboundCall {
             "opening_instruction": opening
         });
 
-        let mut tx = db.pool().begin().await.map_err(|e| io::Error::other(e.to_string()))?;
+        let mut tx = db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         let action_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO actions (user_id, kind, payload, state, idempotency_key) \
@@ -101,7 +110,9 @@ impl Tool for TriggerOutboundCall {
         .await
         .map_err(|e| io::Error::other(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| io::Error::other(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(json!({
             "status": "call_queued",

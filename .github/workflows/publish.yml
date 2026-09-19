@@ -1,0 +1,46 @@
+name: validate-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build release
+        run: cargo build --release --locked
+
+  dispatch:
+    needs: validate
+    if: vars.VOX_AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Notify Vox Deploy
+        env:
+          GH_TOKEN: ${{ secrets.VOX_DEPLOY_DISPATCH_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          jq -n \
+            --arg component core \
+            --arg sha "$SOURCE_SHA" \
+            '{event_type:"component_ready",client_payload:{component:$component,sha:$sha}}' \
+            | gh api repos/vox-suite/vox-deploy/dispatches --method POST --input -

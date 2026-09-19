@@ -30,13 +30,23 @@ pub trait ContextCache: Send + Sync {
     async fn set_user_id_by_name(&self, _name: &str, _user_id: UserId) -> Result<(), CacheError> {
         Ok(())
     }
-    async fn get_verification_state(&self, _conversation_id: uuid::Uuid) -> Result<Option<String>, CacheError> {
+    async fn get_verification_state(
+        &self,
+        _conversation_id: uuid::Uuid,
+    ) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
-    async fn set_verification_state(&self, _conversation_id: uuid::Uuid, _state: &str) -> Result<(), CacheError> {
+    async fn set_verification_state(
+        &self,
+        _conversation_id: uuid::Uuid,
+        _state: &str,
+    ) -> Result<(), CacheError> {
         Ok(())
     }
-    async fn clear_verification_state(&self, _conversation_id: uuid::Uuid) -> Result<(), CacheError> {
+    async fn clear_verification_state(
+        &self,
+        _conversation_id: uuid::Uuid,
+    ) -> Result<(), CacheError> {
         Ok(())
     }
 }
@@ -128,7 +138,10 @@ impl ContextCache for RedisContextCache {
             .map_err(Into::into)
     }
 
-    async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Result<Option<String>, CacheError> {
+    async fn get_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+    ) -> Result<Option<String>, CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
             .get(format!("vox:verification-state:{}", conversation_id))
@@ -136,15 +149,26 @@ impl ContextCache for RedisContextCache {
             .map_err(Into::into)
     }
 
-    async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) -> Result<(), CacheError> {
+    async fn set_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+        state: &str,
+    ) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
-            .set_ex(format!("vox:verification-state:{}", conversation_id), state, 3600)
+            .set_ex(
+                format!("vox:verification-state:{}", conversation_id),
+                state,
+                3600,
+            )
             .await
             .map_err(Into::into)
     }
 
-    async fn clear_verification_state(&self, conversation_id: uuid::Uuid) -> Result<(), CacheError> {
+    async fn clear_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+    ) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
             .del(format!("vox:verification-state:{}", conversation_id))

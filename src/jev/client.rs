@@ -115,16 +115,9 @@ impl JevClient {
     }
 
     /// Convenience helper to evaluate a binary Noul question.
-    pub async fn noul(
-        &self,
-        state: Value,
-        question_instructions: &str,
-    ) -> Result<f64, JevError> {
+    pub async fn noul(&self, state: Value, question_instructions: &str) -> Result<f64, JevError> {
         let mut questions = HashMap::new();
-        questions.insert(
-            "check".to_string(),
-            Question::noul(question_instructions),
-        );
+        questions.insert("check".to_string(), Question::noul(question_instructions));
         let resp = self.evaluate(state, questions).await?;
         let answer = resp
             .answers

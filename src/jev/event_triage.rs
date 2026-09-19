@@ -1,6 +1,6 @@
-use super::{client::JevClient, types::Question, JevError};
+use super::{JevError, client::JevClient, types::Question};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

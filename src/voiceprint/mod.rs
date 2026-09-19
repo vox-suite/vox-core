@@ -98,7 +98,10 @@ impl VoiceprintService {
     }
 
     /// Retrieves the stored voice signature for a user if enrolled.
-    pub async fn get_voiceprint(&self, user_id: UserId) -> Result<Option<VoiceSignature>, sqlx::Error> {
+    pub async fn get_voiceprint(
+        &self,
+        user_id: UserId,
+    ) -> Result<Option<VoiceSignature>, sqlx::Error> {
         let row = sqlx::query("SELECT signature FROM user_voiceprints WHERE user_id = $1")
             .bind(user_id.0)
             .fetch_optional(self.db.pool())
@@ -176,9 +179,10 @@ impl VoiceprintService {
     /// Creates a fresh user profile with the given name.
     pub async fn create_user_with_name(&self, name: &str) -> Result<UserId, sqlx::Error> {
         let mut tx = self.db.pool().begin().await?;
-        let user_id = sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
-            .fetch_one(&mut *tx)
-            .await?;
+        let user_id =
+            sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
+                .fetch_one(&mut *tx)
+                .await?;
 
         sqlx::query(
             "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
@@ -329,7 +333,10 @@ mod tests {
     fn test_phone_verification_matching() {
         assert!(verify_phone_match("9876543210", "+919876543210"));
         assert!(verify_phone_match("+91 98765 43210", "9876543210"));
-        assert!(verify_phone_match("My number is 9876543210.", "+919876543210"));
+        assert!(verify_phone_match(
+            "My number is 9876543210.",
+            "+919876543210"
+        ));
         assert!(!verify_phone_match("1234567890", "+919876543210"));
         assert!(!verify_phone_match("", "+919876543210"));
     }

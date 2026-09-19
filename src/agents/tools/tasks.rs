@@ -123,7 +123,9 @@ impl Tool for CreateTask {
         let db = self.db.as_ref().ok_or(TaskToolError::NotConfigured)?;
         let title = args.title.trim();
         if title.is_empty() {
-            return Err(TaskToolError::InvalidInput("Task title cannot be empty".into()));
+            return Err(TaskToolError::InvalidInput(
+                "Task title cannot be empty".into(),
+            ));
         }
         let raw_instruction = args.instruction.as_deref().unwrap_or(title).trim();
         let execution_type = args.execution_type.as_deref().unwrap_or("manual_human");
@@ -162,17 +164,20 @@ impl Tool for CreateTask {
             }
         }
 
-        let due_at_parsed: Option<chrono::DateTime<chrono::Utc>> = args
-            .due_at
-            .as_deref()
-            .and_then(|s| {
+        let due_at_parsed: Option<chrono::DateTime<chrono::Utc>> =
+            args.due_at.as_deref().and_then(|s| {
                 chrono::DateTime::parse_from_rfc3339(s)
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .or_else(|| {
                         chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
                             .ok()
-                            .map(|naive| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc))
+                            .map(|naive| {
+                                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                                    naive,
+                                    chrono::Utc,
+                                )
+                            })
                     })
             });
 
@@ -436,7 +441,9 @@ impl Tool for GetTask {
             .fetch_optional(db.pool())
             .await?
         } else {
-            return Err(TaskToolError::InvalidInput("Must provide either task_id or title_query".into()));
+            return Err(TaskToolError::InvalidInput(
+                "Must provide either task_id or title_query".into(),
+            ));
         };
 
         let r = match row {
@@ -560,7 +567,9 @@ impl Tool for UpdateTask {
         .await?;
 
         if res.rows_affected() == 0 {
-            return Err(TaskToolError::NotFound("Task not found or not owned by user".into()));
+            return Err(TaskToolError::NotFound(
+                "Task not found or not owned by user".into(),
+            ));
         }
 
         Ok(json!({
