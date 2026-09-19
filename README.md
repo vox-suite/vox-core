@@ -35,6 +35,13 @@ cargo test --locked --test platform_conformance
 See [`docs/conformance.md`](docs/conformance.md) for the versioned fixture,
 adapter contract, stable error vocabulary, and semantic coverage map.
 
+Provider integrations must follow the dated capability decisions and production
+enablement gates in
+[`docs/provider-feasibility.md`](docs/provider-feasibility.md). The record
+selects the first connected-read and consequential-write routes, distinguishes
+verified provider behavior from inference, and requires unsupported actions to
+remain labelled handoffs.
+
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
 
 ## Read-only Redis administration
