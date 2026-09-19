@@ -12,7 +12,6 @@ use vox_core::{
     },
     db::Db,
     http::{AppState, router},
-    identity::UserId,
     voiceprint::VoiceSignature,
 };
 

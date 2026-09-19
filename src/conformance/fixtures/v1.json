@@ -1,0 +1,185 @@
+{
+  "fixture_version": 1,
+  "scenarios": [
+    {
+      "id": "extension-governance-and-grants",
+      "purpose": "Installation, operator enablement, discovery, and per-context agent grants remain independent controls.",
+      "steps": [
+        {
+          "command": { "command": "install_extension", "extension_id": "travel", "capabilities": ["travel.search", "travel.book"] },
+          "expect": { "result": "extension_installed" }
+        },
+        {
+          "command": { "command": "discover_capabilities", "context_id": "user-a" },
+          "expect": { "result": "capabilities_discovered", "capabilities": [] }
+        },
+        {
+          "command": { "command": "grant_capability", "context_id": "user-a", "agent_id": "planner", "capability": "travel.book" },
+          "expect": { "error": "extension_disabled" }
+        },
+        {
+          "command": { "command": "set_extension_enabled", "extension_id": "travel", "enabled": true },
+          "expect": { "result": "extension_state_changed" }
+        },
+        {
+          "command": { "command": "discover_capabilities", "context_id": "user-a" },
+          "expect": { "result": "capabilities_discovered", "capabilities": ["travel.book", "travel.search"] }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "ungranted", "context_id": "user-a", "agent_id": "planner", "capability": "travel.book", "input": {"trip": "BLR-LHR"}, "expires_at": 200 },
+          "expect": { "error": "grant_required" }
+        },
+        {
+          "command": { "command": "grant_capability", "context_id": "user-a", "agent_id": "planner", "capability": "travel.book" },
+          "expect": { "result": "capability_granted" }
+        },
+        {
+          "command": { "command": "revoke_capability", "context_id": "user-a", "agent_id": "planner", "capability": "travel.book" },
+          "expect": { "result": "capability_revoked" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "revoked", "context_id": "user-a", "agent_id": "planner", "capability": "travel.book", "input": {"trip": "BLR-LHR"}, "expires_at": 200 },
+          "expect": { "error": "grant_required" }
+        }
+      ]
+    },
+    {
+      "id": "user-context-isolation",
+      "purpose": "A grant, proposal, approval, action outcome, and event stream never cross user-context boundaries.",
+      "steps": [
+        {
+          "command": { "command": "install_extension", "extension_id": "commerce", "capabilities": ["commerce.purchase"] },
+          "expect": { "result": "extension_installed" }
+        },
+        {
+          "command": { "command": "set_extension_enabled", "extension_id": "commerce", "enabled": true },
+          "expect": { "result": "extension_state_changed" }
+        },
+        {
+          "command": { "command": "grant_capability", "context_id": "user-a", "agent_id": "shopper", "capability": "commerce.purchase" },
+          "expect": { "result": "capability_granted" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "cross-context-grant", "context_id": "user-b", "agent_id": "shopper", "capability": "commerce.purchase", "input": {"sku": "book", "price_minor": 2500}, "expires_at": 200 },
+          "expect": { "error": "grant_required" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "purchase-1", "context_id": "user-a", "agent_id": "shopper", "capability": "commerce.purchase", "input": {"sku": "book", "price_minor": 2500}, "expires_at": 200 },
+          "expect": { "result": "proposal_created" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "purchase-1", "context_id": "user-b", "input": {"sku": "book", "price_minor": 2500}, "approved_at": 100 },
+          "expect": { "error": "isolation_violation" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "purchase-1", "context_id": "user-a", "input": {"sku": "book", "price_minor": 2500}, "approved_at": 100 },
+          "expect": { "result": "proposal_approved" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "purchase-1", "context_id": "user-a", "agent_id": "shopper", "input": {"sku": "book", "price_minor": 2500}, "idempotency_key": "checkout-1", "executed_at": 110, "provider_observation": {"status": "succeeded", "receipt": "receipt-1"} },
+          "expect": { "result": "proposal_executed", "outcome": "succeeded" }
+        },
+        {
+          "command": { "command": "read_outcome", "context_id": "user-b", "action_id": "action:purchase-1" },
+          "expect": { "error": "isolation_violation" }
+        },
+        {
+          "command": { "command": "read_events", "context_id": "user-b" },
+          "expect": { "result": "events_read", "event_count": 0 }
+        }
+      ]
+    },
+    {
+      "id": "exact-approval-binding",
+      "purpose": "Only the exact, unexpired proposal approved by the owning context can execute.",
+      "steps": [
+        {
+          "command": { "command": "install_extension", "extension_id": "rides", "capabilities": ["rides.book"] },
+          "expect": { "result": "extension_installed" }
+        },
+        {
+          "command": { "command": "set_extension_enabled", "extension_id": "rides", "enabled": true },
+          "expect": { "result": "extension_state_changed" }
+        },
+        {
+          "command": { "command": "grant_capability", "context_id": "user-a", "agent_id": "assistant", "capability": "rides.book" },
+          "expect": { "result": "capability_granted" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "ride-1", "context_id": "user-a", "agent_id": "assistant", "capability": "rides.book", "input": {"destination": "home", "fare_minor": 500}, "expires_at": 200 },
+          "expect": { "result": "proposal_created" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "ride-1", "context_id": "user-a", "agent_id": "assistant", "input": {"destination": "home", "fare_minor": 500}, "idempotency_key": "ride-attempt-1", "executed_at": 100, "provider_observation": {"status": "succeeded", "receipt": "ride-receipt"} },
+          "expect": { "error": "approval_required" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "ride-1", "context_id": "user-a", "input": {"destination": "airport", "fare_minor": 1500}, "approved_at": 100 },
+          "expect": { "error": "approval_mismatch" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "ride-1", "context_id": "user-a", "input": {"destination": "home", "fare_minor": 500}, "approved_at": 100 },
+          "expect": { "result": "proposal_approved" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "ride-1", "context_id": "user-a", "agent_id": "assistant", "input": {"destination": "airport", "fare_minor": 1500}, "idempotency_key": "ride-attempt-2", "executed_at": 110, "provider_observation": {"status": "succeeded", "receipt": "ride-receipt"} },
+          "expect": { "error": "approval_mismatch" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "ride-1", "context_id": "user-a", "agent_id": "assistant", "input": {"destination": "home", "fare_minor": 500}, "idempotency_key": "ride-attempt-3", "executed_at": 201, "provider_observation": {"status": "succeeded", "receipt": "ride-receipt"} },
+          "expect": { "error": "approval_expired" }
+        }
+      ]
+    },
+    {
+      "id": "truthful-and-idempotent-outcomes",
+      "purpose": "Unknown provider outcomes remain unknown, evidence is required for terminal claims, and retries do not duplicate actions.",
+      "steps": [
+        {
+          "command": { "command": "install_extension", "extension_id": "reminders", "capabilities": ["reminders.create"] },
+          "expect": { "result": "extension_installed" }
+        },
+        {
+          "command": { "command": "set_extension_enabled", "extension_id": "reminders", "enabled": true },
+          "expect": { "result": "extension_state_changed" }
+        },
+        {
+          "command": { "command": "grant_capability", "context_id": "user-a", "agent_id": "assistant", "capability": "reminders.create" },
+          "expect": { "result": "capability_granted" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "reminder-1", "context_id": "user-a", "agent_id": "assistant", "capability": "reminders.create", "input": {"message": "Call home", "at": "18:00"}, "expires_at": 200 },
+          "expect": { "result": "proposal_created" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "reminder-1", "context_id": "user-a", "input": {"message": "Call home", "at": "18:00"}, "approved_at": 100 },
+          "expect": { "result": "proposal_approved" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "reminder-1", "context_id": "user-a", "agent_id": "assistant", "input": {"message": "Call home", "at": "18:00"}, "idempotency_key": "reminder-key", "executed_at": 110, "provider_observation": {"status": "unknown"} },
+          "expect": { "result": "proposal_executed", "outcome": "unknown" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "reminder-1", "context_id": "user-a", "agent_id": "assistant", "input": {"message": "Call home", "at": "18:00"}, "idempotency_key": "reminder-key", "executed_at": 111, "provider_observation": {"status": "succeeded", "receipt": "late-receipt"} },
+          "expect": { "result": "proposal_executed", "outcome": "unknown" }
+        },
+        {
+          "command": { "command": "read_outcome", "context_id": "user-a", "action_id": "action:reminder-1" },
+          "expect": { "result": "outcome_read", "outcome": "unknown" }
+        },
+        {
+          "command": { "command": "create_proposal", "proposal_id": "reminder-2", "context_id": "user-a", "agent_id": "assistant", "capability": "reminders.create", "input": {"message": "Send report", "at": "19:00"}, "expires_at": 200 },
+          "expect": { "result": "proposal_created" }
+        },
+        {
+          "command": { "command": "approve_proposal", "proposal_id": "reminder-2", "context_id": "user-a", "input": {"message": "Send report", "at": "19:00"}, "approved_at": 120 },
+          "expect": { "result": "proposal_approved" }
+        },
+        {
+          "command": { "command": "execute_proposal", "proposal_id": "reminder-2", "context_id": "user-a", "agent_id": "assistant", "input": {"message": "Send report", "at": "19:00"}, "idempotency_key": "reminder-key-2", "executed_at": 130, "provider_observation": {"status": "succeeded", "receipt": ""} },
+          "expect": { "error": "invalid_request" }
+        }
+      ]
+    }
+  ]
+}

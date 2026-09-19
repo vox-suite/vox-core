@@ -184,11 +184,10 @@ impl Tool for UpdateUserInfo {
         );
         let db = self.db.as_ref().ok_or(ProfileToolError::NotConfigured)?;
         let mut updates = args.facts.unwrap_or_default();
-        if let Some(name) = args.name {
-            if !name.trim().is_empty() {
+        if let Some(name) = args.name
+            && !name.trim().is_empty() {
                 updates.insert("name".into(), json!(name.trim()));
             }
-        }
 
         let facts_delta = Value::Object(updates);
         let persona_delta = args.persona.map(Value::Object);

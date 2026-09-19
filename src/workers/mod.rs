@@ -42,6 +42,7 @@ impl Worker {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_all_handlers(
         jobs: JobRepository,
         events: EventHandler,

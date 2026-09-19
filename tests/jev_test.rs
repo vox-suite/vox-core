@@ -6,7 +6,7 @@ use vox_core::jev::{
         FAST_PATH_CONFIDENCE_THRESHOLD, NOVEL_CATEGORY_SENTINEL, NOVELTY_CONFIDENCE_THRESHOLD,
         SchemaClassificationResult, SchemaDescriptor,
     },
-    types::{Answer, Question, SystemOneRequest, SystemOneResponse},
+    types::{Question, SystemOneRequest, SystemOneResponse},
 };
 
 #[test]

@@ -60,12 +60,11 @@ impl MemoryService {
                 .await?
                 .flatten();
 
-        if let Some(ref n) = name {
-            if let Some(cache) = &self.cache {
+        if let Some(ref n) = name
+            && let Some(cache) = &self.cache {
                 let _ = cache.set_user_name(user_id, n).await;
                 let _ = cache.set_user_id_by_name(n, user_id).await;
             }
-        }
 
         Ok(name)
     }
@@ -98,18 +97,15 @@ impl MemoryService {
     ) -> Result<Option<VoiceSignature>, sqlx::Error> {
         if let Some(cache) = &self.cache
             && let Ok(Some(raw)) = cache.get_voice_signature(user_id).await
-        {
-            if let Some(sig) = VoiceSignature::from_raw(&raw) {
+            && let Some(sig) = VoiceSignature::from_raw(&raw) {
                 return Ok(Some(sig));
             }
-        }
 
         let sig = self.voiceprints.get_voiceprint(user_id).await?;
-        if let Some(ref s) = sig {
-            if let Some(cache) = &self.cache {
+        if let Some(ref s) = sig
+            && let Some(cache) = &self.cache {
                 let _ = cache.set_voice_signature(user_id, &s.to_json()).await;
             }
-        }
         Ok(sig)
     }
 
@@ -142,11 +138,10 @@ impl MemoryService {
         }
 
         let user_id = self.voiceprints.find_user_by_name(trimmed).await?;
-        if let Some(uid) = user_id {
-            if let Some(cache) = &self.cache {
+        if let Some(uid) = user_id
+            && let Some(cache) = &self.cache {
                 let _ = cache.set_user_id_by_name(trimmed, uid).await;
             }
-        }
         Ok(user_id)
     }
 

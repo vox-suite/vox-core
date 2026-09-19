@@ -103,14 +103,13 @@ impl ConversationService {
         let user_id = self.identities.resolve(&request.identity).await?;
 
         // Seed name if provided via initiation_context (e.g. from WhatsApp profile)
-        if let Some(init_ctx) = &request.initiation_context {
-            if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
+        if let Some(init_ctx) = &request.initiation_context
+            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
                 let wa_name_clean = wa_name.trim();
                 if !wa_name_clean.is_empty() {
                     let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
                 }
             }
-        }
 
         let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
@@ -207,14 +206,13 @@ impl ConversationService {
         }
         let user_id = self.identities.resolve(&request.identity).await?;
 
-        if let Some(init_ctx) = &request.initiation_context {
-            if let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
+        if let Some(init_ctx) = &request.initiation_context
+            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:") {
                 let wa_name_clean = wa_name.trim();
                 if !wa_name_clean.is_empty() {
                     let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
                 }
             }
-        }
 
         let (conversation_id, mut active_user_id) = self
             .resolve_conversation(
@@ -554,8 +552,8 @@ impl ConversationService {
             .is_some();
 
         // Check if user is introducing themselves on first call
-        if !has_name {
-            if let Some(extracted_name) = extract_name_from_text(&request.text) {
+        if !has_name
+            && let Some(extracted_name) = extract_name_from_text(&request.text) {
                 let _ = self.memory.set_user_name(user_id, &extracted_name).await;
                 if let Some(ref sig) = parsed_sig {
                     let _ = self.memory.set_voice_signature(user_id, sig).await;
@@ -566,7 +564,6 @@ impl ConversationService {
                 );
                 return Ok(VoiceVerificationOutcome::Intercept(reply));
             }
-        }
 
         // Check voice biometric match if name is known
         if let Some(ref name) = known_name {
