@@ -42,6 +42,11 @@ selects the first connected-read and consequential-write routes, distinguishes
 verified provider behavior from inference, and requires unsupported actions to
 remain labelled handoffs.
 
+The canonical deployment, host-app, optional organization, and host-user
+isolation contract is documented in
+[`docs/user-context.md`](docs/user-context.md). Existing channel identity remains
+available during the migration window.
+
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
 
 ## Read-only Redis administration
