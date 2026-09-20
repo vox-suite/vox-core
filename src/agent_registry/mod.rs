@@ -31,6 +31,13 @@ pub struct SelectAgentRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SetAgentEnabledRequest {
+    pub deployment_external_key: String,
+    pub agent_external_key: String,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentDefinition {
     pub id: Uuid,
     pub deployment_id: DeploymentId,
@@ -209,6 +216,38 @@ impl AgentRegistry {
                 },
             )
             .collect())
+    }
+
+    /// Disablement changes availability without deleting a definition, model
+    /// history, or the grants that may become valid again if re-enabled.
+    pub async fn set_enabled(
+        &self,
+        request: SetAgentEnabledRequest,
+    ) -> Result<(), AgentRegistryError> {
+        let deployment_key = normalize(&request.deployment_external_key, 255)
+            .ok_or(AgentRegistryError::InvalidDefinition)?;
+        let external_key = normalize(&request.agent_external_key, 255)
+            .ok_or(AgentRegistryError::InvalidDefinition)?;
+        let deployment_id = deployment_id(&self.db, &deployment_key).await?;
+        let changed = sqlx::query(
+            "UPDATE agent_definitions SET state = $3, updated_at = now() \
+             WHERE deployment_id = $1 AND external_key = $2",
+        )
+        .bind(deployment_id)
+        .bind(external_key)
+        .bind(if request.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        })
+        .execute(self.db.pool())
+        .await?
+        .rows_affected();
+        if changed == 0 {
+            Err(AgentRegistryError::NotFound)
+        } else {
+            Ok(())
+        }
     }
 }
 

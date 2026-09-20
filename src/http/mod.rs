@@ -2,6 +2,7 @@ pub mod actions;
 pub mod admin;
 pub mod agent_registry;
 pub mod auth;
+pub mod capability_grants;
 pub mod connections;
 pub mod conversations;
 pub mod events;
@@ -34,6 +35,7 @@ pub struct AppState {
     pub(crate) db: Option<Db>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
+    pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
     pub(crate) events: Option<Arc<EventService>>,
     pub(crate) host_trust: Option<Arc<HostTrustService>>,
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
@@ -51,6 +53,7 @@ impl AppState {
             db: None,
             conversations: None,
             connections: None,
+            capability_grants: None,
             events: None,
             host_trust: None,
             identity_adapters: None,
@@ -100,6 +103,9 @@ impl AppState {
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
             ))),
+            capability_grants: Some(Arc::new(
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+            )),
             events: Some(Arc::new(EventService::new(db.clone()))),
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
@@ -130,6 +136,9 @@ impl AppState {
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
             ))),
+            capability_grants: Some(Arc::new(
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+            )),
             events: None,
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
@@ -176,12 +185,24 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/conversations/complete", post(conversations::complete))
         .route("/v1/connections/authorize", post(connections::authorize))
+        .route(
+            "/v1/capability-grants",
+            post(capability_grants::create).delete(capability_grants::revoke),
+        )
+        .route(
+            "/v1/agents/{external_key}/effective-capability-grants",
+            post(capability_grants::effective),
+        )
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
         .route("/v1/actions/{id}/result", post(actions::record_result))
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route("/v1/agent-selections", post(agent_registry::select))
+        .route(
+            "/v1/agent-definitions/enabled",
+            post(agent_registry::set_enabled),
+        )
         .route("/v1/integrations", post(integration_registry::register))
         .route(
             "/v1/integrations/enabled",
