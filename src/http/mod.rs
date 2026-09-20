@@ -3,18 +3,19 @@ pub mod admin;
 pub mod auth;
 pub mod conversations;
 pub mod events;
+pub mod host_apps;
 pub mod schedules;
 
 use crate::{
     agents::conversation::ConversationResponder, conversations::service::ConversationService,
-    db::Db, events::service::EventService, memory::MemoryService,
+    db::Db, events::service::EventService, host_trust::HostTrustService, memory::MemoryService,
     schedules::service::ScheduleService,
 };
 use axum::{
     Router,
     extract::State,
     http::StatusCode,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use std::sync::{
     Arc,
@@ -28,6 +29,7 @@ pub struct AppState {
     pub(crate) db: Option<Db>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) events: Option<Arc<EventService>>,
+    pub(crate) host_trust: Option<Arc<HostTrustService>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) service_token: Arc<str>,
 }
@@ -40,6 +42,7 @@ impl AppState {
             db: None,
             conversations: None,
             events: None,
+            host_trust: None,
             schedules: None,
             service_token: Arc::from(""),
         }
@@ -80,6 +83,7 @@ impl AppState {
             db: Some(db.clone()),
             conversations: Some(Arc::new(conv)),
             events: Some(Arc::new(EventService::new(db.clone()))),
+            host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             schedules: Some(Arc::new(ScheduleService::new(db))),
             service_token: Arc::from(service_token),
         }
@@ -88,6 +92,19 @@ impl AppState {
     pub fn with_admin(mut self, admin: admin::RedisAdmin) -> Self {
         self.admin = Some(Arc::new(admin));
         self
+    }
+
+    pub fn with_host_trust(db: Db, service_token: String) -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(true)),
+            admin: None,
+            db: Some(db.clone()),
+            conversations: None,
+            events: None,
+            host_trust: Some(Arc::new(HostTrustService::new(db))),
+            schedules: None,
+            service_token: Arc::from(service_token),
+        }
     }
 
     pub fn set_ready(&self, ready: bool) {
@@ -110,6 +127,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
         .route("/v1/actions/{id}/result", post(actions::record_result))
+        .route("/v1/host-apps", post(host_apps::register))
+        .route(
+            "/v1/host-apps/{id}/credentials",
+            post(host_apps::rotate_credential),
+        )
+        .route(
+            "/v1/host-app-credentials/{id}",
+            delete(host_apps::revoke_credential),
+        )
+        .route(
+            crate::host_trust::HOST_CONTEXT_PATH,
+            post(host_apps::resolve_context),
+        )
         .with_state(state)
 }
 
