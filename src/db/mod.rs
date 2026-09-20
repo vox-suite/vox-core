@@ -26,3 +26,6 @@ impl Db {
         &self.pool
     }
 }
+
+#[cfg(test)]
+mod greeting_tests;

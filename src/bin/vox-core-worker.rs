@@ -74,7 +74,8 @@ async fn main() {
     );
     let actions = ActionHandler::new(db.clone(), bridge_client);
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
-    let summaries = SummaryHandler::with_jev(db.clone(), summarizer, memory, jev_client.clone());
+    let summaries =
+        SummaryHandler::with_jev(db.clone(), summarizer, memory.clone(), jev_client.clone());
     let task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
 
@@ -90,6 +91,7 @@ async fn main() {
         Uuid::new_v4().to_string(),
     );
     let cancellation = CancellationToken::new();
+    let greeting_sync = tokio::spawn(memory.run_greeting_sync(cancellation.clone()));
     let shutdown = cancellation.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
@@ -98,7 +100,9 @@ async fn main() {
         shutdown.cancel();
     });
     worker
-        .run(cancellation)
+        .run(cancellation.clone())
         .await
         .expect("Vox Core Worker failed");
+    cancellation.cancel();
+    let _ = greeting_sync.await;
 }

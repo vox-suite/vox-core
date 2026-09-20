@@ -10,6 +10,19 @@ pub enum CacheError {
 
 #[async_trait]
 pub trait ContextCache: Send + Sync {
+    async fn get_greeting_name(
+        &self,
+        _channel: &str,
+        _external_id: &str,
+    ) -> Result<Option<String>, CacheError> {
+        Ok(None)
+    }
+    async fn replace_greeting_names(
+        &self,
+        _names: &[(String, String, String)],
+    ) -> Result<(), CacheError> {
+        Ok(())
+    }
     async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError>;
     async fn set(&self, user_id: UserId, value: &str) -> Result<(), CacheError>;
     async fn get_user_name(&self, _user_id: UserId) -> Result<Option<String>, CacheError> {
@@ -65,6 +78,40 @@ impl RedisContextCache {
 
 #[async_trait]
 impl ContextCache for RedisContextCache {
+    async fn get_greeting_name(
+        &self,
+        channel: &str,
+        external_id: &str,
+    ) -> Result<Option<String>, CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
+        connection
+            .hget("vox:greeting-names", field)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn replace_greeting_names(
+        &self,
+        names: &[(String, String, String)],
+    ) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let mut pipeline = redis::pipe();
+        pipeline.atomic().del("vox:greeting-names").ignore();
+        for (channel, external_id, name) in names {
+            let name = name.trim();
+            if !name.is_empty() {
+                let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
+                pipeline.hset("vox:greeting-names", field, name).ignore();
+            }
+        }
+        pipeline.expire("vox:greeting-names", 172800).ignore();
+        pipeline
+            .query_async::<()>(&mut connection)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
@@ -120,9 +167,10 @@ impl ContextCache for RedisContextCache {
             .await
             .map_err(CacheError::Redis)?;
         if let Some(s) = id_str
-            && let Ok(uid) = uuid::Uuid::parse_str(&s) {
-                return Ok(Some(UserId(uid)));
-            }
+            && let Ok(uid) = uuid::Uuid::parse_str(&s)
+        {
+            return Ok(Some(UserId(uid)));
+        }
         Ok(None)
     }
 

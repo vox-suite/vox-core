@@ -17,6 +17,31 @@ docker compose up --build -d
 
 Only Bridge port `3000` is published. Core API, Core Worker, and Redis remain on the private Compose network. Point the public reverse proxy at Bridge and configure Twilio with the public URLs documented in the Bridge repository.
 
+## Phone greeting cache
+
+The streaming inbound opening reads the caller's name directly from the Redis
+`vox:greeting-names` hash, keyed by the JSON pair `[channel, external_id]`.
+It has a 100 ms cache deadline and uses a generic new-caller greeting on a miss,
+blank name, cache error, or timeout. PostgreSQL and the LLM are not consulted
+before returning this greeting. The normal voice verification path still runs
+on subsequent caller speech.
+
+The worker replaces the complete name snapshot from PostgreSQL on startup and
+every 24 hours. It removes deleted entries atomically, expires the snapshot after
+48 hours, and retries failed syncs after one minute. Name changes become visible
+at the next sync. Deploy/restart both Core API and Core Worker for this change.
+
+Identity/conversation setup and atomic persistence of the opening message pair
+run in the API background, independently of the greeting stream. Follow-up turns
+and call completion wait for pending setup in the same API process. This matches
+the current single-API deployment; multiple replicas require call affinity or a
+shared initialization barrier. A process crash during setup can lose that opening;
+initialization failures are logged and the remaining normal request path can retry
+identity/conversation resolution.
+
+`CORE_CACHED_GREETING_METRICS` measures the greeting path;
+`CORE_OPENING_INITIALIZED` measures the background database work.
+
 ## Verify
 
 ```sh

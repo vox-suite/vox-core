@@ -9,11 +9,14 @@ use crate::{
     memory::MemoryService,
     voiceprint::{VoiceSignature, verify_phone_match, verify_voice_match_with_jev},
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{FutureExt, Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{pin::Pin, sync::Arc};
 use uuid::Uuid;
+
+type OpeningTask =
+    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<(), String>>>;
 
 pub type ConversationTextStream =
     Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
@@ -48,6 +51,7 @@ pub struct ConversationService {
     identities: IdentityService,
     memory: MemoryService,
     jev: Option<crate::jev::JevClient>,
+    openings: Arc<tokio::sync::Mutex<std::collections::HashMap<String, OpeningTask>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +87,7 @@ impl ConversationService {
             agent,
             memory,
             jev: None,
+            openings: Arc::default(),
         }
     }
 
@@ -102,6 +107,8 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
@@ -210,6 +217,14 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
+        if crate::agents::conversation::is_voice_channel(&request.identity.channel)
+            && request.text.trim() == "The call just connected. Greet the user."
+            && request.voice_signature.is_none()
+        {
+            return self.cached_opening(request).await;
+        }
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let request_started = std::time::Instant::now();
         let owner = self
             .identities
@@ -365,6 +380,139 @@ impl ConversationService {
         );
 
         Ok(Box::pin(out_stream))
+    }
+
+    fn opening_key(identity: &crate::identity::ChannelIdentity, external_id: &str) -> String {
+        serde_json::to_string(&(
+            identity.channel.trim(),
+            identity.external_id.trim(),
+            external_id.trim(),
+        ))
+        .unwrap()
+    }
+
+    async fn wait_for_opening(
+        &self,
+        identity: &crate::identity::ChannelIdentity,
+        external_id: &str,
+    ) -> Result<(), ConversationError> {
+        let pending = self
+            .openings
+            .lock()
+            .await
+            .get(&Self::opening_key(identity, external_id))
+            .cloned();
+        if let Some(pending) = pending {
+            pending
+                .await
+                .map_err(|error| ConversationError::Database(sqlx::Error::Protocol(error)))?;
+        }
+        Ok(())
+    }
+
+    async fn cached_opening(
+        &self,
+        request: RespondRequest,
+    ) -> Result<ConversationTextStream, ConversationError> {
+        let started = std::time::Instant::now();
+        let name = if let Some(cache) = self.memory.cache() {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                cache.get_greeting_name(
+                    request.identity.channel.trim(),
+                    request.identity.external_id.trim(),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(name)) => name,
+                _ => {
+                    tracing::warn!("Greeting cache unavailable; using generic greeting");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let name = name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let greeting = match name {
+            Some(name) => format!("Hello {name}! How can I help you today?"),
+            None => {
+                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_owned()
+            }
+        };
+        let key = Self::opening_key(&request.identity, &request.external_conversation_id);
+        let mut openings = self.openings.lock().await;
+        if !openings.contains_key(&key) {
+            let service = self.clone();
+            let text = greeting.clone();
+            let pending = async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    service.persist_opening(request, text),
+                )
+                .await
+                .map_err(|_| "opening initialization timed out".to_owned())?
+                .map_err(|error| error.to_string())
+            }
+            .boxed()
+            .shared();
+            openings.insert(key.clone(), pending.clone());
+            let service = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = pending.await {
+                    tracing::error!(%error, "Background greeting initialization failed");
+                }
+                service.openings.lock().await.remove(&key);
+            });
+        }
+        drop(openings);
+        tracing::info!(
+            cache_hit = name.is_some(),
+            total_ms = started.elapsed().as_millis(),
+            "CORE_CACHED_GREETING_METRICS"
+        );
+        Ok(Box::pin(stream::once(async move { Ok(greeting) })))
+    }
+
+    async fn persist_opening(
+        &self,
+        request: RespondRequest,
+        greeting: String,
+    ) -> Result<(), ConversationError> {
+        let started = std::time::Instant::now();
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        let (conversation_id, _) = self
+            .resolve_conversation(
+                owner,
+                &request.identity.channel,
+                &request.external_conversation_id,
+            )
+            .await?;
+        let mut tx = self.db.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(conversation_id.0.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id = $1)",
+        )
+        .bind(conversation_id.0)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !exists {
+            sqlx::query("INSERT INTO messages (conversation_id, sequence_number, role, text) VALUES ($1, 1, 'user', $2), ($1, 2, 'assistant', $3)")
+                .bind(conversation_id.0).bind(request.text.trim()).bind(greeting).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        tracing::info!(external_conversation_id = %request.external_conversation_id, total_ms = started.elapsed().as_millis(), "CORE_OPENING_INITIALIZED");
+        Ok(())
     }
 
     async fn process_voice_verification(
@@ -644,6 +792,8 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
