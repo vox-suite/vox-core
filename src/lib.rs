@@ -2,6 +2,7 @@ pub mod actions;
 pub mod agent_registry;
 pub mod agents;
 pub mod bridge_client;
+pub mod capability_grants;
 pub mod config;
 pub mod conformance;
 pub mod connections;

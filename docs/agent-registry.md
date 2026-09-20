@@ -18,4 +18,6 @@ new model-configuration version while retaining its definition unchanged.
 Model configuration rejects keys that look like credentials (`secret`, `token`,
 `password`, or `credential`) at every JSON nesting level. Authentication,
 connections, capability grants, approvals, and policy are owned by subsequent
-platform contracts, so a registry record has no authority by itself.
+platform contracts, so a registry record has no authority by itself. See
+[`capability-grants.md`](capability-grants.md) for the explicit, context-bound
+authority contract.

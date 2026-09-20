@@ -1,6 +1,6 @@
 use super::{AppState, auth};
 use crate::agent_registry::{
-    AgentRegistryError, RegisterAgentDefinitionRequest, SelectAgentRequest,
+    AgentRegistryError, RegisterAgentDefinitionRequest, SelectAgentRequest, SetAgentEnabledRequest,
 };
 use axum::{
     Json,
@@ -56,6 +56,23 @@ pub async fn list_selected(
     }
     match registry.selected_for_deployment(&external_key).await {
         Ok(selected) => (StatusCode::OK, Json(selected)).into_response(),
+        Err(error) => registry_error(error),
+    }
+}
+
+pub async fn set_enabled(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SetAgentEnabledRequest>,
+) -> Response {
+    let Some(registry) = state.agent_registry.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    if !auth::authorized(&headers, &state.service_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match registry.set_enabled(request).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => registry_error(error),
     }
 }
