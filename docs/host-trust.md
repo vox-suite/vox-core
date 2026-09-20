@@ -99,10 +99,10 @@ Existing channel callers remain on the temporary legacy path documented in
 implicitly upgraded by this protocol. Bridge migration is the next consumer of
 this accepted host-trust interface.
 
-This protocol authenticates the host application's assertion. It does not yet
-choose a standalone login provider, establish a user session, link identities,
-grant service access, or accept an action approval. Those are separate Core
-contracts and cannot be inferred from a valid host credential.
+This protocol authenticates the host application's assertion. Replaceable
+identity adapters and proof-based identity links build on that assertion as a
+separate contract; they never infer a link from host identity alone. Service
+access and action approvals remain separate Core contracts.
 
 ## Verification evidence
 

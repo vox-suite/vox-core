@@ -9,6 +9,7 @@ pub mod events;
 pub mod host_trust;
 pub mod http;
 pub mod identity;
+pub mod identity_adapters;
 pub mod jev;
 pub mod jobs;
 pub mod memory;

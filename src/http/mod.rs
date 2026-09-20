@@ -4,6 +4,7 @@ pub mod auth;
 pub mod conversations;
 pub mod events;
 pub mod host_apps;
+pub mod identity_adapters;
 pub mod schedules;
 
 use crate::{
@@ -30,6 +31,7 @@ pub struct AppState {
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) events: Option<Arc<EventService>>,
     pub(crate) host_trust: Option<Arc<HostTrustService>>,
+    pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) service_token: Arc<str>,
 }
@@ -43,6 +45,7 @@ impl AppState {
             conversations: None,
             events: None,
             host_trust: None,
+            identity_adapters: None,
             schedules: None,
             service_token: Arc::from(""),
         }
@@ -84,6 +87,9 @@ impl AppState {
             conversations: Some(Arc::new(conv)),
             events: Some(Arc::new(EventService::new(db.clone()))),
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
+            identity_adapters: Some(Arc::new(
+                crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
+            )),
             schedules: Some(Arc::new(ScheduleService::new(db))),
             service_token: Arc::from(service_token),
         }
@@ -101,7 +107,10 @@ impl AppState {
             db: Some(db.clone()),
             conversations: None,
             events: None,
-            host_trust: Some(Arc::new(HostTrustService::new(db))),
+            host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
+            identity_adapters: Some(Arc::new(
+                crate::identity_adapters::IdentityAdapterService::unavailable(db),
+            )),
             schedules: None,
             service_token: Arc::from(service_token),
         }
@@ -109,6 +118,14 @@ impl AppState {
 
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
+    }
+
+    pub fn with_identity_adapters(
+        mut self,
+        identity_adapters: crate::identity_adapters::IdentityAdapterService,
+    ) -> Self {
+        self.identity_adapters = Some(Arc::new(identity_adapters));
+        self
     }
 }
 
@@ -128,6 +145,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedules/{id}", patch(schedules::update))
         .route("/v1/actions/{id}/result", post(actions::record_result))
         .route("/v1/host-apps", post(host_apps::register))
+        .route("/v1/identity-adapters", post(identity_adapters::register))
+        .route(
+            "/v1/identity/passwordless/challenges",
+            post(identity_adapters::start_passwordless_recovery),
+        )
+        .route(
+            "/v1/identity/authentications",
+            post(identity_adapters::authenticate),
+        )
+        .route(
+            "/v1/identity/links",
+            post(identity_adapters::link).delete(identity_adapters::unlink),
+        )
         .route(
             "/v1/host-apps/{id}/credentials",
             post(host_apps::rotate_credential),

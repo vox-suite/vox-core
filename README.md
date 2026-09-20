@@ -52,6 +52,10 @@ origin policy, and credential rotation are documented in
 [`docs/host-trust.md`](docs/host-trust.md). Host credentials never enter agent
 context or persistent Core records.
 
+Replaceable federated and passwordless identity adapters, one-time proof-based
+identity linking, and the non-merging context guarantee are documented in
+[`docs/identity-adapters.md`](docs/identity-adapters.md).
+
 Conversation, schedule, task, and action ownership migration and compatibility
 rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).

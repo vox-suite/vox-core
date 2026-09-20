@@ -122,7 +122,9 @@ pub async fn resolve_context(
     }
 }
 
-fn assertion_from_headers(headers: &HeaderMap) -> Result<HostContextAssertion, HostTrustError> {
+pub(crate) fn assertion_from_headers(
+    headers: &HeaderMap,
+) -> Result<HostContextAssertion, HostTrustError> {
     let credential_id = header(headers, CREDENTIAL_HEADER)
         .and_then(|value| Uuid::parse_str(value).ok())
         .ok_or(HostTrustError::InvalidAssertion)?;

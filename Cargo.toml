@@ -9,6 +9,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 cron = "0.15"
+ed25519-dalek = "2"
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
