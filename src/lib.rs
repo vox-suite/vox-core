@@ -8,6 +8,7 @@ pub mod conformance;
 pub mod connections;
 pub mod conversations;
 pub mod db;
+pub mod durable_tasks;
 pub mod events;
 pub mod host_trust;
 pub mod http;

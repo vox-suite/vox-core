@@ -5,6 +5,7 @@ pub mod auth;
 pub mod capability_grants;
 pub mod connections;
 pub mod conversations;
+pub mod durable_tasks;
 pub mod events;
 pub mod host_apps;
 pub mod identity_adapters;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) db: Option<Db>,
+    pub(crate) durable_tasks: Option<Arc<crate::durable_tasks::DurableTaskService>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
     pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
@@ -51,6 +53,7 @@ impl AppState {
             admin: None,
             agent_registry: None,
             db: None,
+            durable_tasks: None,
             conversations: None,
             connections: None,
             capability_grants: None,
@@ -99,6 +102,9 @@ impl AppState {
                 db.clone(),
             ))),
             db: Some(db.clone()),
+            durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
+                db.clone(),
+            ))),
             conversations: Some(Arc::new(conv)),
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -132,6 +138,9 @@ impl AppState {
                 db.clone(),
             ))),
             db: Some(db.clone()),
+            durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
+                db.clone(),
+            ))),
             conversations: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -179,6 +188,11 @@ pub fn router(state: AppState) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
+        .route("/v1/durable-tasks", post(durable_tasks::start))
+        .route("/v1/durable-tasks/{id}", post(durable_tasks::get))
+        .route("/v1/durable-tasks/{id}/wait", post(durable_tasks::wait))
+        .route("/v1/durable-tasks/{id}/resume", post(durable_tasks::resume))
+        .route("/v1/durable-tasks/{id}/cancel", post(durable_tasks::cancel))
         .route(
             "/v1/conversations/respond/stream",
             post(conversations::respond_stream),
