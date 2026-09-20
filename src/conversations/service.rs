@@ -153,9 +153,6 @@ impl ConversationService {
                 needs_onboarding
             }
         };
-        let active_owner = self.identities.owner_for_user(active_user_id).await?;
-
-        // Inbound call opening fast-path: Greet immediately (<1ms) using cached name from Redis
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -173,13 +170,13 @@ impl ConversationService {
 
             self.append_message(conversation_id, "assistant", &greeting)
                 .await?;
-            let _ = self.memory.refresh(active_user_id).await;
             return Ok(RespondResponse {
                 conversation_id,
                 text: greeting,
             });
         }
 
+        let active_owner = self.identities.owner_for_user(active_user_id).await?;
         let text = self
             .agent
             .respond(ConversationPrompt {
@@ -213,10 +210,12 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
+        let request_started = std::time::Instant::now();
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
             .await?;
+        let identity_resolved = std::time::Instant::now();
         let user_id = owner.user_id;
 
         if let Some(init_ctx) = &request.initiation_context
@@ -236,11 +235,14 @@ impl ConversationService {
             )
             .await?;
 
+        let conversation_resolved = std::time::Instant::now();
         let prior_messages = self.load_recent_messages(conversation_id).await?;
+        let history_loaded = std::time::Instant::now();
 
         self.append_message(conversation_id, "user", request.text.trim())
             .await?;
 
+        let user_message_saved = std::time::Instant::now();
         let outcome = self
             .process_voice_verification(active_user_id, conversation_id, &request, &prior_messages)
             .await?;
@@ -260,9 +262,7 @@ impl ConversationService {
                 needs_onboarding
             }
         };
-        let active_owner = self.identities.owner_for_user(active_user_id).await?;
-
-        // Inbound call opening fast-path: Stream greeting immediately (<1ms) using cached name from Redis
+        let verification_finished = std::time::Instant::now();
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -272,6 +272,7 @@ impl ConversationService {
 
         if is_inbound_connect {
             let known_name = self.memory.get_user_name(active_user_id).await?;
+            let name_loaded = std::time::Instant::now();
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
@@ -280,7 +281,20 @@ impl ConversationService {
 
             self.append_message(conversation_id, "assistant", &greeting)
                 .await?;
-            let _ = self.memory.refresh(active_user_id).await;
+
+            tracing::info!(
+                conversation_id = %conversation_id.0,
+                external_conversation_id = %request.external_conversation_id,
+                identity_ms = identity_resolved.duration_since(request_started).as_millis(),
+                conversation_ms = conversation_resolved.duration_since(identity_resolved).as_millis(),
+                history_ms = history_loaded.duration_since(conversation_resolved).as_millis(),
+                user_message_ms = user_message_saved.duration_since(history_loaded).as_millis(),
+                verification_ms = verification_finished.duration_since(user_message_saved).as_millis(),
+                name_ms = name_loaded.duration_since(verification_finished).as_millis(),
+                assistant_message_ms = name_loaded.elapsed().as_millis(),
+                total_ms = request_started.elapsed().as_millis(),
+                "CORE_GREETING_METRICS"
+            );
 
             let chunks = if let Some(ref name) = known_name {
                 vec![
@@ -296,6 +310,7 @@ impl ConversationService {
             return Ok(Box::pin(futures_util::stream::iter(chunks)));
         }
 
+        let active_owner = self.identities.owner_for_user(active_user_id).await?;
         let user_context = self.memory.load(active_user_id).await?;
 
         let stream = self
