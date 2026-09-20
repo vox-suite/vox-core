@@ -45,6 +45,8 @@ async fn migration_creates_the_complete_core_schema() {
         "integration_capability_declarations",
         "external_connections",
         "agent_capability_grants",
+        "action_proposals",
+        "action_approvals",
         "task_runs",
         "login_identities",
         "federated_identity_nonces",
