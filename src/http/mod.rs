@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod admin;
+pub mod agent_registry;
 pub mod auth;
 pub mod conversations;
 pub mod events;
@@ -27,6 +28,7 @@ use std::sync::{
 pub struct AppState {
     ready: Arc<AtomicBool>,
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
+    pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) db: Option<Db>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) events: Option<Arc<EventService>>,
@@ -41,6 +43,7 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(ready)),
             admin: None,
+            agent_registry: None,
             db: None,
             conversations: None,
             events: None,
@@ -83,6 +86,9 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             admin: None,
+            agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
+                db.clone(),
+            ))),
             db: Some(db.clone()),
             conversations: Some(Arc::new(conv)),
             events: Some(Arc::new(EventService::new(db.clone()))),
@@ -104,6 +110,9 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             admin: None,
+            agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
+                db.clone(),
+            ))),
             db: Some(db.clone()),
             conversations: None,
             events: None,
@@ -127,6 +136,14 @@ impl AppState {
         self.identity_adapters = Some(Arc::new(identity_adapters));
         self
     }
+
+    pub fn with_agent_registry(
+        mut self,
+        agent_registry: crate::agent_registry::AgentRegistry,
+    ) -> Self {
+        self.agent_registry = Some(Arc::new(agent_registry));
+        self
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -144,6 +161,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
         .route("/v1/actions/{id}/result", post(actions::record_result))
+        .route("/v1/agent-definitions", post(agent_registry::register))
+        .route("/v1/agent-selections", post(agent_registry::select))
+        .route(
+            "/v1/deployments/{external_key}/agents",
+            get(agent_registry::list_selected),
+        )
         .route("/v1/host-apps", post(host_apps::register))
         .route("/v1/identity-adapters", post(identity_adapters::register))
         .route(
