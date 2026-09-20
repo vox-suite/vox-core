@@ -11,6 +11,7 @@ pub mod host_trust;
 pub mod http;
 pub mod identity;
 pub mod identity_adapters;
+pub mod integration_registry;
 pub mod jev;
 pub mod jobs;
 pub mod memory;

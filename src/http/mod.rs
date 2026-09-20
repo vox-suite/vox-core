@@ -6,6 +6,7 @@ pub mod conversations;
 pub mod events;
 pub mod host_apps;
 pub mod identity_adapters;
+pub mod integration_registry;
 pub mod schedules;
 
 use crate::{
@@ -34,6 +35,7 @@ pub struct AppState {
     pub(crate) events: Option<Arc<EventService>>,
     pub(crate) host_trust: Option<Arc<HostTrustService>>,
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
+    pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) service_token: Arc<str>,
 }
@@ -49,6 +51,7 @@ impl AppState {
             events: None,
             host_trust: None,
             identity_adapters: None,
+            integration_registry: None,
             schedules: None,
             service_token: Arc::from(""),
         }
@@ -96,6 +99,9 @@ impl AppState {
             identity_adapters: Some(Arc::new(
                 crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
             )),
+            integration_registry: Some(Arc::new(
+                crate::integration_registry::IntegrationRegistry::new(db.clone()),
+            )),
             schedules: Some(Arc::new(ScheduleService::new(db))),
             service_token: Arc::from(service_token),
         }
@@ -118,7 +124,10 @@ impl AppState {
             events: None,
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
-                crate::identity_adapters::IdentityAdapterService::unavailable(db),
+                crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
+            )),
+            integration_registry: Some(Arc::new(
+                crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: None,
             service_token: Arc::from(service_token),
@@ -163,6 +172,15 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/actions/{id}/result", post(actions::record_result))
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route("/v1/agent-selections", post(agent_registry::select))
+        .route("/v1/integrations", post(integration_registry::register))
+        .route(
+            "/v1/integrations/enabled",
+            post(integration_registry::set_enabled),
+        )
+        .route(
+            "/v1/deployments/{external_key}/capabilities",
+            get(integration_registry::discover),
+        )
         .route(
             "/v1/deployments/{external_key}/agents",
             get(agent_registry::list_selected),

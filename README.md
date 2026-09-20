@@ -59,6 +59,9 @@ identity linking, and the non-merging context guarantee are documented in
 The model-neutral agent catalog and its explicit no-authority guarantee are
 documented in [`docs/agent-registry.md`](docs/agent-registry.md).
 
+Protocol-neutral integration declarations and discovery semantics are documented
+in [`docs/integration-registry.md`](docs/integration-registry.md).
+
 Conversation, schedule, task, and action ownership migration and compatibility
 rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).
