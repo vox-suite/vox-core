@@ -56,6 +56,9 @@ Replaceable federated and passwordless identity adapters, one-time proof-based
 identity linking, and the non-merging context guarantee are documented in
 [`docs/identity-adapters.md`](docs/identity-adapters.md).
 
+The model-neutral agent catalog and its explicit no-authority guarantee are
+documented in [`docs/agent-registry.md`](docs/agent-registry.md).
+
 Conversation, schedule, task, and action ownership migration and compatibility
 rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).
