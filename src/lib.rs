@@ -6,6 +6,7 @@ pub mod conformance;
 pub mod conversations;
 pub mod db;
 pub mod events;
+pub mod host_trust;
 pub mod http;
 pub mod identity;
 pub mod jev;

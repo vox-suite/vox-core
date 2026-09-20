@@ -47,6 +47,11 @@ isolation contract is documented in
 [`docs/user-context.md`](docs/user-context.md). Existing channel identity remains
 available during the migration window.
 
+Authenticated host registration, signed context assertions, replay protection,
+origin policy, and credential rotation are documented in
+[`docs/host-trust.md`](docs/host-trust.md). Host credentials never enter agent
+context or persistent Core records.
+
 Conversation, schedule, task, and action ownership migration and compatibility
 rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).

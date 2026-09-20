@@ -31,6 +31,8 @@ async fn migration_creates_the_complete_core_schema() {
         "jobs",
         "messages",
         "host_apps",
+        "host_app_assertion_nonces",
+        "host_app_credentials",
         "host_organizations",
         "platform_deployments",
         "scheduled_tasks",
