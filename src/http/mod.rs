@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod admin;
 pub mod agent_registry;
+pub mod approvals;
 pub mod auth;
 pub mod capability_grants;
 pub mod connections;
@@ -33,6 +34,7 @@ pub struct AppState {
     ready: Arc<AtomicBool>,
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
+    pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
     pub(crate) db: Option<Db>,
     pub(crate) durable_tasks: Option<Arc<crate::durable_tasks::DurableTaskService>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
@@ -52,6 +54,7 @@ impl AppState {
             ready: Arc::new(AtomicBool::new(ready)),
             admin: None,
             agent_registry: None,
+            approvals: None,
             db: None,
             durable_tasks: None,
             conversations: None,
@@ -101,6 +104,7 @@ impl AppState {
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
+            approvals: Some(Arc::new(crate::approvals::ApprovalService::new(db.clone()))),
             db: Some(db.clone()),
             durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
                 db.clone(),
@@ -137,6 +141,7 @@ impl AppState {
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
+            approvals: Some(Arc::new(crate::approvals::ApprovalService::new(db.clone()))),
             db: Some(db.clone()),
             durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
                 db.clone(),
@@ -188,6 +193,11 @@ pub fn router(state: AppState) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
+        .route("/v1/action-proposals", post(approvals::propose))
+        .route(
+            "/v1/action-proposals/{id}/approve",
+            post(approvals::approve),
+        )
         .route("/v1/durable-tasks", post(durable_tasks::start))
         .route("/v1/durable-tasks/{id}", post(durable_tasks::get))
         .route("/v1/durable-tasks/{id}/wait", post(durable_tasks::wait))
