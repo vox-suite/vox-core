@@ -43,6 +43,7 @@ async fn migration_creates_the_complete_core_schema() {
         "deployment_agent_selections",
         "integration_definitions",
         "integration_capability_declarations",
+        "external_connections",
         "login_identities",
         "federated_identity_nonces",
         "passwordless_recovery_challenges",

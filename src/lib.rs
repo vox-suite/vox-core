@@ -4,6 +4,7 @@ pub mod agents;
 pub mod bridge_client;
 pub mod config;
 pub mod conformance;
+pub mod connections;
 pub mod conversations;
 pub mod db;
 pub mod events;
