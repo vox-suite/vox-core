@@ -2,6 +2,7 @@ pub mod actions;
 pub mod admin;
 pub mod agent_registry;
 pub mod auth;
+pub mod connections;
 pub mod conversations;
 pub mod events;
 pub mod host_apps;
@@ -32,6 +33,7 @@ pub struct AppState {
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) db: Option<Db>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
     pub(crate) events: Option<Arc<EventService>>,
     pub(crate) host_trust: Option<Arc<HostTrustService>>,
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
@@ -48,6 +50,7 @@ impl AppState {
             agent_registry: None,
             db: None,
             conversations: None,
+            connections: None,
             events: None,
             host_trust: None,
             identity_adapters: None,
@@ -94,6 +97,9 @@ impl AppState {
             ))),
             db: Some(db.clone()),
             conversations: Some(Arc::new(conv)),
+            connections: Some(Arc::new(crate::connections::ConnectionService::new(
+                db.clone(),
+            ))),
             events: Some(Arc::new(EventService::new(db.clone()))),
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
@@ -121,6 +127,9 @@ impl AppState {
             ))),
             db: Some(db.clone()),
             conversations: None,
+            connections: Some(Arc::new(crate::connections::ConnectionService::new(
+                db.clone(),
+            ))),
             events: None,
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
@@ -166,6 +175,7 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
+        .route("/v1/connections/authorize", post(connections::authorize))
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
