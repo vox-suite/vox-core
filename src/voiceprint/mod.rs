@@ -222,6 +222,36 @@ impl VoiceprintService {
 
         Ok(())
     }
+
+    pub async fn find_matching_user(
+        &self,
+        sig: &VoiceSignature,
+        threshold: f64,
+    ) -> Result<Option<(UserId, String)>, sqlx::Error> {
+        if !sig.usable() {
+            return Ok(None);
+        }
+        let rows = sqlx::query(
+            "SELECT v.user_id, p.facts->>\x27name\x27 as name, v.signature \
+             FROM user_voiceprints v \
+             JOIN user_profiles p ON p.user_id = v.user_id \
+             WHERE p.facts->>\x27name\x27 IS NOT NULL",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+
+        for r in rows {
+            let uid: Uuid = r.get("user_id");
+            let name: String = r.get("name");
+            let val: serde_json::Value = r.get("signature");
+            if let Ok(stored_sig) = serde_json::from_value::<VoiceSignature>(val) {
+                if sig.comparable(&stored_sig) && sig.cosine_similarity(&stored_sig) >= threshold {
+                    return Ok(Some((UserId(uid), name)));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 fn identity_storage_error(error: IdentityError) -> sqlx::Error {

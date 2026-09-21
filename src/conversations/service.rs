@@ -715,15 +715,23 @@ impl ConversationService {
                         .voiceprints()
                         .update_conversation_user(conversation_id.0, candidate_user_id)
                         .await?;
+                    if let Some(ref sig) = voice_signature {
+                        let _ = self
+                            .memory
+                            .set_voice_signature(candidate_user_id, sig)
+                            .await;
+                    }
                     self.save_verification(conversation_id, None).await?;
                     self.memory
                         .clear_verification_state(conversation_id.0)
                         .await;
+                    let _ = self.memory.refresh(candidate_user_id).await;
                     if !original_text.is_empty() {
                         request.text = original_text.clone();
                     } else if let Some(original) = prior_messages.windows(2).find(|pair| {
                         pair[0].role == "user"
-                            && pair[1].text.starts_with("Your voice is not matching")
+                            && (pair[1].text.starts_with("Your voice is not matching")
+                                || pair[1].text.starts_with("It sounds like someone else"))
                     }) {
                         request.text = original[0].text.clone();
                     }
@@ -758,7 +766,9 @@ impl ConversationService {
                 voice_signature,
                 ..
             }) => {
-                let Some(name) = explicit_name(&request.text) else {
+                let found_name = explicit_name(&request.text)
+                    .or_else(|| extract_name_from_text(&request.text));
+                let Some(name) = found_name else {
                     return Ok(VoiceVerificationOutcome::Intercept(
                         "Please introduce yourself by saying my name is, followed by your name."
                             .into(),
@@ -781,10 +791,27 @@ impl ConversationService {
                         "Please say your full registered phone number to confirm.".into(),
                     ));
                 }
-                return Ok(VoiceVerificationOutcome::Intercept(
-                    "I could not verify that profile. Please try your registered name again."
-                        .into(),
-                ));
+                let new_user = self
+                    .memory
+                    .voiceprints()
+                    .create_user_with_name(&name)
+                    .await?;
+                self.memory
+                    .voiceprints()
+                    .update_conversation_user(conversation_id.0, new_user)
+                    .await?;
+                if let Some(ref sig) = voice_signature {
+                    let _ = self.memory.set_voice_signature(new_user, sig).await;
+                }
+                self.save_verification(conversation_id, None).await?;
+                self.memory
+                    .clear_verification_state(conversation_id.0)
+                    .await;
+                let _ = self.memory.refresh(new_user).await;
+                return Ok(VoiceVerificationOutcome::Intercept(format!(
+                    "Nice to meet you {}! How can I help you today?",
+                    name
+                )));
             }
             None => {}
         }
@@ -794,22 +821,52 @@ impl ConversationService {
             .is_some_and(|name| !name.trim().is_empty());
         if !has_name && let Some(name) = extract_name_from_text(&request.text) {
             self.memory.set_user_name(user_id, &name).await?;
+            if let Some(ref sig) = parsed_sig {
+                let _ = self.memory.set_voice_signature(user_id, sig).await;
+            }
             return Ok(VoiceVerificationOutcome::Intercept(format!(
                 "Nice to meet you {}! How can I help you today?",
                 name
             )));
         }
-        if let Some(sig) = parsed_sig
-            && let Some(stored) = self.memory.get_voice_signature(user_id).await?
-        {
-            tracing::info!(
-                comparable = sig.comparable(&stored),
-                "CORE_VOICE_EVIDENCE_ADVISORY"
-            );
+        let mut current_user_id = user_id;
+        if let Some(ref sig) = parsed_sig {
+            let stored = self.memory.get_voice_signature(user_id).await?;
+            if let Some(ref stored_sig) = stored {
+                if sig.comparable(stored_sig) {
+                    let similarity = sig.cosine_similarity(stored_sig);
+                    tracing::info!(similarity, "CORE_VOICE_SIMILARITY");
+                    if similarity < 0.55 {
+                        if let Ok(Some((matched_uid, _))) =
+                            self.memory.voiceprints().find_matching_user(sig, 0.65).await
+                        {
+                            self.memory
+                                .voiceprints()
+                                .update_conversation_user(conversation_id.0, matched_uid)
+                                .await?;
+                            current_user_id = matched_uid;
+                        } else {
+                            let state = VerificationState::AwaitingName {
+                                original_user_id: user_id,
+                                original_text: request.text.clone(),
+                                original_user_name: known_name.clone().unwrap_or_default(),
+                                voice_signature: Some(sig.clone()),
+                            };
+                            self.save_verification(conversation_id, Some(state)).await?;
+                            let reply = format!(
+                                "It sounds like someone else is speaking. What is your name?"
+                            );
+                            return Ok(VoiceVerificationOutcome::Intercept(reply));
+                        }
+                    }
+                }
+            } else if has_name {
+                let _ = self.memory.set_voice_signature(user_id, sig).await;
+            }
         }
         let _ = prior_messages;
         Ok(VoiceVerificationOutcome::Continue {
-            active_user_id: user_id,
+            active_user_id: current_user_id,
             needs_onboarding: !has_name,
         })
     }
