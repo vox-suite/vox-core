@@ -20,6 +20,8 @@ pub mod jev;
 pub mod jobs;
 pub mod memory;
 pub mod schedules;
+#[cfg(any(test, feature = "sandbox"))]
+pub mod sandbox;
 pub mod summaries;
 pub mod voiceprint;
 pub mod workers;
