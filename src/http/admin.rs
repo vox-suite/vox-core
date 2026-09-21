@@ -39,14 +39,18 @@ impl RedisAdmin {
 
 #[derive(Debug)]
 enum AdminError {
+    Unauthorized,
     Unavailable,
     Invalid,
     Busy,
+    Missing,
+    Conflict,
 }
 
 impl axum::response::IntoResponse for AdminError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized."),
             Self::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Redis is unavailable. Try again later.",
@@ -55,6 +59,11 @@ impl axum::response::IntoResponse for AdminError {
             Self::Busy => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "Redis explorer is busy. Try again shortly.",
+            ),
+            Self::Missing => (StatusCode::NOT_FOUND, "The Redis entry no longer exists."),
+            Self::Conflict => (
+                StatusCode::CONFLICT,
+                "The Redis entry type changed. Refresh it before editing.",
             ),
         };
         (
@@ -80,26 +89,36 @@ struct Entry {
     ttl: i64,
 }
 
+#[derive(Deserialize)]
+pub struct RedisUpdate {
+    key: String,
+    #[serde(rename = "type")]
+    kind: String,
+    value: JsonValue,
+}
+
+fn authorized(state: &AppState, headers: &HeaderMap) -> Result<Arc<RedisAdmin>, AdminError> {
+    let admin = state.admin.clone().ok_or(AdminError::Unauthorized)?;
+    if admin.token.trim().is_empty() || !auth::authorized(headers, &admin.token) {
+        return Err(AdminError::Unauthorized);
+    }
+    Ok(admin)
+}
+
+fn valid_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 1024 && !key.chars().any(char::is_control)
+}
+
 pub async fn browse(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<RedisQuery>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let Some(admin) = state.admin else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::CACHE_CONTROL, "no-store")],
-        )
-            .into_response();
+    let admin = match authorized(&state, &headers) {
+        Ok(admin) => admin,
+        Err(error) => return error.into_response(),
     };
-    if admin.token.trim().is_empty() || !auth::authorized(&headers, &admin.token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::CACHE_CONTROL, "no-store")],
-        )
-            .into_response();
-    }
     let result = tokio::time::timeout(Duration::from_secs(4), read(admin, query)).await;
     match result {
         Ok(Ok(value)) => ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response(),
@@ -118,11 +137,7 @@ async fn read(admin: Arc<RedisAdmin>, query: RedisQuery) -> Result<JsonValue, Ad
     if pattern.len() > 256 || pattern.chars().any(char::is_control) {
         return Err(AdminError::Invalid);
     }
-    if query
-        .key
-        .as_ref()
-        .is_some_and(|key| key.is_empty() || key.len() > 1024 || key.chars().any(char::is_control))
-    {
+    if query.key.as_ref().is_some_and(|key| !valid_key(key)) {
         return Err(AdminError::Invalid);
     }
     let _permit = admin.permits.try_acquire().map_err(|_| AdminError::Busy)?;
@@ -176,6 +191,158 @@ async fn read(admin: Arc<RedisAdmin>, query: RedisQuery) -> Result<JsonValue, Ad
         })
         .collect();
     Ok(json!({"cursor":next_cursor.to_string(),"entries":entries,"match":pattern}))
+}
+
+pub async fn delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<RedisQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let admin = match authorized(&state, &headers) {
+        Ok(admin) => admin,
+        Err(error) => return error.into_response(),
+    };
+    let Some(key) = query.key.filter(|key| valid_key(key)) else {
+        return AdminError::Invalid.into_response();
+    };
+    let result = tokio::time::timeout(Duration::from_secs(4), remove(admin, key)).await;
+    match result {
+        Ok(Ok(value)) => ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response(),
+        Ok(Err(error)) => error.into_response(),
+        Err(_) => AdminError::Unavailable.into_response(),
+    }
+}
+
+async fn remove(admin: Arc<RedisAdmin>, key: String) -> Result<JsonValue, AdminError> {
+    let _permit = admin.permits.try_acquire().map_err(|_| AdminError::Busy)?;
+    let mut connection = admin.connection().await?;
+    let deleted: u64 = redis::cmd("DEL")
+        .arg(&key)
+        .query_async(&mut connection)
+        .await
+        .map_err(|_| AdminError::Unavailable)?;
+    if deleted == 0 {
+        return Err(AdminError::Missing);
+    }
+    Ok(json!({"deleted":true,"key":key}))
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(update): Json<RedisUpdate>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let admin = match authorized(&state, &headers) {
+        Ok(admin) => admin,
+        Err(error) => return error.into_response(),
+    };
+    if !valid_key(&update.key) {
+        return AdminError::Invalid.into_response();
+    }
+    let arguments = match mutation_arguments(&update.kind, &update.value) {
+        Ok(arguments) => arguments,
+        Err(error) => return error.into_response(),
+    };
+    let result =
+        tokio::time::timeout(Duration::from_secs(4), replace(admin, update, arguments)).await;
+    match result {
+        Ok(Ok(value)) => ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response(),
+        Ok(Err(error)) => error.into_response(),
+        Err(_) => AdminError::Unavailable.into_response(),
+    }
+}
+
+fn mutation_arguments(kind: &str, value: &JsonValue) -> Result<Vec<String>, AdminError> {
+    if kind == "string" {
+        let value = value.as_str().ok_or(AdminError::Invalid)?;
+        if value.len() > 65_536 {
+            return Err(AdminError::Invalid);
+        }
+        return Ok(vec![value.to_owned()]);
+    }
+    let values = value.as_array().ok_or(AdminError::Invalid)?;
+    let paired = matches!(kind, "hash" | "zset");
+    if !matches!(kind, "list" | "hash" | "set" | "zset")
+        || values.is_empty()
+        || values.len() > if paired { 2_000 } else { 1_000 }
+        || paired && values.len() % 2 != 0
+    {
+        return Err(AdminError::Invalid);
+    }
+    let arguments: Vec<String> = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let value = if kind == "zset" && index % 2 == 1 {
+                match value {
+                    JsonValue::Number(value) => value.to_string(),
+                    JsonValue::String(value) if value.parse::<f64>().is_ok_and(f64::is_finite) => {
+                        value.clone()
+                    }
+                    _ => return Err(AdminError::Invalid),
+                }
+            } else {
+                value.as_str().ok_or(AdminError::Invalid)?.to_owned()
+            };
+            if value.len() > 65_536 {
+                return Err(AdminError::Invalid);
+            }
+            Ok(value)
+        })
+        .collect::<Result<_, _>>()?;
+    if arguments.iter().map(String::len).sum::<usize>() > 131_072 {
+        return Err(AdminError::Invalid);
+    }
+    Ok(arguments)
+}
+
+async fn replace(
+    admin: Arc<RedisAdmin>,
+    update: RedisUpdate,
+    arguments: Vec<String>,
+) -> Result<JsonValue, AdminError> {
+    let _permit = admin.permits.try_acquire().map_err(|_| AdminError::Busy)?;
+    let mut connection = admin.connection().await?;
+    let script = r#"
+local actual = redis.call('TYPE', KEYS[1])['ok']
+if actual == 'none' then return {0, actual} end
+if actual ~= ARGV[1] then return {-1, actual} end
+local ttl = redis.call('PTTL', KEYS[1])
+redis.call('DEL', KEYS[1])
+if ARGV[1] == 'string' then
+  redis.call('SET', KEYS[1], ARGV[2])
+elseif ARGV[1] == 'list' then
+  for i = 2, #ARGV do redis.call('RPUSH', KEYS[1], ARGV[i]) end
+elseif ARGV[1] == 'hash' then
+  for i = 2, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
+elseif ARGV[1] == 'set' then
+  for i = 2, #ARGV do redis.call('SADD', KEYS[1], ARGV[i]) end
+elseif ARGV[1] == 'zset' then
+  for i = 2, #ARGV, 2 do redis.call('ZADD', KEYS[1], ARGV[i + 1], ARGV[i]) end
+end
+if ttl > 0 then redis.call('PEXPIRE', KEYS[1], ttl) end
+return {1, actual}
+"#;
+    let mut command = redis::cmd("EVAL");
+    command
+        .arg(script)
+        .arg(1)
+        .arg(&update.key)
+        .arg(&update.kind);
+    for argument in arguments {
+        command.arg(argument);
+    }
+    let (outcome, _actual): (i64, String) = command
+        .query_async(&mut connection)
+        .await
+        .map_err(|_| AdminError::Unavailable)?;
+    match outcome {
+        1 => Ok(json!({"updated":true,"key":update.key})),
+        0 => Err(AdminError::Missing),
+        _ => Err(AdminError::Conflict),
+    }
 }
 
 fn as_json(value: Value) -> JsonValue {

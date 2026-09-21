@@ -206,7 +206,10 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/v1/admin/redis", get(admin::browse))
+        .route(
+            "/v1/admin/redis",
+            get(admin::browse).delete(admin::delete).put(admin::update),
+        )
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
