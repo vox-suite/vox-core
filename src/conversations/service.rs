@@ -551,8 +551,8 @@ impl ConversationService {
         } else {
             None
         };
-        if name.is_none() {
-            if let Ok(Ok(Some(db_name))) = tokio::time::timeout(
+        if name.is_none()
+            && let Ok(Ok(Some(db_name))) = tokio::time::timeout(
                 std::time::Duration::from_millis(150),
                 sqlx::query_scalar::<_, String>(
                     "SELECT p.facts->>'name' FROM user_identities i JOIN user_profiles p ON p.user_id = i.user_id WHERE i.channel = $1 AND i.external_id = $2 AND p.facts->>'name' IS NOT NULL",
@@ -562,20 +562,19 @@ impl ConversationService {
                 .fetch_optional(self.db.pool()),
             )
             .await
-            {
-                let trimmed = db_name.trim().to_string();
-                if !trimmed.is_empty() {
-                    if let Some(cache) = self.memory.cache() {
-                        let _ = cache
-                            .set_greeting_name(
-                                request.identity.channel.trim(),
-                                request.identity.external_id.trim(),
-                                &trimmed,
-                            )
-                            .await;
-                    }
-                    name = Some(trimmed);
+        {
+            let trimmed = db_name.trim().to_string();
+            if !trimmed.is_empty() {
+                if let Some(cache) = self.memory.cache() {
+                    let _ = cache
+                        .set_greeting_name(
+                            request.identity.channel.trim(),
+                            request.identity.external_id.trim(),
+                            &trimmed,
+                        )
+                        .await;
                 }
+                name = Some(trimmed);
             }
         }
         let name = name
@@ -858,9 +857,9 @@ impl ConversationService {
                                 voice_signature: Some(sig.clone()),
                             };
                             self.save_verification(conversation_id, Some(state)).await?;
-                            let reply = format!(
+                            let reply =
                                 "It sounds like someone else is speaking. What is your name?"
-                            );
+                                    .to_string();
                             return Ok(VoiceVerificationOutcome::Intercept(reply));
                         }
                     }

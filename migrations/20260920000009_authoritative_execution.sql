@@ -1,3 +1,6 @@
+-- Platform V1 replaces the pre-launch action queue with one authoritative
+-- execution record. This is deliberately a clean break: no deployment has
+-- ever depended on the legacy tables.
 CREATE TABLE executions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_context_id UUID NOT NULL REFERENCES user_contexts(id) ON DELETE RESTRICT,
@@ -41,6 +44,8 @@ CREATE TABLE execution_attempts (
     CONSTRAINT execution_attempts_state_valid CHECK (state IN ('pending','dispatching','awaiting_provider_authentication','reconciling','succeeded','failed','cancelled','expired','unknown'))
 );
 
+-- The old queue was never deployed. Remove it instead of retaining a second
+-- authority path that could fabricate completed external work.
 DROP TABLE IF EXISTS action_attempts;
 DROP TABLE IF EXISTS actions;
 ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_kind_valid;

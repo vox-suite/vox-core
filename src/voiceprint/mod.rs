@@ -233,10 +233,11 @@ impl VoiceprintService {
             let uid: Uuid = r.get("user_id");
             let name: String = r.get("name");
             let val: serde_json::Value = r.get("signature");
-            if let Ok(stored_sig) = serde_json::from_value::<VoiceSignature>(val) {
-                if sig.comparable(&stored_sig) && sig.cosine_similarity(&stored_sig) >= threshold {
-                    return Ok(Some((UserId(uid), name)));
-                }
+            if let Ok(stored_sig) = serde_json::from_value::<VoiceSignature>(val)
+                && sig.comparable(&stored_sig)
+                && sig.cosine_similarity(&stored_sig) >= threshold
+            {
+                return Ok(Some((UserId(uid), name)));
             }
         }
         Ok(None)
