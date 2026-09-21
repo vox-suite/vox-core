@@ -33,9 +33,7 @@ impl Config {
         let jev_api_key = get("JEV_API_KEY")
             .filter(|value| !value.trim().is_empty());
         let jev_enabled = jev_api_key.is_some();
-        let jev_base_url = get("JEV_BASE_URL")
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "https://api.typesafe.ai/v1/systemone".to_string());
+        let jev_base_url = "https://api.typesafe.ai/v1/systemone".to_string();
         let tts_provider = get("VOX_TTS_PROVIDER")
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "elevenlabs".to_string());
