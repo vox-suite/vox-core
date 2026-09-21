@@ -13,6 +13,7 @@ pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
 pub mod schedules;
+pub mod status;
 
 use crate::{
     agents::conversation::ConversationResponder, conversations::service::ConversationService,
@@ -48,6 +49,7 @@ pub struct AppState {
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
     pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
+    pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -70,6 +72,7 @@ impl AppState {
             identity_adapters: None,
             integration_registry: None,
             schedules: None,
+            status: None,
             service_token: Arc::from(""),
         }
     }
@@ -135,7 +138,8 @@ impl AppState {
             integration_registry: Some(Arc::new(
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
-            schedules: Some(Arc::new(ScheduleService::new(db))),
+            schedules: Some(Arc::new(ScheduleService::new(db.clone()))),
+            status: Some(Arc::new(crate::status::StatusService::new(db))),
             service_token: Arc::from(service_token),
         }
     }
@@ -179,6 +183,7 @@ impl AppState {
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: None,
+            status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             service_token: Arc::from(service_token),
         }
     }
@@ -192,6 +197,21 @@ impl AppState {
         identity_adapters: crate::identity_adapters::IdentityAdapterService,
     ) -> Self {
         self.identity_adapters = Some(Arc::new(identity_adapters));
+        self
+    }
+
+    /// Enables webhook subscriptions only when the deployment provides durable
+    /// secret custody. The default status service fails closed instead of
+    /// persisting delivery secrets in the database.
+    pub fn with_status_secret_store(
+        mut self,
+        secrets: Arc<dyn crate::status::WebhookSecretStore>,
+    ) -> Self {
+        if let Some(db) = self.db.clone() {
+            self.status = Some(Arc::new(
+                crate::status::StatusService::new(db).with_secret_store(secrets),
+            ));
+        }
         self
     }
 
@@ -254,6 +274,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/schedules/{id}", patch(schedules::update))
         .route("/v1/executions", post(execution::start))
         .route("/v1/executions/{id}", post(execution::get))
+        .route("/v1/status-events", post(status::list))
+        .route(
+            "/v1/status-webhook-subscriptions",
+            post(status::create_subscription).get(status::list_subscriptions),
+        )
+        .route(
+            "/v1/status-webhook-subscriptions/{id}/rotate",
+            post(status::rotate_subscription),
+        )
+        .route(
+            "/v1/status-webhook-subscriptions/{id}",
+            axum::routing::delete(status::disable_subscription),
+        )
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route("/v1/agent-selections", post(agent_registry::select))
         .route(

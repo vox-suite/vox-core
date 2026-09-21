@@ -6,7 +6,7 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -14,7 +14,6 @@ pub struct StartExecutionRequest {
     pub approval_id: Uuid,
     pub idempotency_key: String,
 }
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Execution {
     pub id: Uuid,
@@ -22,7 +21,6 @@ pub struct Execution {
     pub provider_reference: Option<String>,
     pub confirmation_evidence: Option<Value>,
 }
-
 #[derive(Clone, Debug)]
 pub struct AdapterRequest {
     pub execution_id: Uuid,
@@ -30,7 +28,6 @@ pub struct AdapterRequest {
     pub identity: ExecutionIdentity,
     pub capability_external_key: String,
 }
-
 #[derive(Clone, Debug)]
 pub enum AdapterOutcome {
     Succeeded {
@@ -55,7 +52,6 @@ pub enum AdapterOutcome {
         code: String,
     },
 }
-
 #[async_trait::async_trait]
 pub trait ExecutionAdapter: Send + Sync {
     async fn dispatch(&self, request: AdapterRequest) -> AdapterOutcome;
@@ -65,12 +61,10 @@ pub trait ExecutionAdapter: Send + Sync {
         provider_reference: Option<&str>,
     ) -> AdapterOutcome;
 }
-
 #[derive(Clone)]
 pub struct ExecutionCoordinator {
     db: Db,
 }
-
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error("execution request invalid")]
@@ -87,7 +81,6 @@ impl ExecutionCoordinator {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
-
     pub async fn start(
         &self,
         context: &ResolvedUserContext,
@@ -126,6 +119,8 @@ impl ExecutionCoordinator {
             .split('.')
             .next()
             .ok_or(ExecutionError::Invalid)?;
+        // The policy service owns immutable policy evidence and exact quota reservation.
+        // It is evaluated before the external boundary; any later failure stays internal.
         tx.commit().await?;
         let decision = ExecutionPolicyService::new(self.db.clone())
             .evaluate(
@@ -172,7 +167,6 @@ impl ExecutionCoordinator {
             confirmation_evidence: None,
         })
     }
-
     pub async fn dispatch(
         &self,
         context: &ResolvedUserContext,
@@ -194,7 +188,6 @@ impl ExecutionCoordinator {
         self.record_outcome(context, execution_id, outcome, now)
             .await
     }
-
     pub async fn reconcile(
         &self,
         context: &ResolvedUserContext,
@@ -227,7 +220,6 @@ impl ExecutionCoordinator {
         )
         .await
     }
-
     async fn adapter_request(
         &self,
         context: &ResolvedUserContext,
@@ -242,7 +234,6 @@ impl ExecutionCoordinator {
             capability_external_key: row.get::<String, _>("capability_external_key"),
         })
     }
-
     pub async fn record_outcome(
         &self,
         context: &ResolvedUserContext,
@@ -253,7 +244,40 @@ impl ExecutionCoordinator {
         self.persist_outcome(context, execution_id, outcome, now, false)
             .await
     }
-
+    /// Records a fact that has already passed the enabled integration-adapter
+    /// verification boundary. Hosts and agents must use `start`/`dispatch`; they
+    /// cannot use this internal integration seam.
+    pub async fn record_verified_external_outcome(
+        &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+        outcome: AdapterOutcome,
+        now: DateTime<Utc>,
+    ) -> Result<Execution, ExecutionError> {
+        self.persist_outcome(context, execution_id, outcome, now, true)
+            .await
+    }
+    /// Internal integration seam used when the adapter replay ledger and the
+    /// execution transition must commit as one database transaction.
+    pub async fn record_verified_external_outcome_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+        outcome: AdapterOutcome,
+        now: DateTime<Utc>,
+    ) -> Result<Execution, ExecutionError> {
+        self.persist_outcome_in_transaction(transaction, context, execution_id, outcome, now, true)
+            .await
+    }
+    pub async fn get(
+        &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+    ) -> Result<Execution, ExecutionError> {
+        let row=sqlx::query("SELECT id,state,provider_reference,confirmation_evidence FROM executions WHERE id=$1 AND user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?;
+        row_execution(row)
+    }
     async fn record_reconciled_outcome(
         &self,
         context: &ResolvedUserContext,
@@ -264,9 +288,31 @@ impl ExecutionCoordinator {
         self.persist_outcome(context, execution_id, outcome, now, true)
             .await
     }
-
     async fn persist_outcome(
         &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+        outcome: AdapterOutcome,
+        now: DateTime<Utc>,
+        allow_unknown_transition: bool,
+    ) -> Result<Execution, ExecutionError> {
+        let mut transaction = self.db.pool().begin().await?;
+        let execution = self
+            .persist_outcome_in_transaction(
+                &mut transaction,
+                context,
+                execution_id,
+                outcome,
+                now,
+                allow_unknown_transition,
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(execution)
+    }
+    async fn persist_outcome_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
         context: &ResolvedUserContext,
         execution_id: Uuid,
         outcome: AdapterOutcome,
@@ -308,11 +354,10 @@ impl ExecutionCoordinator {
                 code,
             } => ("unknown", provider_reference, None, Some(code), true),
         };
-        let row=sqlx::query("UPDATE executions SET state=$1,provider_reference=COALESCE($2,provider_reference),confirmation_evidence=$3,error_code=$4,updated_at=$5,completed_at=CASE WHEN $6 THEN $5 ELSE NULL END WHERE id=$7 AND user_context_id=$8 AND state NOT IN ('succeeded','failed','cancelled','expired') AND (($9 AND state IN ('unknown','reconciling','awaiting_provider_authentication')) OR (NOT $9 AND state <> 'unknown')) RETURNING id,state,provider_reference,confirmation_evidence").bind(state).bind(reference).bind(evidence).bind(code).bind(now).bind(done).bind(execution_id).bind(context.id.0).bind(allow_unknown_transition).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?;
+        let row=sqlx::query("UPDATE executions SET state=$1,provider_reference=COALESCE($2,provider_reference),confirmation_evidence=$3,error_code=$4,updated_at=$5,completed_at=CASE WHEN $6 THEN $5 ELSE NULL END WHERE id=$7 AND user_context_id=$8 AND state NOT IN ('succeeded','failed','cancelled','expired') AND (($9 AND state IN ('unknown','reconciling','awaiting_provider_authentication')) OR (NOT $9 AND state <> 'unknown')) RETURNING id,state,provider_reference,confirmation_evidence").bind(state).bind(reference).bind(evidence).bind(code).bind(now).bind(done).bind(execution_id).bind(context.id.0).bind(allow_unknown_transition).fetch_optional(&mut **transaction).await?.ok_or(ExecutionError::Unavailable)?;
         row_execution(row)
     }
 }
-
 fn row_execution(row: sqlx::postgres::PgRow) -> Result<Execution, ExecutionError> {
     Ok(Execution {
         id: row.try_get("id")?,
@@ -321,7 +366,6 @@ fn row_execution(row: sqlx::postgres::PgRow) -> Result<Execution, ExecutionError
         confirmation_evidence: row.try_get("confirmation_evidence")?,
     })
 }
-
 fn confirmation_evidence_is_present(evidence: &Value) -> bool {
     evidence
         .as_object()
@@ -331,7 +375,6 @@ fn confirmation_evidence_is_present(evidence: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::confirmation_evidence_is_present;
-
     #[test]
     fn confirmation_evidence_must_be_a_non_empty_object() {
         assert!(!confirmation_evidence_is_present(&serde_json::json!(null)));
