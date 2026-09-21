@@ -10,6 +10,8 @@ use serde_json::{Value as JsonValue, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{OnceCell, Semaphore};
 
+const REDIS_URL: &str = "redis://redis:6379";
+
 pub struct RedisAdmin {
     token: String,
     client: Option<Client>,
@@ -18,6 +20,13 @@ pub struct RedisAdmin {
 }
 
 impl RedisAdmin {
+    pub fn from_token(token: Option<String>) -> Result<Option<Self>, redis::RedisError> {
+        token
+            .filter(|value| !value.trim().is_empty())
+            .map(|token| Self::new(Some(REDIS_URL), token))
+            .transpose()
+    }
+
     pub fn new(url: Option<&str>, token: String) -> Result<Self, redis::RedisError> {
         Ok(Self {
             token,

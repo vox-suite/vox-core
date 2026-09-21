@@ -2,6 +2,25 @@ use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 use vox_core::http::{AppState, router};
 
+#[test]
+fn admin_configuration_uses_the_internal_redis_service() {
+    assert!(
+        vox_core::http::admin::RedisAdmin::from_token(Some("admin-only".into()))
+            .expect("valid internal Redis URL")
+            .is_some()
+    );
+    assert!(
+        vox_core::http::admin::RedisAdmin::from_token(Some("  ".into()))
+            .expect("valid internal Redis URL")
+            .is_none()
+    );
+    assert!(
+        vox_core::http::admin::RedisAdmin::from_token(None)
+            .expect("valid internal Redis URL")
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn admin_is_closed_without_configuration() {
     let app = router(AppState::new(true));

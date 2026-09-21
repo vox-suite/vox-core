@@ -38,7 +38,14 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
-    let state = AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
+    let mut state =
+        AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
+    if let Some(admin) =
+        vox_core::http::admin::RedisAdmin::from_token(std::env::var("VOX_ADMIN_TOKEN").ok())
+            .expect("Vox admin Redis URL is invalid")
+    {
+        state = state.with_admin(admin);
+    }
 
     axum::serve(listener, router(state))
         .await
