@@ -12,7 +12,7 @@ pub struct Execution { pub id: Uuid, pub state: String, pub provider_reference: 
 #[derive(Clone, Debug)]
 pub struct AdapterRequest { pub execution_id: Uuid, pub idempotency_key: String, pub identity: ExecutionIdentity, pub capability_external_key: String }
 #[derive(Clone, Debug)]
-pub enum AdapterOutcome { Succeeded { provider_reference: String, evidence: Value }, Failed { code: String }, AwaitingProviderAuthentication { provider_reference: Option<String> }, Reconciling { provider_reference: Option<String> }, Unknown { provider_reference: Option<String>, code: String } }
+pub enum AdapterOutcome { Succeeded { provider_reference: String, evidence: Value }, Failed { code: String }, Cancelled { provider_reference: Option<String>, evidence: Value }, AwaitingProviderAuthentication { provider_reference: Option<String> }, Reconciling { provider_reference: Option<String> }, Unknown { provider_reference: Option<String>, code: String } }
 #[async_trait::async_trait]
 pub trait ExecutionAdapter: Send + Sync { async fn dispatch(&self, request: AdapterRequest) -> AdapterOutcome; async fn reconcile(&self, request: AdapterRequest, provider_reference: Option<&str>) -> AdapterOutcome; }
 #[derive(Clone)] pub struct ExecutionCoordinator { db: Db }
@@ -51,13 +51,25 @@ pub fn new(db: Db) -> Self { Self { db } }
  }
  pub async fn reconcile(&self, context:&ResolvedUserContext, execution_id:Uuid, adapter:&dyn ExecutionAdapter, now:DateTime<Utc>)->Result<Execution,ExecutionError>{
   let request=self.adapter_request(context,execution_id).await?;
-  let reference=sqlx::query_scalar::<_,Option<String>>("SELECT provider_reference FROM executions WHERE id=$1 AND user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?;
-  self.record_outcome(context,execution_id,adapter.reconcile(request,reference.as_deref()).await,now).await
+  let row=sqlx::query("SELECT state,provider_reference FROM executions WHERE id=$1 AND user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?;
+  let state:String=row.get("state"); if !matches!(state.as_str(),"unknown"|"reconciling"|"awaiting_provider_authentication"){return Err(ExecutionError::Unavailable);}
+  let reference:Option<String>=row.get("provider_reference");
+  self.record_reconciled_outcome(context,execution_id,adapter.reconcile(request,reference.as_deref()).await,now).await
  }
  async fn adapter_request(&self,context:&ResolvedUserContext,execution_id:Uuid)->Result<AdapterRequest,ExecutionError>{let row=sqlx::query("SELECT idempotency_key,execution_identity,capability_external_key FROM executions WHERE id=$1 AND user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?;Ok(AdapterRequest{execution_id,idempotency_key:row.get::<String,_>("idempotency_key"),identity:serde_json::from_value(row.get::<Value,_>("execution_identity")).map_err(|_|ExecutionError::Invalid)?,capability_external_key:row.get::<String,_>("capability_external_key")})}
- pub async fn record_outcome(&self, context:&ResolvedUserContext, execution_id:Uuid, outcome:AdapterOutcome, now:DateTime<Utc>)->Result<Execution,ExecutionError>{
-  let (state,reference,evidence,code,done)=match outcome { AdapterOutcome::Succeeded{provider_reference,evidence} if !evidence.is_null()=> ("succeeded",Some(provider_reference),Some(evidence),None,true), AdapterOutcome::Succeeded{..}=>return Err(ExecutionError::Invalid), AdapterOutcome::Failed{code}=>("failed",None,None,Some(code),true), AdapterOutcome::AwaitingProviderAuthentication{provider_reference}=>("awaiting_provider_authentication",provider_reference,None,None,false), AdapterOutcome::Reconciling{provider_reference}=>("reconciling",provider_reference,None,None,false), AdapterOutcome::Unknown{provider_reference,code}=>("unknown",provider_reference,None,Some(code),true)};
-  let row=sqlx::query("UPDATE executions SET state=$1,provider_reference=COALESCE($2,provider_reference),confirmation_evidence=$3,error_code=$4,updated_at=$5,completed_at=CASE WHEN $6 THEN $5 ELSE NULL END WHERE id=$7 AND user_context_id=$8 AND state NOT IN ('succeeded','failed','cancelled','expired','unknown') RETURNING id,state,provider_reference,confirmation_evidence").bind(state).bind(reference).bind(evidence).bind(code).bind(now).bind(done).bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?; row_execution(row)
+ pub async fn record_outcome(&self, context:&ResolvedUserContext, execution_id:Uuid, outcome:AdapterOutcome, now:DateTime<Utc>)->Result<Execution,ExecutionError>{self.persist_outcome(context,execution_id,outcome,now,false).await}
+ async fn record_reconciled_outcome(&self, context:&ResolvedUserContext, execution_id:Uuid, outcome:AdapterOutcome, now:DateTime<Utc>)->Result<Execution,ExecutionError>{self.persist_outcome(context,execution_id,outcome,now,true).await}
+ async fn persist_outcome(&self, context:&ResolvedUserContext, execution_id:Uuid, outcome:AdapterOutcome, now:DateTime<Utc>, allow_unknown_transition:bool)->Result<Execution,ExecutionError>{
+  let (state,reference,evidence,code,done)=match outcome { AdapterOutcome::Succeeded{provider_reference,evidence} if confirmation_evidence_is_present(&evidence)=> ("succeeded",Some(provider_reference),Some(evidence),None,true), AdapterOutcome::Succeeded{..}=>return Err(ExecutionError::Invalid), AdapterOutcome::Failed{code}=>("failed",None,None,Some(code),true), AdapterOutcome::Cancelled{provider_reference,evidence} if confirmation_evidence_is_present(&evidence)=>("cancelled",provider_reference,Some(evidence),None,true), AdapterOutcome::Cancelled{..}=>return Err(ExecutionError::Invalid), AdapterOutcome::AwaitingProviderAuthentication{provider_reference}=>("awaiting_provider_authentication",provider_reference,None,None,false), AdapterOutcome::Reconciling{provider_reference}=>("reconciling",provider_reference,None,None,false), AdapterOutcome::Unknown{provider_reference,code}=>("unknown",provider_reference,None,Some(code),true)};
+  let row=sqlx::query("UPDATE executions SET state=$1,provider_reference=COALESCE($2,provider_reference),confirmation_evidence=$3,error_code=$4,updated_at=$5,completed_at=CASE WHEN $6 THEN $5 ELSE NULL END WHERE id=$7 AND user_context_id=$8 AND state NOT IN ('succeeded','failed','cancelled','expired') AND (($9 AND state IN ('unknown','reconciling','awaiting_provider_authentication')) OR (NOT $9 AND state <> 'unknown')) RETURNING id,state,provider_reference,confirmation_evidence").bind(state).bind(reference).bind(evidence).bind(code).bind(now).bind(done).bind(execution_id).bind(context.id.0).bind(allow_unknown_transition).fetch_optional(self.db.pool()).await?.ok_or(ExecutionError::Unavailable)?; row_execution(row)
  }
 }
 fn row_execution(row:sqlx::postgres::PgRow)->Result<Execution,ExecutionError>{Ok(Execution{id:row.try_get("id")?,state:row.try_get("state")?,provider_reference:row.try_get("provider_reference")?,confirmation_evidence:row.try_get("confirmation_evidence")?})}
+fn confirmation_evidence_is_present(evidence:&Value)->bool{evidence.as_object().is_some_and(|object|!object.is_empty())}
+
+#[cfg(test)]
+mod tests {
+ use super::confirmation_evidence_is_present;
+ #[test]
+ fn confirmation_evidence_must_be_a_non_empty_object(){assert!(!confirmation_evidence_is_present(&serde_json::json!(null)));assert!(!confirmation_evidence_is_present(&serde_json::json!({})));assert!(!confirmation_evidence_is_present(&serde_json::json!("receipt")));assert!(confirmation_evidence_is_present(&serde_json::json!({"receipt":"synthetic"})));}
+}
