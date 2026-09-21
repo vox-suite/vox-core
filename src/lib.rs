@@ -1,8 +1,6 @@
-pub mod actions;
 pub mod agent_registry;
 pub mod agents;
 pub mod approvals;
-pub mod bridge_client;
 pub mod capability_grants;
 pub mod config;
 pub mod conformance;
@@ -12,6 +10,7 @@ pub mod db;
 pub mod durable_tasks;
 pub mod events;
 pub mod execution_policy;
+pub mod execution;
 pub mod host_trust;
 pub mod http;
 pub mod identity;

@@ -216,14 +216,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::devices::DispatchDeviceCommand::new(
-                            self.db.clone(),
-                            prompt.owner,
-                        ))
-                        .tool(tools::calls::TriggerOutboundCall::new(
-                            self.db.clone(),
-                            prompt.owner,
-                        ))
                         .default_max_turns(6)
                         .build(),
                 }
@@ -290,18 +282,6 @@ impl ConversationAgent {
                     .tool(tools::records::ManageUserGoal::new(
                         self.db.clone(),
                         prompt.user_id,
-                    ))
-                    .tool(tools::devices::ListDevices::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::devices::DispatchDeviceCommand::new(
-                        self.db.clone(),
-                        prompt.owner,
-                    ))
-                    .tool(tools::calls::TriggerOutboundCall::new(
-                        self.db.clone(),
-                        prompt.owner,
                     ))
                     .default_max_turns(10)
                     .build()

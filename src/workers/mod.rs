@@ -2,7 +2,6 @@ pub mod task_executor;
 pub mod whatsapp_sweeper;
 
 use crate::{
-    actions::{ActionId, handler::ActionHandler},
     conversations::ConversationId,
     db::jobs::JobRepository,
     events::{EventId, handler::EventHandler},
@@ -20,7 +19,6 @@ pub struct Worker {
     events: EventHandler,
     schedules: Option<ScheduleHandler>,
     ticker: Option<ScheduleTicker>,
-    actions: Option<ActionHandler>,
     summaries: Option<SummaryHandler>,
     task_executor: Option<TaskExecutorHandler>,
     wa_sweeper: Option<WhatsAppSweeper>,
@@ -34,7 +32,6 @@ impl Worker {
             events,
             schedules: None,
             ticker: None,
-            actions: None,
             summaries: None,
             task_executor: None,
             wa_sweeper: None,
@@ -48,7 +45,6 @@ impl Worker {
         events: EventHandler,
         schedules: ScheduleHandler,
         ticker: ScheduleTicker,
-        actions: ActionHandler,
         summaries: SummaryHandler,
         task_executor: TaskExecutorHandler,
         wa_sweeper: WhatsAppSweeper,
@@ -59,7 +55,6 @@ impl Worker {
             events,
             schedules: Some(schedules),
             ticker: Some(ticker),
-            actions: Some(actions),
             summaries: Some(summaries),
             task_executor: Some(task_executor),
             wa_sweeper: Some(wa_sweeper),
@@ -115,13 +110,6 @@ impl Worker {
                         None => Err("schedule_occurrence_missing"),
                     },
                     None => Err("schedule_handler_unavailable"),
-                },
-                JobKind::DispatchAction => match &self.actions {
-                    Some(actions) => actions
-                        .handle(ActionId(job.payload_reference_id))
-                        .await
-                        .map_err(|_| "action_dispatch"),
-                    None => Err("action_handler_unavailable"),
                 },
                 JobKind::SummarizeConversation => match &self.summaries {
                     Some(summaries) => summaries

@@ -5,7 +5,6 @@ use uuid::Uuid;
 pub enum JobKind {
     ProcessEvent,
     RunSchedule,
-    DispatchAction,
     SummarizeConversation,
     EvaluateTask,
     ExecuteTask,
@@ -16,7 +15,6 @@ impl JobKind {
         match self {
             Self::ProcessEvent => "process_event",
             Self::RunSchedule => "run_schedule",
-            Self::DispatchAction => "dispatch_action",
             Self::SummarizeConversation => "summarize_conversation",
             Self::EvaluateTask => "evaluate_task",
             Self::ExecuteTask => "execute_task",
@@ -27,7 +25,6 @@ impl JobKind {
         match value {
             "process_event" => Some(Self::ProcessEvent),
             "run_schedule" => Some(Self::RunSchedule),
-            "dispatch_action" => Some(Self::DispatchAction),
             "summarize_conversation" => Some(Self::SummarizeConversation),
             "evaluate_task" => Some(Self::EvaluateTask),
             "execute_task" => Some(Self::ExecuteTask),

@@ -1,6 +1,4 @@
-pub mod calls;
 pub mod dependencies;
-pub mod devices;
 pub mod google_maps;
 pub mod profile;
 pub mod projects;

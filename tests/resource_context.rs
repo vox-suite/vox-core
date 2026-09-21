@@ -8,7 +8,6 @@ use vox_core::{
         AgentError,
         conversation::{ConversationPrompt, ConversationResponder},
         tools::{
-            calls::{TriggerCallArgs, TriggerOutboundCall},
             tasks::{
                 CreateTask, CreateTaskArgs, GetTask, GetTaskArgs, ListTasks, ListTasksArgs,
                 TaskToolError, UpdateTask, UpdateTaskArgs,
@@ -291,58 +290,4 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
             .unwrap();
     assert_eq!(stored_owner, (alice.user_context_id.0, alice.user_id.0));
 
-    let action = TriggerOutboundCall::new(Some(db.clone()), alice)
-        .call(
-            &mut context,
-            TriggerCallArgs {
-                reason: "Private update".into(),
-                opening_instruction: "Tell Alice the update".into(),
-            },
-        )
-        .await
-        .unwrap();
-    let action_id = Uuid::parse_str(action["action_id"].as_str().unwrap()).unwrap();
-    let action_owner: (Uuid, Uuid) =
-        sqlx::query_as("SELECT user_context_id, user_id FROM actions WHERE id = $1")
-            .bind(action_id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-    assert_eq!(action_owner, (alice.user_context_id.0, alice.user_id.0));
-
-    let cross_context_transfer =
-        sqlx::query("UPDATE actions SET user_context_id = $1 WHERE id = $2")
-            .bind(bob.user_context_id.0)
-            .bind(action_id)
-            .execute(db.pool())
-            .await;
-    assert!(
-        cross_context_transfer.is_err(),
-        "database owner constraint must reject a context/user mismatch"
-    );
-
-    let bob_task = CreateTask::new(Some(db.clone()), bob)
-        .call(
-            &mut context,
-            CreateTaskArgs {
-                title: "Bob private task".into(),
-                instruction: None,
-                project_name: None,
-                project_id: None,
-                execution_type: None,
-                due_at: None,
-            },
-        )
-        .await
-        .unwrap();
-    let bob_task_id = Uuid::parse_str(bob_task["task_id"].as_str().unwrap()).unwrap();
-    let cross_owner_source = sqlx::query("UPDATE actions SET task_id = $1 WHERE id = $2")
-        .bind(bob_task_id)
-        .bind(action_id)
-        .execute(db.pool())
-        .await;
-    assert!(
-        cross_owner_source.is_err(),
-        "database relationship constraint must reject a cross-owner source"
-    );
 }

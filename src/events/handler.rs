@@ -1,7 +1,7 @@
 use super::EventId;
 use crate::{
     agents::{
-        event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
+        event_planner::EventPlanning,
         tools::records::validate_data_against_schema,
     },
     db::Db,
@@ -16,13 +16,12 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::Row;
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct EventHandler {
     db: Db,
-    planner: Arc<dyn EventPlanning>,
-    memory: MemoryService,
+    #[allow(dead_code)] planner: Arc<dyn EventPlanning>,
+    #[allow(dead_code)] memory: MemoryService,
     triager: Option<Arc<EventTriager>>,
     schema_classifier: Option<Arc<SchemaClassifier>>,
 }
@@ -75,7 +74,7 @@ impl EventHandler {
         .fetch_one(self.db.pool())
         .await?;
         let user_id = UserId(row.get("user_id"));
-        let owner = IdentityService::new(self.db.clone())
+        let _owner = IdentityService::new(self.db.clone())
             .owner_for_user(user_id)
             .await
             .map_err(|error| match error {
@@ -162,57 +161,11 @@ impl EventHandler {
             }
         }
 
-        // 2. System 2 (Gemini Event Planner)
-        let actions = self
-            .planner
-            .plan(EventPlanningPrompt {
-                user_id,
-                user_context: self.memory.load(user_id).await?,
-                event_type,
-                occurred_at,
-                payload,
-            })
-            .await?;
-
-        let mut tx = self.db.pool().begin().await?;
-        for (index, action) in actions.into_iter().enumerate() {
-            let (kind, payload) = match action {
-                PlannedAction::OutboundCall {
-                    reason,
-                    opening_instruction,
-                } => (
-                    "outbound_call",
-                    serde_json::json!({"reason": reason, "opening_instruction": opening_instruction}),
-                ),
-            };
-            let key = format!("event:{}:action:{index}", event_id.0);
-            let inserted = sqlx::query_scalar::<_, Uuid>(
-                "INSERT INTO actions (user_context_id, user_id, event_id, kind, payload, idempotency_key) \
-                 VALUES ($1, $2, $3, $4, $5, $6) \
-                 ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
-            )
-            .bind(owner.user_context_id.0)
-            .bind(owner.user_id.0)
-            .bind(event_id.0)
-            .bind(kind)
-            .bind(payload)
-            .bind(key)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if let Some(action_id) = inserted {
-                sqlx::query(
-                    "INSERT INTO jobs (kind, payload_reference_id) VALUES ('dispatch_action', $1)",
-                )
-                .bind(action_id)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
+        // Ingested events record facts only. They cannot create external authority.
         sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
             .bind(event_id.0)
-            .execute(&mut *tx)
+            .execute(self.db.pool())
             .await?;
-        tx.commit().await?;
         Ok(())
     }
 }
