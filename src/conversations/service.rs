@@ -825,10 +825,20 @@ impl ConversationService {
                     .clear_verification_state(conversation_id.0)
                     .await;
                 let _ = self.memory.refresh(new_user).await;
-                return Ok(VoiceVerificationOutcome::Intercept(format!(
-                    "Nice to meet you {}! How can I help you today?",
-                    name
-                )));
+                if !original_text.is_empty() {
+                    request.text = original_text.clone();
+                }
+                if prior_messages.is_empty() && original_text.is_empty() {
+                    return Ok(VoiceVerificationOutcome::Intercept(format!(
+                        "Nice to meet you {}! How can I help you today?",
+                        name
+                    )));
+                } else {
+                    return Ok(VoiceVerificationOutcome::Continue {
+                        active_user_id: new_user,
+                        needs_onboarding: false,
+                    });
+                }
             }
             None => {}
         }
@@ -841,10 +851,17 @@ impl ConversationService {
             if let Some(ref sig) = parsed_sig {
                 let _ = self.memory.set_voice_signature(user_id, sig).await;
             }
-            return Ok(VoiceVerificationOutcome::Intercept(format!(
-                "Nice to meet you {}! How can I help you today?",
-                name
-            )));
+            if prior_messages.is_empty() {
+                return Ok(VoiceVerificationOutcome::Intercept(format!(
+                    "Nice to meet you {}! How can I help you today?",
+                    name
+                )));
+            } else {
+                return Ok(VoiceVerificationOutcome::Continue {
+                    active_user_id: user_id,
+                    needs_onboarding: false,
+                });
+            }
         }
         let mut current_user_id = user_id;
         if let Some(ref sig) = parsed_sig {
@@ -853,7 +870,11 @@ impl ConversationService {
                 if sig.comparable(stored_sig) {
                     let similarity = sig.cosine_similarity(stored_sig);
                     tracing::info!(similarity, "CORE_VOICE_SIMILARITY");
-                    if similarity < 0.55 {
+                    let similarity_threshold = std::env::var("VOX_VOICE_SIMILARITY_THRESHOLD")
+                        .ok()
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .unwrap_or(0.50);
+                    if similarity < similarity_threshold {
                         if let Ok(Some((matched_uid, _))) = self
                             .memory
                             .voiceprints()

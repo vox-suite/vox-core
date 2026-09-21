@@ -26,7 +26,8 @@ async fn main() {
         ConversationAgent::with_db(&config, db.clone())
             .expect("Vox Core agent configuration is invalid"),
     );
-    let cache = RedisContextCache::new("redis://redis:6379")
+    let redis_url = config.redis_url.as_deref().unwrap_or("redis://redis:6379");
+    let cache = RedisContextCache::new(redis_url)
         .ok()
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
@@ -41,7 +42,10 @@ async fn main() {
     let mut state =
         AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
     if let Some(admin) =
-        vox_core::http::admin::RedisAdmin::from_token(std::env::var("VOX_ADMIN_TOKEN").ok())
+        vox_core::http::admin::RedisAdmin::from_token_with_url(
+        config.redis_url.as_deref().or(Some("redis://redis:6379")),
+        std::env::var("VOX_ADMIN_TOKEN").ok(),
+    )
             .expect("Vox admin Redis URL is invalid")
     {
         state = state.with_admin(admin);

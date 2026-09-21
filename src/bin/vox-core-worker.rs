@@ -24,13 +24,11 @@ async fn main() {
     let db = Db::connect(&config.database_url)
         .await
         .expect("Vox Core database is unavailable");
-    db.migrate()
-        .await
-        .expect("Vox Core database migration failed");
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
-    let cache = RedisContextCache::new("redis://redis:6379")
+    let redis_url = config.redis_url.as_deref().unwrap_or("redis://redis:6379");
+    let cache = RedisContextCache::new(redis_url)
         .ok()
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
