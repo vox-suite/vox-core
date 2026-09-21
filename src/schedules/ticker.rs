@@ -44,7 +44,6 @@ impl ScheduleTicker {
             let recurrence_expr: Option<String> = row.get("recurrence_expression");
             let timezone_name: String = row.get("timezone");
 
-            // Create unique RunSchedule job for this occurrence
             sqlx::query(
                 "INSERT INTO jobs (kind, payload_reference_id, schedule_id, occurrence_at) \
                  VALUES ('run_schedule', $1, $1, $2) \

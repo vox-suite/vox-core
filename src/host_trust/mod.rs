@@ -40,8 +40,6 @@ pub struct HostContextRequest {
 pub struct HostAppCredential {
     pub credential_id: Uuid,
     pub audience: String,
-    /// Returned once to the trusted host operator. It is never persisted or
-    /// logged by Core and must be stored by the host in its secret manager.
     pub secret: String,
 }
 
@@ -174,8 +172,6 @@ impl HostTrustService {
         }
     }
 
-    /// Register or update a host application's browser-origin policy and issue
-    /// a new signing credential. This is a trusted operator operation.
     pub async fn register_host_app(
         &self,
         request: RegisterHostAppRequest,
@@ -226,9 +222,6 @@ impl HostTrustService {
         })
     }
 
-    /// Add a replacement credential without changing the deployment or host
-    /// app identity. Operators can overlap credentials during rollout and then
-    /// revoke the old one explicitly.
     pub async fn rotate_credential(
         &self,
         host_app_id: HostAppId,
@@ -265,8 +258,6 @@ impl HostTrustService {
         }
     }
 
-    /// Verify a short-lived, signed host assertion and resolve only the context
-    /// scoped to the credential's registered deployment and host app.
     pub async fn resolve_authenticated_context(
         &self,
         assertion: &HostContextAssertion,

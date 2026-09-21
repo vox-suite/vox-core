@@ -1,9 +1,6 @@
 use super::EventId;
 use crate::{
-    agents::{
-        event_planner::EventPlanning,
-        tools::records::validate_data_against_schema,
-    },
+    agents::{event_planner::EventPlanning, tools::records::validate_data_against_schema},
     db::Db,
     identity::{IdentityService, UserId},
     jev::{
@@ -20,8 +17,10 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct EventHandler {
     db: Db,
-    #[allow(dead_code)] planner: Arc<dyn EventPlanning>,
-    #[allow(dead_code)] memory: MemoryService,
+    #[allow(dead_code)]
+    planner: Arc<dyn EventPlanning>,
+    #[allow(dead_code)]
+    memory: MemoryService,
     triager: Option<Arc<EventTriager>>,
     schema_classifier: Option<Arc<SchemaClassifier>>,
 }
@@ -85,7 +84,6 @@ impl EventHandler {
         let occurred_at: DateTime<Utc> = row.get("occurred_at");
         let payload: Value = row.get("payload");
 
-        // 1. Jev System 1 Triage Gate
         if let Some(triager) = &self.triager {
             match triager.triage(&event_type, &payload).await {
                 Ok(triage) => {
@@ -97,7 +95,6 @@ impl EventHandler {
                         "Jev System 1: event triage decision"
                     );
 
-                    // Ignore routine / benign telemetry without LLM overhead (confidence >= 0.80)
                     if triage.action == EventTriageAction::Ignore && triage.confidence >= 0.80 {
                         tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
                         sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
@@ -107,7 +104,6 @@ impl EventHandler {
                         return Ok(());
                     }
 
-                    // Direct ingestion fast-path for structured data records
                     if triage.action == EventTriageAction::StoreRecord
                         && let Some(classifier) = &self.schema_classifier
                         && let Ok(class_res) = classifier.classify(user_id.0, &payload).await
@@ -161,7 +157,6 @@ impl EventHandler {
             }
         }
 
-        // Ingested events record facts only. They cannot create external authority.
         sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
             .bind(event_id.0)
             .execute(self.db.pool())

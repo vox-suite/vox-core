@@ -29,7 +29,6 @@ impl EventTriager {
         Self { jev }
     }
 
-    /// Evaluates an incoming event in a single parallel pass using Choice + Noul.
     pub async fn triage(
         &self,
         event_type: &str,

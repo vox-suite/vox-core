@@ -115,8 +115,6 @@ pub struct AuthenticationResult {
     pub user_context_id: UserContextId,
     pub adapter_external_key: String,
     pub expires_at: DateTime<Utc>,
-    /// An opaque, short-lived, single-use proof for linking or unlinking.
-    /// It is never persisted in plaintext and must not be logged.
     pub authentication_token: String,
 }
 

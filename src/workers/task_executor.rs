@@ -75,7 +75,6 @@ impl TaskExecutorHandler {
         let title: String = task_row.get("title");
         let instruction: String = task_row.get("raw_instruction");
 
-        // Mark task as executing
         sqlx::query(
             "UPDATE tasks SET status = 'executing', \
                     user_context_id = COALESCE(user_context_id, $1), updated_at = now() \
@@ -86,7 +85,6 @@ impl TaskExecutorHandler {
         .execute(self.db.pool())
         .await?;
 
-        // Run autonomous execution using Gemini
         let client = gemini::Client::new(&self.api_key)
             .map_err(|e| TaskExecutorError::Agent(e.to_string()))?;
 
@@ -114,7 +112,6 @@ impl TaskExecutorHandler {
             "completed_at": chrono::Utc::now().to_rfc3339()
         });
 
-        // Mark task completed
         sqlx::query(
             "UPDATE tasks SET \
              status = 'completed', \
@@ -128,7 +125,6 @@ impl TaskExecutorHandler {
         .execute(self.db.pool())
         .await?;
 
-        // Enqueue outbound call to inform the user if they have a phone identity and it is urgent
         self.notify_user_via_call(owner, task_id, &title, response.trim())
             .await?;
 
@@ -153,7 +149,6 @@ impl TaskExecutorHandler {
             return Ok(());
         }
 
-        // Jev System 1 Urgency Gate: Avoid placing intrusive live telephone calls for routine tasks
         if let Some(jev) = &self.jev {
             let state = json!({
                 "task_title": title,
@@ -173,8 +168,6 @@ impl TaskExecutorHandler {
                 }
         }
 
-        // Durable task completion remains observable through task state. It
-        // cannot trigger a privileged outbound call.
         Ok(())
     }
 }

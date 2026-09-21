@@ -100,7 +100,6 @@ impl SummaryHandler {
             })
             .collect();
 
-        // Jev System 1 Pre-Filter: check if interaction contains meaningful updates
         if let Some(jev) = &self.jev {
             let mut transcript = String::new();
             for m in &messages {

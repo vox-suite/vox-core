@@ -38,11 +38,6 @@ pub struct ChannelIdentity {
     pub external_id: String,
 }
 
-/// The complete isolation key asserted by an authenticated host app.
-///
-/// Authentication of the host assertion is intentionally outside this type and
-/// is added by the host-trust module. Matching `host_user_id` values never imply
-/// that two subjects are the same user context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UserContextSubject {
     pub deployment_id: DeploymentId,
@@ -103,11 +98,6 @@ impl IdentityService {
         raw.chars().filter(|c| c.is_ascii_digit()).collect()
     }
 
-    /// Resolve a trusted host subject into exactly one isolated user context.
-    ///
-    /// The deployment, host app, and optional organization must already be
-    /// registered. Callers must authenticate the host assertion before crossing
-    /// this seam; arbitrary request payloads are not authority.
     pub async fn resolve_context(
         &self,
         subject: &UserContextSubject,
@@ -209,7 +199,6 @@ impl IdentityService {
         })
     }
 
-    /// Fail closed unless `user_id` belongs to the exact canonical context.
     pub async fn authorize_context(
         &self,
         context_id: UserContextId,
@@ -232,10 +221,6 @@ impl IdentityService {
         }
     }
 
-    /// Resolve a legacy channel assertion and attach its canonical owner.
-    ///
-    /// This is the compatibility interface for conversations, events, and
-    /// schedules while their callers migrate to authenticated host assertions.
     pub async fn resolve_legacy_owner(
         &self,
         identity: &ChannelIdentity,
@@ -244,8 +229,6 @@ impl IdentityService {
         self.owner_for_user(user_id).await
     }
 
-    /// Return the one canonical owner for an existing internal user, creating a
-    /// reserved legacy context when a pre-migration caller has not done so yet.
     pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
         if let Some(context_id) =
             sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
@@ -326,7 +309,6 @@ impl IdentityService {
         let channel = identity.channel.trim();
         let external_id = identity.external_id.trim();
 
-        // 1. Direct match on (channel, external_id)
         if let Some(id) = sqlx::query_scalar::<_, Uuid>(
             "SELECT user_id FROM user_identities WHERE channel = $1 AND external_id = $2",
         )
@@ -340,7 +322,6 @@ impl IdentityService {
 
         let mut tx = self.db.pool().begin().await?;
 
-        // 2. Cross-channel match: Link Phone and WhatsApp if digits match
         if channel == "phone" || channel == "whatsapp" {
             let normalized = Self::normalize_phone(external_id);
             if !normalized.is_empty() {
@@ -377,7 +358,6 @@ impl IdentityService {
             }
         }
 
-        // 3. New user
         let new_user =
             sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
                 .fetch_one(&mut *tx)

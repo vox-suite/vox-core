@@ -126,7 +126,6 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
 
-        // Seed name if provided via initiation_context (e.g. from WhatsApp profile)
         if let Some(init_ctx) = &request.initiation_context
             && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:")
         {
@@ -144,7 +143,6 @@ impl ConversationService {
             )
             .await?;
 
-        // Load prior messages in this call to maintain a running session
         let prior_messages = self.load_recent_messages(conversation_id).await?;
 
         let outcome = self
@@ -190,7 +188,8 @@ impl ConversationService {
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
-                "Hi there! It seems you're calling for the first time. How can I help you?".to_string()
+                "Hi there! It seems you're calling for the first time. How can I help you?"
+                    .to_string()
             };
 
             self.append_message(conversation_id, "assistant", &greeting)
@@ -350,7 +349,8 @@ impl ConversationService {
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
-                "Hi there! It seems you're calling for the first time. How can I help you?".to_string()
+                "Hi there! It seems you're calling for the first time. How can I help you?"
+                    .to_string()
             };
 
             self.append_message(conversation_id, "assistant", &greeting)
@@ -378,7 +378,10 @@ impl ConversationService {
             } else {
                 vec![
                     Ok("Hi there! ".to_string()),
-                    Ok("It seems you're calling for the first time. How can I help you?".to_string()),
+                    Ok(
+                        "It seems you're calling for the first time. How can I help you?"
+                            .to_string(),
+                    ),
                 ]
             };
             return Ok(Box::pin(futures_util::stream::iter(chunks)));
@@ -581,9 +584,8 @@ impl ConversationService {
             .filter(|name| !name.is_empty());
         let greeting = match name {
             Some(name) => format!("Hello {name}! How can I help you today?"),
-            None => {
-                "Hi there! It seems you're calling for the first time. How can I help you?".to_owned()
-            }
+            None => "Hi there! It seems you're calling for the first time. How can I help you?"
+                .to_owned(),
         };
         let key = Self::opening_key(&request.identity, &request.external_conversation_id);
         let mut openings = self.openings.lock().await;
@@ -766,8 +768,8 @@ impl ConversationService {
                 voice_signature,
                 ..
             }) => {
-                let found_name = explicit_name(&request.text)
-                    .or_else(|| extract_name_from_text(&request.text));
+                let found_name =
+                    explicit_name(&request.text).or_else(|| extract_name_from_text(&request.text));
                 let Some(name) = found_name else {
                     return Ok(VoiceVerificationOutcome::Intercept(
                         "Please introduce yourself by saying my name is, followed by your name."
@@ -837,8 +839,11 @@ impl ConversationService {
                     let similarity = sig.cosine_similarity(stored_sig);
                     tracing::info!(similarity, "CORE_VOICE_SIMILARITY");
                     if similarity < 0.55 {
-                        if let Ok(Some((matched_uid, _))) =
-                            self.memory.voiceprints().find_matching_user(sig, 0.65).await
+                        if let Ok(Some((matched_uid, _))) = self
+                            .memory
+                            .voiceprints()
+                            .find_matching_user(sig, 0.65)
+                            .await
                         {
                             self.memory
                                 .voiceprints()
@@ -926,7 +931,6 @@ impl ConversationService {
         .execute(&mut *tx)
         .await?;
 
-        // Enqueue post-conversation summarization job if not already enqueued
         sqlx::query(
             "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1) \
              ON CONFLICT DO NOTHING",
@@ -1069,13 +1073,10 @@ impl ConversationService {
     }
 }
 
-/// Extracts a user's stated name from an introductory or onboarding message
-/// (e.g. "My name is Rahul", "I'm Rahul", "Call me Rahul") to bypass synchronous tool calls.
 pub fn extract_name_from_text(text: &str) -> Option<String> {
     let t = text.trim();
     let lower = t.to_ascii_lowercase();
 
-    // Strip common conversational greeting prefixes like "hi", "hello", "hey"
     let mut cleaned_lower = lower.as_str();
     let mut cleaned_orig = t;
     for greeting in &[
@@ -1126,7 +1127,6 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
         }
     }
 
-    // Direct name utterance fallback: if it's 1-2 words and not a generic conversational phrase
     let trimmed = cleaned_orig.trim().trim_end_matches(['.', '!', '?']);
     let words: Vec<&str> = trimmed.split_whitespace().collect();
     if !words.is_empty()
@@ -1255,6 +1255,7 @@ fn explicit_name(text: &str) -> Option<String> {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
     #[test]
     fn phone_fragments_accumulate_but_full_retries_replace() {
         assert_eq!(accumulate_phone("98765", "43210"), "9876543210");

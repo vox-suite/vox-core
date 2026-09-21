@@ -35,9 +35,11 @@ impl ContextCache for GreetingCache {
     async fn get(&self, _: UserId) -> Result<Option<String>, CacheError> {
         panic!("opening must not load user context")
     }
+
     async fn set(&self, _: UserId, _: &str) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn get_greeting_name(
         &self,
         channel: &str,

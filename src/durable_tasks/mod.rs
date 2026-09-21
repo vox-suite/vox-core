@@ -15,6 +15,7 @@ pub enum RunState {
     Cancelled,
     Failed,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitReason {
@@ -24,18 +25,21 @@ pub enum WaitReason {
     Authentication,
     Reconciliation,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct StartTaskRequest {
     pub title: String,
     pub instruction: String,
     pub agent_external_key: Option<String>,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct WaitRequest {
     pub reason: WaitReason,
     #[serde(default)]
     pub checkpoint: Value,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DurableTask {
     pub id: Uuid,
@@ -44,15 +48,18 @@ pub struct DurableTask {
     pub run_id: Uuid,
     pub wait_reason: Option<WaitReason>,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ClaimedRun {
     pub task: DurableTask,
     pub checkpoint: Value,
 }
+
 #[derive(Clone)]
 pub struct DurableTaskService {
     db: Db,
 }
+
 #[derive(Debug, thiserror::Error)]
 pub enum DurableTaskError {
     #[error("task request is invalid")]
@@ -69,6 +76,7 @@ impl DurableTaskService {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
+
     pub async fn start(
         &self,
         context: &ResolvedUserContext,
@@ -97,6 +105,7 @@ impl DurableTaskService {
             wait_reason: None,
         })
     }
+
     pub async fn get(
         &self,
         context: &ResolvedUserContext,
@@ -104,6 +113,7 @@ impl DurableTaskService {
     ) -> Result<DurableTask, DurableTaskError> {
         self.load(context, task_id).await
     }
+
     pub async fn wait(
         &self,
         context: &ResolvedUserContext,
@@ -127,6 +137,7 @@ impl DurableTaskService {
         tx.commit().await?;
         self.load(context, task_id).await
     }
+
     pub async fn resume(
         &self,
         context: &ResolvedUserContext,
@@ -145,6 +156,7 @@ impl DurableTaskService {
         tx.commit().await?;
         self.load(context, task_id).await
     }
+
     pub async fn cancel(
         &self,
         context: &ResolvedUserContext,
@@ -160,9 +172,11 @@ impl DurableTaskService {
         tx.commit().await?;
         self.load(context, task_id).await
     }
+
     pub async fn recover_expired(&self, now: DateTime<Utc>) -> Result<u64, DurableTaskError> {
         Ok(sqlx::query("UPDATE task_runs SET state='queued',lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE state='running' AND lease_expires_at <= $1").bind(now).execute(self.db.pool()).await?.rows_affected())
     }
+
     pub async fn claim_next(
         &self,
         worker: &str,
@@ -193,6 +207,7 @@ impl DurableTaskService {
         task.state = RunState::Running;
         Ok(Some(ClaimedRun { task, checkpoint }))
     }
+
     async fn assert_selected(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -207,6 +222,7 @@ impl DurableTaskService {
             Err(DurableTaskError::NotFound)
         }
     }
+
     async fn lock_task(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -226,6 +242,7 @@ impl DurableTaskService {
             Err(DurableTaskError::NotFound)
         }
     }
+
     async fn context_for_task(
         &self,
         task_id: Uuid,
@@ -244,6 +261,7 @@ impl DurableTaskService {
             },
         })
     }
+
     async fn load(
         &self,
         context: &ResolvedUserContext,
@@ -262,6 +280,7 @@ impl DurableTaskService {
         })
     }
 }
+
 fn text(v: &str, max: usize) -> Result<String, DurableTaskError> {
     let v = v.trim();
     if v.is_empty() || v.len() > max {
@@ -270,6 +289,7 @@ fn text(v: &str, max: usize) -> Result<String, DurableTaskError> {
         Ok(v.into())
     }
 }
+
 fn state(v: &str) -> Result<RunState, DurableTaskError> {
     match v {
         "queued" => Ok(RunState::Queued),
@@ -281,6 +301,7 @@ fn state(v: &str) -> Result<RunState, DurableTaskError> {
         _ => Err(DurableTaskError::Invalid),
     }
 }
+
 fn wait(v: &str) -> Result<WaitReason, DurableTaskError> {
     match v {
         "clarification" => Ok(WaitReason::Clarification),
@@ -291,6 +312,7 @@ fn wait(v: &str) -> Result<WaitReason, DurableTaskError> {
         _ => Err(DurableTaskError::Invalid),
     }
 }
+
 fn wait_name(v: &WaitReason) -> &'static str {
     match v {
         WaitReason::Clarification => "clarification",

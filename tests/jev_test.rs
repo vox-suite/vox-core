@@ -113,18 +113,15 @@ fn test_system_one_response_deserialization() {
     assert_eq!(resp.usage.as_ref().unwrap().input_tokens, 312);
     assert_eq!(resp.usage.as_ref().unwrap().output_tokens, 48);
 
-    // Verify Noul
     let noul_ans = resp.answers.get("is_urgent").unwrap();
     assert_eq!(noul_ans.as_noul(), Some(0.92));
 
-    // Verify Choice
     let choice_ans = resp.answers.get("department").unwrap();
     let (choice, conf, probs) = choice_ans.as_choice().unwrap();
     assert_eq!(choice, "technical");
     assert_eq!(conf, 0.82);
     assert_eq!(probs.get("technical"), Some(&0.85));
 
-    // Verify Score
     let score_ans = resp.answers.get("frustration").unwrap();
     let (score, score_conf) = score_ans.as_score().unwrap();
     assert_eq!(score, 1.6);
@@ -151,7 +148,6 @@ fn test_schema_classification_thresholds() {
         }),
     };
 
-    // Fast path existing match
     let existing = SchemaClassificationResult::Existing {
         schema: descriptor.clone(),
         confidence: 0.94,
@@ -163,7 +159,6 @@ fn test_schema_classification_thresholds() {
         panic!("Expected existing schema classification");
     }
 
-    // Novelty path match
     let novel = SchemaClassificationResult::Novel {
         suggested_category: None,
         confidence: 0.95,

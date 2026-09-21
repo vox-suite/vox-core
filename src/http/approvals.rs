@@ -12,16 +12,19 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
+
 #[derive(Deserialize)]
 pub struct ProposeRequest {
     pub host_context: HostContextRequest,
     pub proposal: CreateProposalRequest,
 }
+
 #[derive(Deserialize)]
 pub struct ApproveRequest {
     pub host_context: HostContextRequest,
     pub details: serde_json::Value,
 }
+
 pub async fn propose(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -38,6 +41,7 @@ pub async fn propose(
         StatusCode::CREATED,
     )
 }
+
 pub async fn approve(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -55,6 +59,7 @@ pub async fn approve(
         StatusCode::OK,
     )
 }
+
 fn reply(r: Result<crate::approvals::Proposal, ApprovalError>, ok: StatusCode) -> Response {
     match r {
         Ok(v) => (ok, Json(v)).into_response(),
@@ -66,6 +71,7 @@ fn reply(r: Result<crate::approvals::Proposal, ApprovalError>, ok: StatusCode) -
         Err(ApprovalError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
 async fn context(
     trust: Option<&HostTrustService>,
     headers: &HeaderMap,

@@ -6,12 +6,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialCustody {
     PlatformHeld,
     ExternalOperator,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorizationState {
@@ -22,6 +24,7 @@ pub enum AuthorizationState {
     Cancelled,
     Failed,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AuthorizeConnectionRequest {
     pub integration_external_key: String,
@@ -33,6 +36,7 @@ pub struct AuthorizeConnectionRequest {
     pub expires_at: Option<DateTime<Utc>>,
     pub failure_code: Option<String>,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Connection {
     pub id: Uuid,
@@ -44,10 +48,12 @@ pub struct Connection {
     pub expires_at: Option<DateTime<Utc>>,
     pub failure_code: Option<String>,
 }
+
 #[derive(Clone)]
 pub struct ConnectionService {
     db: Db,
 }
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectionError {
     #[error("connection request invalid")]
@@ -57,10 +63,12 @@ pub enum ConnectionError {
     #[error("connection storage unavailable")]
     Database(#[from] sqlx::Error),
 }
+
 impl ConnectionService {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
+
     pub async fn record(
         &self,
         context: &ResolvedUserContext,
@@ -81,6 +89,7 @@ impl ConnectionService {
         })
     }
 }
+
 fn validate(r: &AuthorizeConnectionRequest) -> Result<(), ConnectionError> {
     if r.integration_external_key.trim().is_empty()
         || r.external_account_reference.trim().is_empty()
@@ -97,15 +106,18 @@ fn validate(r: &AuthorizeConnectionRequest) -> Result<(), ConnectionError> {
     }
     Ok(())
 }
+
 fn hash(v: &str) -> Vec<u8> {
     Sha256::digest(v.trim().as_bytes()).to_vec()
 }
+
 fn custody(v: &CredentialCustody) -> &'static str {
     match v {
         CredentialCustody::PlatformHeld => "platform_held",
         CredentialCustody::ExternalOperator => "external_operator",
     }
 }
+
 fn state(v: &AuthorizationState) -> &'static str {
     match v {
         AuthorizationState::Pending => "pending",

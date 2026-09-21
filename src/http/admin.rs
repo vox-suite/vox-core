@@ -26,6 +26,7 @@ impl RedisAdmin {
             permits: Semaphore::new(8),
         })
     }
+
     async fn connection(&self) -> Result<ConnectionManager, AdminError> {
         let client = self.client.as_ref().ok_or(AdminError::Unavailable)?;
         self.connection
@@ -42,6 +43,7 @@ enum AdminError {
     Invalid,
     Busy,
 }
+
 impl axum::response::IntoResponse for AdminError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
@@ -70,6 +72,7 @@ pub struct RedisQuery {
     r#match: Option<String>,
     key: Option<String>,
 }
+
 #[derive(Serialize)]
 struct Entry {
     key: String,

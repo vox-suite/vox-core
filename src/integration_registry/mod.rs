@@ -10,6 +10,7 @@ pub enum IntegrationProtocol {
     Mcp,
     Direct,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityEffect {
@@ -17,6 +18,7 @@ pub enum CapabilityEffect {
     Write,
     Mixed,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CapabilityDeclaration {
     pub external_key: String,
@@ -32,6 +34,7 @@ pub struct CapabilityDeclaration {
     #[serde(default)]
     pub optional_guarantees: Value,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RegisterIntegrationRequest {
     pub deployment_external_key: String,
@@ -41,12 +44,14 @@ pub struct RegisterIntegrationRequest {
     pub declaration_version: i32,
     pub capabilities: Vec<CapabilityDeclaration>,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SetIntegrationEnabledRequest {
     pub deployment_external_key: String,
     pub external_key: String,
     pub enabled: bool,
 }
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DiscoveredCapability {
     pub integration_external_key: String,
@@ -56,10 +61,12 @@ pub struct DiscoveredCapability {
     pub capability: CapabilityDeclaration,
     pub declaration_is_claim: bool,
 }
+
 #[derive(Clone)]
 pub struct IntegrationRegistry {
     db: Db,
 }
+
 #[derive(Debug, thiserror::Error)]
 pub enum IntegrationRegistryError {
     #[error("integration declaration is invalid")]
@@ -69,10 +76,12 @@ pub enum IntegrationRegistryError {
     #[error("integration storage unavailable")]
     Database(#[from] sqlx::Error),
 }
+
 impl IntegrationRegistry {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
+
     pub async fn register(
         &self,
         request: RegisterIntegrationRequest,
@@ -94,6 +103,7 @@ impl IntegrationRegistry {
         tx.commit().await?;
         Ok(())
     }
+
     pub async fn set_enabled(
         &self,
         request: SetIntegrationEnabledRequest,
@@ -106,6 +116,7 @@ impl IntegrationRegistry {
             Ok(())
         }
     }
+
     pub async fn discover(
         &self,
         deployment_external_key: &str,
@@ -115,6 +126,7 @@ impl IntegrationRegistry {
         rows.into_iter().map(row).collect()
     }
 }
+
 fn row(row: sqlx::postgres::PgRow) -> Result<DiscoveredCapability, IntegrationRegistryError> {
     Ok(DiscoveredCapability {
         integration_external_key: row.try_get(0)?,
@@ -142,6 +154,7 @@ fn row(row: sqlx::postgres::PgRow) -> Result<DiscoveredCapability, IntegrationRe
         declaration_is_claim: true,
     })
 }
+
 async fn deployment_id(db: &Db, key: &str) -> Result<Uuid, IntegrationRegistryError> {
     sqlx::query_scalar("SELECT id FROM platform_deployments WHERE external_key=$1")
         .bind(n(key, 255).ok_or(IntegrationRegistryError::Invalid)?)
@@ -149,6 +162,7 @@ async fn deployment_id(db: &Db, key: &str) -> Result<Uuid, IntegrationRegistryEr
         .await?
         .ok_or(IntegrationRegistryError::NotFound)
 }
+
 fn validate(request: &RegisterIntegrationRequest) -> Result<(), IntegrationRegistryError> {
     if n(&request.external_key, 255).is_none()
         || n(&request.display_name, 255).is_none()
@@ -165,10 +179,12 @@ fn validate(request: &RegisterIntegrationRequest) -> Result<(), IntegrationRegis
     }
     Ok(())
 }
+
 fn n(v: &str, max: usize) -> Option<String> {
     let v = v.trim();
     (!v.is_empty() && v.len() <= max).then(|| v.to_owned())
 }
+
 fn strings(v: Vec<String>) -> Result<Vec<String>, IntegrationRegistryError> {
     if v.len() > 64 {
         return Err(IntegrationRegistryError::Invalid);
@@ -177,12 +193,14 @@ fn strings(v: Vec<String>) -> Result<Vec<String>, IntegrationRegistryError> {
         .map(|x| n(&x, 255).ok_or(IntegrationRegistryError::Invalid))
         .collect()
 }
+
 fn protocol_name(v: &IntegrationProtocol) -> &'static str {
     match v {
         IntegrationProtocol::Mcp => "mcp",
         IntegrationProtocol::Direct => "direct",
     }
 }
+
 fn effect_name(v: &CapabilityEffect) -> &'static str {
     match v {
         CapabilityEffect::Read => "read",

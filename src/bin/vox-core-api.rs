@@ -38,8 +38,7 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
-    let state =
-        AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
+    let state = AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
 
     axum::serve(listener, router(state))
         .await

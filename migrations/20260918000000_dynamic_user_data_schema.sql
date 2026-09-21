@@ -19,16 +19,13 @@ CREATE TABLE IF NOT EXISTS data_schemas (
 CREATE INDEX IF NOT EXISTS data_schemas_lookup_idx ON data_schemas (user_id, namespace, name);
 CREATE INDEX IF NOT EXISTS data_schemas_gin_schema ON data_schemas USING gin (json_schema);
 
--- Add schema_id reference and optional vector embedding to user_records
 ALTER TABLE user_records ADD COLUMN IF NOT EXISTS schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL;
 ALTER TABLE user_records ADD COLUMN IF NOT EXISTS embedding vector(768);
 CREATE INDEX IF NOT EXISTS user_records_user_schema_idx ON user_records (user_id, schema_id, occurred_at DESC);
 
--- Allow user_goals and user_insights to reference data_schemas
 ALTER TABLE user_goals ADD COLUMN IF NOT EXISTS schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL;
 ALTER TABLE user_insights ADD COLUMN IF NOT EXISTS schema_id UUID REFERENCES data_schemas(id) ON DELETE SET NULL;
 
--- Seed common default global schemas (user_id IS NULL)
 INSERT INTO data_schemas (user_id, namespace, name, version, description, json_schema)
 VALUES
     (

@@ -218,8 +218,6 @@ impl AgentRegistry {
             .collect())
     }
 
-    /// Disablement changes availability without deleting a definition, model
-    /// history, or the grants that may become valid again if re-enabled.
     pub async fn set_enabled(
         &self,
         request: SetAgentEnabledRequest,

@@ -1,5 +1,3 @@
-// Public-seam acceptance test: proposal creation, user-context approval, and
-// single-attempt consumption must remain correct regardless of storage shape.
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -34,6 +32,7 @@ async fn setup() -> Db {
     db.migrate().await.unwrap();
     db
 }
+
 async fn host(
     db: &Db,
     user: &str,
@@ -72,6 +71,7 @@ async fn host(
         request,
     )
 }
+
 fn signed_request(
     uri: String,
     body: Vec<u8>,
@@ -96,6 +96,7 @@ fn signed_request(
         .body(Body::from(body))
         .unwrap()
 }
+
 async fn context(db: &Db, user: &str) -> (String, vox_core::identity::ResolvedUserContext) {
     let trust = HostTrustService::new(db.clone());
     let host = trust
@@ -199,6 +200,7 @@ async fn approval_endpoint_rejects_agent_assertion_forgery_and_replay() {
         StatusCode::UNAUTHORIZED
     );
 }
+
 async fn prepare(db: &Db, deployment: &str, context: &vox_core::identity::ResolvedUserContext) {
     let agents = AgentRegistry::new(db.clone());
     agents
@@ -277,6 +279,7 @@ async fn prepare(db: &Db, deployment: &str, context: &vox_core::identity::Resolv
         .await
         .unwrap();
 }
+
 fn proposal(
     task_id: Uuid,
     task_run_id: Uuid,

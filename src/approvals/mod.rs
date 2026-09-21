@@ -17,6 +17,7 @@ pub struct CreateProposalRequest {
     pub expires_at: DateTime<Utc>,
     pub replaces_proposal_id: Option<Uuid>,
 }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Proposal {
     pub id: Uuid,
@@ -25,11 +26,13 @@ pub struct Proposal {
     pub approval_id: Option<Uuid>,
     pub details: Value,
 }
+
 #[derive(Clone)]
 pub struct ApprovalService {
     db: Db,
     grants: CapabilityGrantService,
 }
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalError {
     #[error("proposal request invalid")]
@@ -45,6 +48,7 @@ pub enum ApprovalError {
     #[error("approval storage unavailable")]
     Database(#[from] sqlx::Error),
 }
+
 impl ApprovalService {
     pub fn new(db: Db) -> Self {
         Self {
@@ -52,6 +56,7 @@ impl ApprovalService {
             db,
         }
     }
+
     pub async fn propose(
         &self,
         context: &ResolvedUserContext,
@@ -100,6 +105,7 @@ impl ApprovalService {
             details,
         })
     }
+
     pub async fn approve(
         &self,
         context: &ResolvedUserContext,
@@ -136,6 +142,7 @@ impl ApprovalService {
             details: row.get("details"),
         })
     }
+
     pub async fn consume(
         &self,
         context: &ResolvedUserContext,
@@ -178,6 +185,7 @@ impl ApprovalService {
         Ok(())
     }
 }
+
 fn key(v: &str, max: usize) -> Result<String, ApprovalError> {
     let v = v.trim();
     if v.is_empty() || v.len() > max {
@@ -186,6 +194,7 @@ fn key(v: &str, max: usize) -> Result<String, ApprovalError> {
         Ok(v.into())
     }
 }
+
 fn hash(v: &Value) -> Result<Vec<u8>, ApprovalError> {
     serde_json::to_vec(v)
         .map(|b| Sha256::digest(b).to_vec())

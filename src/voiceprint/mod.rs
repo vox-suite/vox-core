@@ -27,7 +27,6 @@ impl VoiceSignature {
         }
     }
 
-    /// Computes cosine similarity between two voice signatures in [-1.0, 1.0].
     pub fn cosine_similarity(&self, other: &Self) -> f64 {
         if self.features.is_empty()
             || other.features.is_empty()
@@ -54,28 +53,24 @@ impl VoiceSignature {
         (dot / denom) as f64
     }
 
-    /// Parses a raw voice signature string representation (JSON object, JSON array, or comma-separated floats).
     pub fn from_raw(raw: &str) -> Option<Self> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None;
         }
 
-        // 1. JSON object with `features` field
         if let Ok(sig) = serde_json::from_str::<VoiceSignature>(trimmed)
             && !sig.features.is_empty()
         {
             return Some(sig);
         }
 
-        // 2. JSON array of floats `[0.1, 0.2, ...]`
         if let Ok(features) = serde_json::from_str::<Vec<f32>>(trimmed)
             && !features.is_empty()
         {
             return Some(Self::new(features));
         }
 
-        // 3. Comma-separated floats `0.1, 0.2, ...`
         let parsed: Vec<f32> = trimmed
             .split(',')
             .filter_map(|s| s.trim().parse::<f32>().ok())
@@ -103,7 +98,6 @@ impl VoiceprintService {
         Self { db }
     }
 
-    /// Retrieves the stored voice signature for a user if enrolled.
     pub async fn get_voiceprint(
         &self,
         user_id: UserId,
@@ -123,7 +117,6 @@ impl VoiceprintService {
         Ok(None)
     }
 
-    /// Saves or updates the enrolled voice signature for a user.
     pub async fn save_voiceprint(
         &self,
         user_id: UserId,
@@ -150,7 +143,6 @@ impl VoiceprintService {
         Ok(())
     }
 
-    /// Finds an existing user ID by their registered profile name (case-insensitive).
     pub async fn find_user_by_name(&self, name: &str) -> Result<Option<UserId>, sqlx::Error> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -169,7 +161,6 @@ impl VoiceprintService {
         Ok(user_id.map(UserId))
     }
 
-    /// Retrieves all phone numbers associated with a user.
     pub async fn get_user_phones(&self, user_id: UserId) -> Result<Vec<String>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT external_id FROM user_identities \
@@ -182,7 +173,6 @@ impl VoiceprintService {
         Ok(rows.into_iter().map(|r| r.get("external_id")).collect())
     }
 
-    /// Creates a fresh user profile with the given name.
     pub async fn create_user_with_name(&self, name: &str) -> Result<UserId, sqlx::Error> {
         let mut tx = self.db.pool().begin().await?;
         let user_id =
@@ -208,7 +198,6 @@ impl VoiceprintService {
         Ok(user_id)
     }
 
-    /// Updates the active user of a conversation session when identity switches during a call.
     pub async fn update_conversation_user(
         &self,
         conversation_id: Uuid,
@@ -261,13 +250,10 @@ fn identity_storage_error(error: IdentityError) -> sqlx::Error {
     }
 }
 
-/// Normalizes and extracts numeric digits from speech text (e.g. "+91 98765-43210" -> "919876543210").
 pub fn extract_phone_digits(text: &str) -> String {
     text.chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
-/// Verifies if spoken phone digits match a registered phone number.
-/// Handles varying country codes and local suffixes (e.g., "9876543210" matching "+919876543210").
 pub fn verify_phone_match(spoken: &str, registered: &str) -> bool {
     let s_digits = extract_phone_digits(spoken);
     let r_digits = extract_phone_digits(registered);
@@ -276,12 +262,10 @@ pub fn verify_phone_match(spoken: &str, registered: &str) -> bool {
         return false;
     }
 
-    // Direct equality
     if s_digits == r_digits {
         return true;
     }
 
-    // Suffix match (e.g. 10-digit phone spoken, registered has country code)
     if s_digits.len() >= 10 && r_digits.ends_with(&s_digits) {
         return true;
     }
@@ -338,23 +322,19 @@ mod tests {
 
     #[test]
     fn test_from_raw_formats() {
-        // JSON struct
         let raw_json = r#"{"features": [0.1, 0.2, 0.3], "sample_count": 2, "model": "test"}"#;
         let sig = VoiceSignature::from_raw(raw_json).unwrap();
         assert_eq!(sig.features, vec![0.1, 0.2, 0.3]);
         assert_eq!(sig.sample_count, 2);
 
-        // JSON array
         let raw_arr = r#"[0.4, 0.5, 0.6]"#;
         let sig2 = VoiceSignature::from_raw(raw_arr).unwrap();
         assert_eq!(sig2.features, vec![0.4, 0.5, 0.6]);
 
-        // Comma-separated
         let raw_csv = "0.7, 0.8, 0.9";
         let sig3 = VoiceSignature::from_raw(raw_csv).unwrap();
         assert_eq!(sig3.features, vec![0.7, 0.8, 0.9]);
 
-        // Empty / invalid
         assert_eq!(VoiceSignature::from_raw(""), None);
         assert_eq!(VoiceSignature::from_raw("invalid"), None);
     }
@@ -375,6 +355,7 @@ mod tests {
 #[cfg(test)]
 mod quality_tests {
     use super::*;
+
     #[test]
     fn only_real_compatible_sufficient_samples_are_comparable() {
         let mut signature = VoiceSignature::new(vec![1.0, 0.5]);

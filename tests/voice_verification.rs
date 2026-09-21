@@ -48,7 +48,6 @@ async fn synthetic_voice_cannot_override_phone_identity() {
     let rahul_phone = "+919876543210";
     let priya_phone = "+919123456789";
 
-    // 0. Pre-seed an existing user "Priya" with phone "+919123456789"
     let priya_uid: uuid::Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
         .fetch_one(db.pool())
         .await
@@ -71,11 +70,8 @@ async fn synthetic_voice_cannot_override_phone_identity() {
     .unwrap();
 
     let sig_rahul = VoiceSignature::new(vec![1.0, 0.0, 0.0]);
-    let sig_different = VoiceSignature::new(vec![0.0, 1.0, 0.0]); // orthogonal (similarity = 0.0)
+    let sig_different = VoiceSignature::new(vec![0.0, 1.0, 0.0]);
 
-    // -------------------------------------------------------------------------
-    // Step 1: First call from Rahul's number - onboard name + enroll voiceprint
-    // -------------------------------------------------------------------------
     let req1 = Request::post("/v1/conversations/respond")
         .header("authorization", "Bearer test-token")
         .header("content-type", "application/json")
@@ -94,9 +90,6 @@ async fn synthetic_voice_cannot_override_phone_identity() {
         .to_string();
     assert!(text1.contains("Nice to meet you Rahul!"), "got: {text1}");
 
-    // -------------------------------------------------------------------------
-    // Step 2: Next call from Rahul's phone - Girlfriend speaks with different voice
-    // -------------------------------------------------------------------------
     let req2 = Request::post("/v1/conversations/respond")
         .header("authorization", "Bearer test-token")
         .header("content-type", "application/json")

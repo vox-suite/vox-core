@@ -1,4 +1,3 @@
--- Reserve one compatibility scope for callers that still identify users by channel.
 INSERT INTO platform_deployments (external_key)
 VALUES ('vox.legacy.deployment')
 ON CONFLICT (external_key) DO NOTHING;
@@ -9,8 +8,6 @@ FROM platform_deployments
 WHERE external_key = 'vox.legacy.deployment'
 ON CONFLICT (deployment_id, external_key) DO NOTHING;
 
--- A user remains the compatibility join key during expansion, but every user now
--- receives one stable context. Existing canonical contexts are preserved.
 INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id)
 SELECT d.id, h.id, u.id::text, u.id
 FROM users u
@@ -79,9 +76,6 @@ ALTER TABLE actions
     NOT VALID;
 ALTER TABLE actions VALIDATE CONSTRAINT actions_user_context_owner_fkey;
 
--- Related resources must share the same compatibility owner. Because one user
--- belongs to one canonical context, these constraints also prevent cross-context
--- project, schedule, task, event, and device relationships.
 ALTER TABLE projects ADD CONSTRAINT projects_id_user_id_key UNIQUE (id, user_id);
 ALTER TABLE scheduled_tasks
     ADD CONSTRAINT scheduled_tasks_id_user_id_key UNIQUE (id, user_id);

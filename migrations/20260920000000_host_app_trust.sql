@@ -1,6 +1,3 @@
--- Host-app credentials authenticate the host assertion, not an end user. The
--- secret is returned only at creation time; the platform retains its SHA-256
--- verifier and never needs to persist the raw secret.
 ALTER TABLE host_apps
     ADD COLUMN allowed_origins TEXT[] NOT NULL DEFAULT '{}'::text[];
 
@@ -31,9 +28,6 @@ CREATE INDEX host_app_credentials_active_idx
     ON host_app_credentials (id)
     WHERE state = 'active';
 
--- A signed assertion is single-use inside its short validity window. Keeping
--- only the nonce, credential ID, and expiry makes replay prevention durable
--- without retaining host-user assertions or signing material.
 CREATE TABLE host_app_assertion_nonces (
     credential_id UUID NOT NULL REFERENCES host_app_credentials(id) ON DELETE CASCADE,
     nonce UUID NOT NULL,

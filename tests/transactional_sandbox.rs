@@ -1,6 +1,4 @@
 #![cfg(feature = "sandbox")]
-//! PostgreSQL acceptance coverage for the synthetic provider through Core's
-//! actual proposal, approval, execution, and durable-status boundaries.
 
 use chrono::{Duration, Utc};
 use uuid::Uuid;
@@ -227,8 +225,6 @@ async fn sandbox_reconciliation_recovers_unknown_without_a_second_dispatch() {
     );
     assert_eq!(sandbox.dispatch_count("restart-key"), 1);
 
-    // Recreating provider state after a process restart cannot change the
-    // idempotency identity. Only reconciliation may resolve the unknown result.
     let restarted = TransactionalSandbox::from_snapshot(sandbox.snapshot());
     restarted.script("restart-key", Scenario::ReconcileSuccess);
     let reconciled = coordinator

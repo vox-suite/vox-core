@@ -48,7 +48,6 @@ impl JevClient {
         self
     }
 
-    /// Evaluates multiple typed questions in a single parallel pass against the provided state.
     pub async fn evaluate(
         &self,
         state: Value,
@@ -86,7 +85,6 @@ impl JevClient {
         Ok(response)
     }
 
-    /// Convenience helper to run a single Choice question.
     pub async fn choice(
         &self,
         state: Value,
@@ -114,7 +112,6 @@ impl JevClient {
         }
     }
 
-    /// Convenience helper to evaluate a binary Noul question.
     pub async fn noul(&self, state: Value, question_instructions: &str) -> Result<f64, JevError> {
         let mut questions = HashMap::new();
         questions.insert("check".to_string(), Question::noul(question_instructions));

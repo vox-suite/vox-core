@@ -23,7 +23,6 @@ impl ToolRouter {
         Self { jev }
     }
 
-    /// Evaluates which tool domain is needed for the given user transcript in ~50-100ms.
     pub async fn classify(&self, prompt: &str) -> Result<(ToolDomain, f64), JevError> {
         let state = json!({ "user_prompt": prompt });
         let instructions = "Select the single external capability required to satisfy the user's request, or 'none' if it can be answered conversationally.";

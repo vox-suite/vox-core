@@ -41,14 +41,12 @@ impl From<sqlx::Error> for RecordToolError {
     }
 }
 
-/// Validates record data payload against a registered JSON schema definition.
 pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), String> {
     let data_obj = match data.as_object() {
         Some(obj) => obj,
         None => return Err("record data payload must be a JSON object".to_string()),
     };
 
-    // Check required properties
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
         for req_field in required {
             if let Some(field_name) = req_field.as_str()
@@ -59,7 +57,6 @@ pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), 
         }
     }
 
-    // Check property types and basic constraints
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
         for (field_name, field_spec) in properties {
             if let Some(val) = data_obj.get(field_name) {
@@ -88,7 +85,6 @@ pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), 
                     }
                 }
 
-                // Check enum constraints
                 if let Some(enum_vals) = field_spec.get("enum").and_then(|e| e.as_array())
                     && !enum_vals.iter().any(|v| v == val)
                 {
@@ -97,7 +93,6 @@ pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), 
                     ));
                 }
 
-                // Check numerical bounds
                 if let Some(num) = val.as_f64() {
                     if let Some(min) = field_spec.get("minimum").and_then(|m| m.as_f64())
                         && num < min
@@ -131,10 +126,6 @@ fn json_type_name(val: &Value) -> &'static str {
         Value::Object(_) => "object",
     }
 }
-
-// ============================================================================
-// Tool: DefineDataSchema
-// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DefineDataSchemaArgs {
@@ -214,7 +205,6 @@ impl Tool for DefineDataSchema {
             ));
         }
 
-        // Determine current version if previously defined for this user
         let current_version = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(version), 0) FROM data_schemas WHERE user_id = $1 AND namespace = $2 AND name = $3",
         )
@@ -261,10 +251,6 @@ impl Tool for DefineDataSchema {
         }))
     }
 }
-
-// ============================================================================
-// Tool: ListDataSchemas
-// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListDataSchemasArgs {
@@ -366,10 +352,6 @@ impl Tool for ListDataSchemas {
     }
 }
 
-// ============================================================================
-// Tool: CreateUserRecord (Schema-driven & Type-safe)
-// ============================================================================
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CreateUserRecordArgs {
     pub schema_id: Option<String>,
@@ -464,7 +446,6 @@ impl Tool for CreateUserRecord {
 
         let data_val = args.data.unwrap_or_else(|| json!({}));
 
-        // Resolve schema if schema_id or namespace/schema_name was provided
         let mut target_schema_id: Option<Uuid> = None;
         let mut resolved_domain = args.domain.clone();
         let mut resolved_entity_type = args.entity_type.clone();
@@ -564,10 +545,6 @@ impl Tool for CreateUserRecord {
         }))
     }
 }
-
-// ============================================================================
-// Tool: ListUserRecords
-// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListUserRecordsArgs {
@@ -698,10 +675,6 @@ impl Tool for ListUserRecords {
         Ok(json!({ "records": records }))
     }
 }
-
-// ============================================================================
-// Tool: ManageUserGoal
-// ============================================================================
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ManageUserGoalArgs {

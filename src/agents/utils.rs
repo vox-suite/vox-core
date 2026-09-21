@@ -1,7 +1,3 @@
-//! Agent helper utilities.
-
-/// Strips surrounding markdown code block fences (e.g. ```json ... ```) from raw LLM output,
-/// returning the inner JSON string suitable for serde_json parsing.
 pub fn structured_json(raw: &str) -> &str {
     let trimmed = raw.trim();
     trimmed

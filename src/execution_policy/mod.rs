@@ -9,9 +9,6 @@ use uuid::Uuid;
 const MAX_KEY_BYTES: usize = 511;
 const CURRENCY_BYTES: usize = 3;
 
-/// The complete provider, model, account, connection, and quoted price that a
-/// user saw in an action proposal. Callers must supply it again before an
-/// execution attempt; Core never fills in an alternative value.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExecutionIdentity {
     pub provider_external_key: String,
@@ -32,7 +29,6 @@ pub struct ExecutionRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SpendingPolicyRequest {
     pub capability_external_key: String,
-    /// `None` means this cap applies to every provider for the capability.
     pub provider_external_key: Option<String>,
     pub currency: String,
     pub max_amount_minor: i64,
@@ -49,7 +45,6 @@ pub struct OperationalQuotaRequest {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PolicyDecision {
-    /// Versioned limits and quota that were evaluated for this attempt.
     pub policy_snapshot: Value,
 }
 
@@ -79,8 +74,6 @@ impl ExecutionPolicyService {
         Self { db }
     }
 
-    /// Record a user-context spending ceiling. This is only a constraint: it
-    /// does not create, approve, or consume any action proposal.
     pub async fn set_spending_policy(
         &self,
         context: &ResolvedUserContext,
@@ -112,8 +105,6 @@ impl ExecutionPolicyService {
         Ok(())
     }
 
-    /// Configure a quota for one exact paid-provider identity. It intentionally
-    /// has no provider/model/account/connection fallback.
     pub async fn set_operational_quota(
         &self,
         context: &ResolvedUserContext,
@@ -147,9 +138,6 @@ impl ExecutionPolicyService {
         Ok(())
     }
 
-    /// Atomically check all independent constraints and reserve the exact quota
-    /// slot for this attempt. A successful result is not action authority: the
-    /// caller must still consume the independently authenticated approval.
     pub async fn evaluate(
         &self,
         context: &ResolvedUserContext,

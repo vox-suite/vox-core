@@ -125,8 +125,6 @@ impl ConversationAgent {
 
         let agent =
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
-                // Fast-path: 0 tools declared for pure conversation or greetings.
-                // Eliminates tool declarations, reducing TTFT from ~4.5s to <500ms.
                 client
                     .agent(&self.model)
                     .preamble(preamble)
@@ -611,7 +609,9 @@ mod tests {
     #[test]
     fn preserves_audio_tags_and_pauses_for_elevenlabs() {
         assert_eq!(
-            spoken_response("[thoughtful] Let me check your calendar... [happy] You are free tomorrow!"),
+            spoken_response(
+                "[thoughtful] Let me check your calendar... [happy] You are free tomorrow!"
+            ),
             "[thoughtful] Let me check your calendar... [happy] You are free tomorrow!"
         );
     }

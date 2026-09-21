@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Request payload sent to the TypeSafe AI System One evaluation endpoint.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SystemOneRequest {
     pub state: Value,
@@ -10,7 +9,6 @@ pub struct SystemOneRequest {
     pub questions: HashMap<String, Question>,
 }
 
-/// A typed question submitted to Jev for parallel evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Question {
@@ -38,7 +36,6 @@ pub struct NoulCriteria {
 }
 
 impl Question {
-    /// Creates a binary (yes/no) question.
     pub fn noul(instructions: impl Into<Value>) -> Self {
         Self::Noul {
             instructions: instructions.into(),
@@ -46,7 +43,6 @@ impl Question {
         }
     }
 
-    /// Creates a binary question with custom true/false rubric definitions.
     pub fn noul_with_criteria(
         instructions: impl Into<Value>,
         true_meaning: impl Into<String>,
@@ -61,7 +57,6 @@ impl Question {
         }
     }
 
-    /// Creates a choice question with descriptions for each option.
     pub fn choice<I, K, V>(instructions: impl Into<Value>, options: I) -> Self
     where
         I: IntoIterator<Item = (K, Option<V>)>,
@@ -78,7 +73,6 @@ impl Question {
         }
     }
 
-    /// Creates a choice question where each option has null criteria.
     pub fn choice_simple(instructions: impl Into<Value>, options: &[&str]) -> Self {
         let criteria = options.iter().map(|opt| (opt.to_string(), None)).collect();
         Self::Choice {
@@ -87,7 +81,6 @@ impl Question {
         }
     }
 
-    /// Creates a score question rated across an ordered list of levels.
     pub fn score(instructions: impl Into<Value>, levels: &[&str]) -> Self {
         Self::Score {
             instructions: instructions.into(),
@@ -96,7 +89,6 @@ impl Question {
     }
 }
 
-/// Response returned by the TypeSafe AI System One evaluation endpoint.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SystemOneResponse {
     pub model: String,
@@ -111,7 +103,6 @@ pub struct Usage {
     pub output_tokens: i64,
 }
 
-/// A typed answer returned by Jev.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Answer {

@@ -12,20 +12,24 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
+
 #[derive(Deserialize)]
 pub struct ContextRequest {
     pub host_context: HostContextRequest,
 }
+
 #[derive(Deserialize)]
 pub struct StartRequest {
     pub host_context: HostContextRequest,
     pub task: StartTaskRequest,
 }
+
 #[derive(Deserialize)]
 pub struct WaitBody {
     pub host_context: HostContextRequest,
     pub wait: WaitRequest,
 }
+
 pub async fn start(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -39,6 +43,7 @@ pub async fn start(
     };
     reply(tasks.start(&c, r.task).await, StatusCode::CREATED)
 }
+
 pub async fn get(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -53,6 +58,7 @@ pub async fn get(
     };
     reply(tasks.get(&c, id).await, StatusCode::OK)
 }
+
 pub async fn wait(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -67,6 +73,7 @@ pub async fn wait(
     };
     reply(tasks.wait(&c, id, r.wait).await, StatusCode::OK)
 }
+
 pub async fn resume(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -81,6 +88,7 @@ pub async fn resume(
     };
     reply(tasks.resume(&c, id).await, StatusCode::OK)
 }
+
 pub async fn cancel(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -95,6 +103,7 @@ pub async fn cancel(
     };
     reply(tasks.cancel(&c, id).await, StatusCode::OK)
 }
+
 fn reply(
     r: Result<crate::durable_tasks::DurableTask, DurableTaskError>,
     ok: StatusCode,
@@ -107,6 +116,7 @@ fn reply(
         Err(DurableTaskError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
 async fn context(
     trust: Option<&HostTrustService>,
     headers: &HeaderMap,

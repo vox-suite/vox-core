@@ -21,12 +21,10 @@ pub struct SchemaDescriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SchemaClassificationResult {
-    /// Matched an existing schema with high confidence (fast path).
     Existing {
         schema: SchemaDescriptor,
         confidence: f64,
     },
-    /// Low confidence or explicitly classified as UNKNOWN_NEW_CATEGORY (novelty path).
     Novel {
         suggested_category: Option<String>,
         confidence: f64,
@@ -45,7 +43,6 @@ impl SchemaClassifier {
         Self { jev, db }
     }
 
-    /// Fetches all active schemas registered for a user (or system standard).
     pub async fn load_user_schemas(
         &self,
         user_id: Uuid,
@@ -83,7 +80,6 @@ impl SchemaClassifier {
         Ok(schemas)
     }
 
-    /// Evaluates raw payload against existing schemas using Jev Choice.
     pub async fn classify(
         &self,
         user_id: Uuid,
@@ -104,7 +100,6 @@ impl SchemaClassifier {
             });
         }
 
-        // Build options map for Jev Choice: [qualified_name -> description] + UNKNOWN_NEW_CATEGORY
         let mut options: Vec<(String, Option<String>)> = schemas
             .iter()
             .map(|s| (s.qualified_name.clone(), Some(s.description.clone())))

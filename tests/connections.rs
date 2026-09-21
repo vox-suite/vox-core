@@ -17,6 +17,7 @@ async fn setup() -> Db {
     db.migrate().await.unwrap();
     db
 }
+
 async fn context(db: &Db) -> (String, vox_core::identity::ResolvedUserContext) {
     let trust = HostTrustService::new(db.clone());
     let host = trust
@@ -42,6 +43,7 @@ async fn context(db: &Db) -> (String, vox_core::identity::ResolvedUserContext) {
         .unwrap();
     (host.deployment_external_key, context)
 }
+
 async fn enable(db: &Db, deployment: &str) {
     let registry = IntegrationRegistry::new(db.clone());
     registry
@@ -72,6 +74,7 @@ async fn enable(db: &Db, deployment: &str) {
         .await
         .unwrap()
 }
+
 fn request(state: AuthorizationState) -> AuthorizeConnectionRequest {
     AuthorizeConnectionRequest {
         integration_external_key: "calendar".into(),
@@ -83,6 +86,7 @@ fn request(state: AuthorizationState) -> AuthorizeConnectionRequest {
         failure_code: None,
     }
 }
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn connection_is_context_bound_and_reports_truthful_lifecycle() {

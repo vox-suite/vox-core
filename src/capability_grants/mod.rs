@@ -9,7 +9,6 @@ const MAX_CAPABILITY_KEY_BYTES: usize = 511;
 pub struct CreateGrantRequest {
     pub agent_external_key: String,
     pub connection_id: Uuid,
-    /// A canonical capability key: `<integration external key>.<capability external key>`.
     pub capability_external_key: String,
 }
 
@@ -41,7 +40,6 @@ impl CapabilityGrantService {
         Self { db }
     }
 
-    /// Create (or restore) exactly one grant. Definitions merely express interest.
     pub async fn grant(
         &self,
         context: &ResolvedUserContext,
@@ -115,8 +113,6 @@ impl CapabilityGrantService {
         })
     }
 
-    /// Return only grants that remain effective now. Every dependent authority
-    /// condition is re-evaluated so revocation and policy changes fail closed.
     pub async fn effective_for_agent(
         &self,
         context: &ResolvedUserContext,
@@ -157,8 +153,6 @@ impl CapabilityGrantService {
             .collect()
     }
 
-    /// Revoke a single agent's authority while leaving other agents and
-    /// connections untouched. The record remains as audit history.
     pub async fn revoke(
         &self,
         context: &ResolvedUserContext,

@@ -25,6 +25,7 @@ impl ConversationResponder for Echo {
         ))
     }
 }
+
 fn request(identity: ChannelIdentity, call: &str, text: &str) -> RespondRequest {
     RespondRequest {
         identity,
@@ -37,6 +38,7 @@ fn request(identity: ChannelIdentity, call: &str, text: &str) -> RespondRequest 
         tts_provider: None,
     }
 }
+
 async fn database() -> Db {
     let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database required"))
         .await
@@ -44,6 +46,7 @@ async fn database() -> Db {
     db.migrate().await.unwrap();
     db
 }
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn phone_retry_preserves_owner_and_active_speaker() {

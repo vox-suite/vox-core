@@ -24,6 +24,7 @@ struct Entry {
     started: Instant,
     work: Work,
 }
+
 #[derive(Clone)]
 pub(super) struct SpeculationCache(
     Arc<tokio::sync::Mutex<HashMap<Key, Entry>>>,

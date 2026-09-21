@@ -1,9 +1,3 @@
-//! Deterministic, synthetic provider behavior for tests and local development.
-//!
-//! This module is compiled only with the `sandbox` feature (or unit tests). It
-//! is not registered in integration discovery, accepts no credentials, and
-//! performs no network I/O.
-
 use crate::execution::{AdapterOutcome, AdapterRequest, ExecutionAdapter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,9 +37,6 @@ pub struct RefundObservation {
     pub evidence: Value,
 }
 
-/// An in-memory provider simulator keyed solely by the caller idempotency key.
-/// `snapshot` and `from_snapshot` make restart tests reproducible from recorded
-/// state; neither method writes durable platform records.
 #[derive(Clone, Default)]
 pub struct TransactionalSandbox {
     state: Arc<Mutex<SandboxSnapshot>>,
@@ -89,8 +80,6 @@ impl TransactionalSandbox {
             .unwrap_or_default()
     }
 
-    /// Provider effects are idempotent by provider reference even if a caller
-    /// delivers the same dispatch request more than once.
     pub fn effect_count(&self, provider_reference: &str) -> u32 {
         self.state
             .lock()
@@ -101,10 +90,6 @@ impl TransactionalSandbox {
             .unwrap_or_default()
     }
 
-    /// Models a provider-issued refund record without changing the original
-    /// execution outcome. Core will gain durable ancillary-event storage in a
-    /// later audit/reconciliation ticket; this simulator preserves the fact
-    /// that a refund is distinct from execution success.
     pub fn refund(&self, provider_reference: &str) -> RefundObservation {
         let evidence = json!({
             "sandbox": true,
@@ -122,9 +107,6 @@ impl TransactionalSandbox {
         }
     }
 
-    /// Returns recorded synthetic refund evidence, including after restoring a
-    /// `SandboxSnapshot`. This is intentionally provider-side history; it does
-    /// not alter Core's original execution outcome.
     pub fn refund_evidence(&self, provider_reference: &str) -> Option<Value> {
         self.state
             .lock()
@@ -181,9 +163,6 @@ impl ExecutionAdapter for TransactionalSandbox {
             Scenario::Rejection => AdapterOutcome::Failed {
                 code: "sandbox_rejected".into(),
             },
-            // The adapter can only report the changed quote. Core's immutable
-            // proposal identity/policy boundary is what rejects execution and
-            // requires a fresh proposal before another provider attempt.
             Scenario::PriceChanged => AdapterOutcome::Failed {
                 code: "sandbox_fresh_proposal_required".into(),
             },

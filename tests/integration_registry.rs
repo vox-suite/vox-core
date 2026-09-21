@@ -13,6 +13,7 @@ async fn setup() -> Db {
     db.migrate().await.unwrap();
     db
 }
+
 async fn deployment(db: &Db) -> String {
     HostTrustService::new(db.clone())
         .register_host_app(RegisterHostAppRequest {
@@ -24,6 +25,7 @@ async fn deployment(db: &Db) -> String {
         .unwrap()
         .deployment_external_key
 }
+
 fn registration(
     deployment_external_key: &str,
     key: &str,
@@ -46,6 +48,7 @@ fn registration(
         }],
     }
 }
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn discovery_only_returns_enabled_protocol_neutral_claims() {

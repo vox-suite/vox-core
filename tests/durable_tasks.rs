@@ -13,6 +13,7 @@ async fn setup() -> Db {
     db.migrate().await.unwrap();
     db
 }
+
 async fn context(db: &Db) -> vox_core::identity::ResolvedUserContext {
     let trust = HostTrustService::new(db.clone());
     let host = trust
@@ -37,6 +38,7 @@ async fn context(db: &Db) -> vox_core::identity::ResolvedUserContext {
         .await
         .unwrap()
 }
+
 fn request() -> StartTaskRequest {
     StartTaskRequest {
         title: "Book a table".into(),

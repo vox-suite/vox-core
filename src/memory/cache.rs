@@ -17,6 +17,7 @@ pub trait ContextCache: Send + Sync {
     ) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
+
     async fn set_greeting_name(
         &self,
         _channel: &str,
@@ -25,38 +26,47 @@ pub trait ContextCache: Send + Sync {
     ) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn replace_greeting_names(
         &self,
         _names: &[(String, String, String)],
     ) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError>;
     async fn set(&self, user_id: UserId, value: &str) -> Result<(), CacheError>;
     async fn get_user_name(&self, _user_id: UserId) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
+
     async fn set_user_name(&self, _user_id: UserId, _name: &str) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn get_voice_signature(&self, _user_id: UserId) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
+
     async fn set_voice_signature(&self, _user_id: UserId, _sig: &str) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn get_user_id_by_name(&self, _name: &str) -> Result<Option<UserId>, CacheError> {
         Ok(None)
     }
+
     async fn set_user_id_by_name(&self, _name: &str, _user_id: UserId) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn get_verification_state(
         &self,
         _conversation_id: uuid::Uuid,
     ) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
+
     async fn set_verification_state(
         &self,
         _conversation_id: uuid::Uuid,
@@ -64,6 +74,7 @@ pub trait ContextCache: Send + Sync {
     ) -> Result<(), CacheError> {
         Ok(())
     }
+
     async fn clear_verification_state(
         &self,
         _conversation_id: uuid::Uuid,
@@ -225,11 +236,7 @@ impl ContextCache for RedisContextCache {
     ) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
-            .set_ex(
-                format!("vox:verify-state:{conversation_id}"),
-                state,
-                86400,
-            )
+            .set_ex(format!("vox:verify-state:{conversation_id}"), state, 86400)
             .await
             .map_err(Into::into)
     }

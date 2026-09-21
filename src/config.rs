@@ -30,8 +30,7 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let jev_api_key = get("JEV_API_KEY")
-            .filter(|value| !value.trim().is_empty());
+        let jev_api_key = get("JEV_API_KEY").filter(|value| !value.trim().is_empty());
         let jev_enabled = jev_api_key.is_some();
         let jev_base_url = "https://api.typesafe.ai/v1/systemone".to_string();
         let tts_provider = get("VOX_TTS_PROVIDER")

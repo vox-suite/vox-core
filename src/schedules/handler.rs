@@ -13,8 +13,10 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct ScheduleHandler {
     db: Db,
-    #[allow(dead_code)] planner: Arc<dyn EventPlanning>,
-    #[allow(dead_code)] memory: MemoryService,
+    #[allow(dead_code)]
+    planner: Arc<dyn EventPlanning>,
+    #[allow(dead_code)]
+    memory: MemoryService,
     jev: Option<JevClient>,
 }
 
@@ -80,7 +82,6 @@ impl ScheduleHandler {
         };
         let instruction: String = row.get("instruction");
 
-        // Jev System 1 Pre-Filter: check if this occurrence requires an external action or phone call
         if let Some(jev) = &self.jev {
             let state = serde_json::json!({
                 "instruction": instruction,
@@ -100,8 +101,6 @@ impl ScheduleHandler {
                 }
         }
 
-        // Scheduled work cannot create external authority. Reminder delivery is
-        // implemented later through its own explicit, user-visible contract.
         Ok(())
     }
 }

@@ -1,9 +1,3 @@
-//! Executable, provider-neutral Platform V1 semantic contracts.
-//!
-//! The conformance runner deliberately depends only on commands and observable
-//! results. Future storage, HTTP, MCP, and provider adapters can implement
-//! [`PlatformAdapter`] and run the same versioned fixtures.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -203,7 +197,6 @@ pub enum EventKind {
     OutcomeRecorded,
 }
 
-/// The complete public surface required by the semantic fixture runner.
 pub trait PlatformAdapter {
     fn apply(&mut self, command: Command) -> Result<SemanticResult, SemanticError>;
 }
@@ -265,7 +258,6 @@ pub fn canonical_suite() -> ConformanceSuite {
         .expect("bundled conformance fixture must be valid")
 }
 
-/// Runs each scenario against a fresh adapter instance to prevent order coupling.
 pub fn run_suite<A, F>(suite: &ConformanceSuite, mut adapter_factory: F) -> RunReport
 where
     A: PlatformAdapter,
@@ -732,9 +724,6 @@ impl PlatformAdapter for ReferencePlatform {
     }
 }
 
-/// A serialized boundary that proves the fixtures are independent of Rust calls.
-/// A transport adapter can route these same request/response envelopes over HTTP,
-/// MCP, a queue, or an in-process FFI boundary.
 pub struct JsonBoundary<A> {
     inner: A,
 }

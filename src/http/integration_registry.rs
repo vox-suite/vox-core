@@ -24,6 +24,7 @@ pub async fn register(
         Err(e) => err(e),
     }
 }
+
 pub async fn set_enabled(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -40,6 +41,7 @@ pub async fn set_enabled(
         Err(e) => err(e),
     }
 }
+
 pub async fn discover(State(s): State<AppState>, h: HeaderMap, Path(k): Path<String>) -> Response {
     let Some(x) = s.integration_registry.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -52,6 +54,7 @@ pub async fn discover(State(s): State<AppState>, h: HeaderMap, Path(k): Path<Str
         Err(e) => err(e),
     }
 }
+
 fn err(e: IntegrationRegistryError) -> Response {
     match e {
         IntegrationRegistryError::Invalid => StatusCode::BAD_REQUEST.into_response(),

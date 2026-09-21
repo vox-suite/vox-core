@@ -1,5 +1,3 @@
-// Public-seam acceptance test: an approved proposal remains subject to exact
-// price/identity constraints, and a policy decision never consumes approval.
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

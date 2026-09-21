@@ -181,11 +181,7 @@ impl MemoryService {
         None
     }
 
-    pub async fn set_verification_state(
-        &self,
-        conversation_id: uuid::Uuid,
-        state: &str,
-    ) {
+    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
         if let Some(cache) = &self.cache {
             let _ = cache.set_verification_state(conversation_id, state).await;
         }

@@ -7,8 +7,8 @@ pub mod connections;
 pub mod conversations;
 pub mod durable_tasks;
 pub mod events;
-pub mod execution_policy;
 pub mod execution;
+pub mod execution_policy;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
@@ -117,7 +117,9 @@ impl AppState {
             execution_policy: Some(Arc::new(
                 crate::execution_policy::ExecutionPolicyService::new(db.clone()),
             )),
-            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(db.clone()))),
+            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(
+                db.clone(),
+            ))),
             conversations: Some(Arc::new(conv)),
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -158,7 +160,9 @@ impl AppState {
             execution_policy: Some(Arc::new(
                 crate::execution_policy::ExecutionPolicyService::new(db.clone()),
             )),
-            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(db.clone()))),
+            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(
+                db.clone(),
+            ))),
             conversations: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),

@@ -160,4 +160,3 @@ CREATE INDEX scheduled_tasks_due_idx ON scheduled_tasks (next_run_at)
     WHERE state = 'active';
 CREATE INDEX messages_conversation_idx ON messages (conversation_id, sequence_number);
 CREATE INDEX summaries_user_created_idx ON conversation_summaries (user_id, created_at DESC);
-

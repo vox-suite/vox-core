@@ -11,11 +11,13 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
+
 #[derive(Deserialize)]
 pub struct Request {
     pub host_context: HostContextRequest,
     pub authorization: AuthorizeConnectionRequest,
 }
+
 pub async fn authorize(
     State(s): State<AppState>,
     h: HeaderMap,

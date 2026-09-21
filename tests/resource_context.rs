@@ -7,11 +7,9 @@ use vox_core::{
     agents::{
         AgentError,
         conversation::{ConversationPrompt, ConversationResponder},
-        tools::{
-            tasks::{
-                CreateTask, CreateTaskArgs, GetTask, GetTaskArgs, ListTasks, ListTasksArgs,
-                TaskToolError, UpdateTask, UpdateTaskArgs,
-            },
+        tools::tasks::{
+            CreateTask, CreateTaskArgs, GetTask, GetTaskArgs, ListTasks, ListTasksArgs,
+            TaskToolError, UpdateTask, UpdateTaskArgs,
         },
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
@@ -298,5 +296,4 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
             .await
             .unwrap();
     assert_eq!(stored_owner, (alice.user_context_id.0, alice.user_id.0));
-
 }
