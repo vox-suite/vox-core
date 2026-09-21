@@ -13,6 +13,7 @@ pub struct Config {
     pub jev_base_url: String,
     pub jev_enabled: bool,
     pub tts_provider: String,
+    pub audit_admin_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -52,6 +53,8 @@ impl Config {
             jev_base_url,
             jev_enabled,
             tts_provider,
+            audit_admin_token: get("VOX_AUDIT_ADMIN_TOKEN")
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 }

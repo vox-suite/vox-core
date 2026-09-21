@@ -1,4 +1,5 @@
 pub mod agent_registry;
+pub mod audit;
 pub mod agents;
 pub mod approvals;
 pub mod bridge_client;

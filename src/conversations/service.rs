@@ -106,6 +106,18 @@ impl ConversationService {
 
     pub async fn respond(
         &self,
+        request: RespondRequest,
+    ) -> Result<RespondResponse, ConversationError> {
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        self.respond_for_owner(owner, request).await
+    }
+
+    pub async fn respond_for_owner(
+        &self,
+        owner: ResourceOwner,
         mut request: RespondRequest,
     ) -> Result<RespondResponse, ConversationError> {
         if request.identity.channel.trim().is_empty()
@@ -116,10 +128,6 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
             .await?;
         let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
@@ -245,6 +253,18 @@ impl ConversationService {
 
     pub async fn respond_stream(
         &self,
+        request: RespondRequest,
+    ) -> Result<ConversationTextStream, ConversationError> {
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        self.respond_stream_for_owner(owner, request).await
+    }
+
+    pub async fn respond_stream_for_owner(
+        &self,
+        owner: ResourceOwner,
         mut request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
         if request.identity.channel.trim().is_empty()
@@ -263,10 +283,6 @@ impl ConversationService {
         self.wait_for_opening(&request.identity, &request.external_conversation_id)
             .await?;
         let request_started = std::time::Instant::now();
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let identity_resolved = std::time::Instant::now();
         let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
@@ -913,6 +929,18 @@ impl ConversationService {
         &self,
         request: CompleteConversationRequest,
     ) -> Result<(), ConversationError> {
+        let owner = self
+            .identities
+            .resolve_legacy_owner(&request.identity)
+            .await?;
+        self.complete_for_owner(owner, request).await
+    }
+
+    pub async fn complete_for_owner(
+        &self,
+        owner: ResourceOwner,
+        request: CompleteConversationRequest,
+    ) -> Result<(), ConversationError> {
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
@@ -920,10 +948,6 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
             .await?;
         let conversation = sqlx::query(
             "SELECT id FROM conversations \
