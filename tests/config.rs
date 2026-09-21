@@ -3,7 +3,6 @@ use vox_core::config::Config;
 
 fn values() -> HashMap<&'static str, &'static str> {
     HashMap::from([
-        ("VOX_CORE_BIND_ADDRESS", "127.0.0.1:3001"),
         ("DATABASE_URL", "postgres://vox:test@db/vox"),
         ("VOX_CORE_SERVICE_TOKEN", "test-service-token"),
         ("GEMINI_API_KEY", "gemini-test-key"),
@@ -17,7 +16,7 @@ fn loads_required_configuration_without_redis() {
     let config = Config::from_values(|name| values.get(name).map(|value| value.to_string()))
         .expect("valid configuration");
 
-    assert_eq!(config.bind_address, "127.0.0.1:3001");
+    assert_eq!(config.bind_address, "0.0.0.0:3001");
     assert_eq!(config.database_url, "postgres://vox:test@db/vox");
     assert_eq!(config.redis_url, None);
     assert_eq!(config.service_token, "test-service-token");

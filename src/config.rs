@@ -39,14 +39,12 @@ impl Config {
             .unwrap_or_else(|| "elevenlabs".to_string());
 
         Ok(Self {
-            bind_address: non_empty(&get, "VOX_CORE_BIND_ADDRESS")?,
+            bind_address: "0.0.0.0:3001".to_string(),
             database_url: non_empty(&get, "DATABASE_URL")?,
-            redis_url: get("REDIS_URL").filter(|value| !value.trim().is_empty()),
+            redis_url: None,
             service_token: non_empty(&get, "VOX_CORE_SERVICE_TOKEN")?,
             gemini_api_key: non_empty(&get, "GEMINI_API_KEY")?,
-            gemini_model: get("GEMINI_MODEL")
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "gemini-3.5-flash-lite".to_owned()),
+            gemini_model: "gemini-3.5-flash-lite".to_string(),
             exa_api_key: non_empty(&get, "EXA_API_KEY")?,
             google_maps_api_key: get("GOOGLE_MAPS_API_KEY")
                 .filter(|value| !value.trim().is_empty()),
