@@ -22,6 +22,7 @@ pub mod memory;
 #[cfg(any(test, feature = "sandbox"))]
 pub mod sandbox;
 pub mod schedules;
+pub mod status;
 pub mod summaries;
 pub mod voiceprint;
 pub mod workers;
