@@ -40,7 +40,7 @@ impl Config {
         Ok(Self {
             bind_address: "0.0.0.0:3001".to_string(),
             database_url: non_empty(&get, "DATABASE_URL")?,
-            redis_url: None,
+            redis_url: get("REDIS_URL").filter(|value| !value.trim().is_empty()),
             service_token: non_empty(&get, "VOX_CORE_SERVICE_TOKEN")?,
             gemini_api_key: non_empty(&get, "GEMINI_API_KEY")?,
             gemini_model: "gemini-3.5-flash-lite".to_string(),

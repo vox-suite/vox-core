@@ -21,9 +21,17 @@ pub struct RedisAdmin {
 
 impl RedisAdmin {
     pub fn from_token(token: Option<String>) -> Result<Option<Self>, redis::RedisError> {
+        let env_url = std::env::var("REDIS_URL").ok();
+        Self::from_token_with_url(env_url.as_deref().or(Some(REDIS_URL)), token)
+    }
+
+    pub fn from_token_with_url(
+        url: Option<&str>,
+        token: Option<String>,
+    ) -> Result<Option<Self>, redis::RedisError> {
         token
             .filter(|value| !value.trim().is_empty())
-            .map(|token| Self::new(Some(REDIS_URL), token))
+            .map(|token| Self::new(url.or(Some(REDIS_URL)), token))
             .transpose()
     }
 

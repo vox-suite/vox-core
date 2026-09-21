@@ -12,6 +12,7 @@ pub mod execution_policy;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
+pub mod rate_limit;
 pub mod schedules;
 pub mod status;
 
@@ -34,6 +35,7 @@ use std::sync::{
 #[derive(Clone)]
 pub struct AppState {
     ready: Arc<AtomicBool>,
+    pub(crate) rate_limiter: rate_limit::RateLimiter,
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
@@ -57,6 +59,7 @@ impl AppState {
     pub fn new(ready: bool) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(ready)),
+            rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             agent_registry: None,
             approvals: None,
@@ -108,6 +111,7 @@ impl AppState {
         }
         Self {
             ready: Arc::new(AtomicBool::new(true)),
+            rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
@@ -149,9 +153,19 @@ impl AppState {
         self
     }
 
+    pub fn with_rate_limiter(mut self, limiter: rate_limit::RateLimiter) -> Self {
+        self.rate_limiter = limiter;
+        self
+    }
+
+    pub fn rate_limiter(&self) -> &rate_limit::RateLimiter {
+        &self.rate_limiter
+    }
+
     pub fn with_host_trust(db: Db, service_token: String) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
+            rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
@@ -225,6 +239,8 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let rate_limiter = state.rate_limiter.clone();
+
     Router::new()
         .route(
             "/v1/admin/redis",
@@ -332,6 +348,10 @@ pub fn router(state: AppState) -> Router {
             crate::host_trust::HOST_CONTEXT_PATH,
             post(host_apps::resolve_context),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit::rate_limit_middleware,
+        ))
         .with_state(state)
 }
 
