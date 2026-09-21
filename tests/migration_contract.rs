@@ -57,6 +57,7 @@ async fn migration_creates_the_complete_core_schema() {
         "passwordless_recovery_challenges",
         "platform_deployments",
         "scheduled_tasks",
+        "outbound_calls",
         "user_contexts",
         "user_identities",
         "user_profiles",
@@ -76,7 +77,7 @@ async fn migration_creates_the_complete_core_schema() {
     .fetch_all(&pool)
     .await
     .expect("list context-owned resources");
-    for expected in ["executions", "conversations", "scheduled_tasks", "tasks"] {
+    for expected in ["executions", "conversations", "scheduled_tasks", "tasks", "outbound_calls"] {
         assert!(
             scoped_resources.iter().any(|table| table == expected),
             "{expected} is missing canonical user-context ownership"

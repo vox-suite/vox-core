@@ -1,6 +1,7 @@
 pub mod agent_registry;
 pub mod agents;
 pub mod approvals;
+pub mod bridge_client;
 pub mod capability_grants;
 pub mod config;
 pub mod conformance;
@@ -19,6 +20,7 @@ pub mod integration_registry;
 pub mod jev;
 pub mod jobs;
 pub mod memory;
+pub mod outbound;
 #[cfg(any(test, feature = "sandbox"))]
 pub mod sandbox;
 pub mod schedules;

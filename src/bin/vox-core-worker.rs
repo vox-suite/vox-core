@@ -3,6 +3,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vox_core::{
     agents::{event_planner::GeminiEventPlanner, summarizer::GeminiSummarizer},
+    bridge_client::BridgeClient,
     config::Config,
     db::{Db, jobs::JobRepository},
     events::handler::EventHandler,
@@ -10,6 +11,7 @@ use vox_core::{
         MemoryService,
         cache::{ContextCache, RedisContextCache},
     },
+    outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
@@ -50,6 +52,14 @@ async fn main() {
     } else {
         (None, None, None)
     };
+
+    let bridge_client = config.bridge_url.as_ref().and_then(|url| {
+        BridgeClient::new(url.clone(), config.service_token.clone())
+            .ok()
+            .map(|c| Arc::new(c) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
+    });
+    let outbound = Arc::new(OutboundCallService::new(db.clone(), bridge_client));
+
     let events = EventHandler::with_jev(
         db.clone(),
         planner.clone(),
@@ -57,16 +67,19 @@ async fn main() {
         triager,
         schema_classifier,
     );
-    let schedules =
+    let mut schedules =
         ScheduleHandler::with_jev(db.clone(), planner, memory.clone(), jev_client.clone());
+    schedules = schedules.with_outbound(outbound.clone());
     let ticker = ScheduleTicker::new(db.clone());
 
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
     let summaries =
         SummaryHandler::with_jev(db.clone(), summarizer, memory.clone(), jev_client.clone());
-    let task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
+    let mut task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
+    task_executor = task_executor.with_outbound(outbound);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
 
+    let worker_id = Uuid::new_v4().to_string();
     let worker = Worker::with_all_handlers(
         JobRepository::new(db),
         events,
@@ -75,21 +88,18 @@ async fn main() {
         summaries,
         task_executor,
         wa_sweeper,
-        Uuid::new_v4().to_string(),
+        worker_id.clone(),
     );
     let cancellation = CancellationToken::new();
-    let greeting_sync = tokio::spawn(memory.run_greeting_sync(cancellation.clone()));
-    let shutdown = cancellation.clone();
+
+    let shutdown_signal = cancellation.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Vox Core Worker shutdown listener failed");
-        shutdown.cancel();
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("Worker shutting down via Ctrl+C");
+            shutdown_signal.cancel();
+        }
     });
-    worker
-        .run(cancellation.clone())
-        .await
-        .expect("Vox Core Worker failed");
-    cancellation.cancel();
-    let _ = greeting_sync.await;
+
+    tracing::info!(%worker_id, "Vox Core background worker started");
+    let _ = worker.run(cancellation).await;
 }

@@ -303,3 +303,27 @@ CREATE INDEX data_schemas_gin_schema ON data_schemas USING gin (json_schema);
 CREATE INDEX user_insights_user_idx ON user_insights (user_id, domain, outcome_status);
 CREATE INDEX client_devices_user_active_idx ON client_devices (user_id, is_active);
 CREATE INDEX actions_user_state_idx ON actions (user_id, state);
+
+CREATE TABLE outbound_calls (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_context_id UUID NOT NULL REFERENCES user_contexts(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    schedule_id UUID REFERENCES scheduled_tasks(id) ON DELETE SET NULL,
+    phone_number TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    opening_instruction TEXT NOT NULL,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    provider_call_id TEXT,
+    state TEXT NOT NULL DEFAULT 'initiated',
+    idempotency_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT outbound_calls_phone_not_empty CHECK (length(btrim(phone_number)) > 0),
+    CONSTRAINT outbound_calls_state_valid CHECK (state IN ('initiated', 'in_progress', 'completed', 'failed', 'busy', 'no_answer')),
+    CONSTRAINT outbound_calls_idempotency_key UNIQUE (idempotency_key)
+);
+
+CREATE INDEX outbound_calls_user_created_idx ON outbound_calls (user_id, created_at DESC);
+CREATE INDEX outbound_calls_state_idx ON outbound_calls (state, created_at);

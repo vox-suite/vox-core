@@ -5,6 +5,7 @@ use crate::{
     identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
     memory::MemoryService,
+    outbound::OutboundCallService,
 };
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -18,6 +19,7 @@ pub struct ScheduleHandler {
     #[allow(dead_code)]
     memory: MemoryService,
     jev: Option<JevClient>,
+    outbound: Option<Arc<OutboundCallService>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +44,7 @@ impl ScheduleHandler {
             planner,
             memory,
             jev: None,
+            outbound: None,
         }
     }
 
@@ -56,7 +59,13 @@ impl ScheduleHandler {
             planner,
             memory,
             jev,
+            outbound: None,
         }
+    }
+
+    pub fn with_outbound(mut self, outbound: Arc<OutboundCallService>) -> Self {
+        self.outbound = Some(outbound);
+        self
     }
 
     pub async fn handle(
@@ -76,7 +85,7 @@ impl ScheduleHandler {
 
         let row = row.ok_or(ScheduleHandlerError::NotFound)?;
         let user_id = UserId(row.get("user_id"));
-        let _owner = ResourceOwner {
+        let owner = ResourceOwner {
             user_context_id: UserContextId(row.get("user_context_id")),
             user_id,
         };
@@ -100,6 +109,58 @@ impl ScheduleHandler {
                     return Ok(());
                 }
         }
+
+        let user_context = self.memory.load(user_id).await.unwrap_or_default();
+        let planned = self
+            .planner
+            .plan(crate::agents::event_planner::EventPlanningPrompt {
+                user_id,
+                user_context,
+                event_type: "scheduled_task".into(),
+                occurred_at: occurrence_at,
+                payload: serde_json::json!({ "instruction": instruction }),
+            })
+            .await
+            .unwrap_or_default();
+
+        if !planned.is_empty() {
+            for action in planned {
+                match action {
+                    crate::agents::event_planner::PlannedAction::OutboundCall {
+                        reason,
+                        opening_instruction,
+                    } => {
+                        if let Some(outbound) = &self.outbound {
+                            let _ = outbound
+                                .initiate_call_for_user(
+                                    owner,
+                                    &reason,
+                                    &opening_instruction,
+                                    Some(schedule_id.0),
+                                    None,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        } else if let Some(outbound) = &self.outbound {
+            let reason = format!("Scheduled reminder: {}", instruction);
+            let opening = format!("Remind the user of their scheduled reminder: {}", instruction);
+            let _ = outbound
+                .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
+                .await;
+        }
+
+        // Complete any pending tasks linked to this scheduled instruction
+        let _ = sqlx::query(
+            "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
+             WHERE user_id = $1 AND status = 'pending' AND (raw_instruction = $2 OR title = $2)",
+        )
+        .bind(user_id.0)
+        .bind(&instruction)
+        .execute(self.db.pool())
+        .await;
 
         Ok(())
     }
