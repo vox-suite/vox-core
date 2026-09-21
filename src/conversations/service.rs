@@ -190,7 +190,7 @@ impl ConversationService {
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
-                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_string()
+                "Hi there! It seems you're calling for the first time. How can I help you?".to_string()
             };
 
             self.append_message(conversation_id, "assistant", &greeting)
@@ -350,7 +350,7 @@ impl ConversationService {
             let greeting = if let Some(ref name) = known_name {
                 format!("Hello {}! How can I help you today?", name.trim())
             } else {
-                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_string()
+                "Hi there! It seems you're calling for the first time. How can I help you?".to_string()
             };
 
             self.append_message(conversation_id, "assistant", &greeting)
@@ -377,8 +377,8 @@ impl ConversationService {
                 ]
             } else {
                 vec![
-                    Ok("Hello! I'm Vox, your personal AI assistant. ".to_string()),
-                    Ok("What should I call you?".to_string()),
+                    Ok("Hi there! ".to_string()),
+                    Ok("It seems you're calling for the first time. How can I help you?".to_string()),
                 ]
             };
             return Ok(Box::pin(futures_util::stream::iter(chunks)));
@@ -529,7 +529,7 @@ impl ConversationService {
         request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
         let started = std::time::Instant::now();
-        let name = if let Some(cache) = self.memory.cache() {
+        let mut name = if let Some(cache) = self.memory.cache() {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(100),
                 cache.get_greeting_name(
@@ -541,13 +541,40 @@ impl ConversationService {
             {
                 Ok(Ok(name)) => name,
                 _ => {
-                    tracing::warn!("Greeting cache unavailable; using generic greeting");
+                    tracing::warn!("Greeting cache unavailable; checking database");
                     None
                 }
             }
         } else {
             None
         };
+        if name.is_none() {
+            if let Ok(Ok(Some(db_name))) = tokio::time::timeout(
+                std::time::Duration::from_millis(150),
+                sqlx::query_scalar::<_, String>(
+                    "SELECT p.facts->>'name' FROM user_identities i JOIN user_profiles p ON p.user_id = i.user_id WHERE i.channel = $1 AND i.external_id = $2 AND p.facts->>'name' IS NOT NULL",
+                )
+                .bind(request.identity.channel.trim())
+                .bind(request.identity.external_id.trim())
+                .fetch_optional(self.db.pool()),
+            )
+            .await
+            {
+                let trimmed = db_name.trim().to_string();
+                if !trimmed.is_empty() {
+                    if let Some(cache) = self.memory.cache() {
+                        let _ = cache
+                            .set_greeting_name(
+                                request.identity.channel.trim(),
+                                request.identity.external_id.trim(),
+                                &trimmed,
+                            )
+                            .await;
+                    }
+                    name = Some(trimmed);
+                }
+            }
+        }
         let name = name
             .as_deref()
             .map(str::trim)
@@ -555,7 +582,7 @@ impl ConversationService {
         let greeting = match name {
             Some(name) => format!("Hello {name}! How can I help you today?"),
             None => {
-                "Hello! I'm Vox, your personal AI assistant. What should I call you?".to_owned()
+                "Hi there! It seems you're calling for the first time. How can I help you?".to_owned()
             }
         };
         let key = Self::opening_key(&request.identity, &request.external_conversation_id);

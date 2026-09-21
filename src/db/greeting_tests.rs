@@ -102,7 +102,7 @@ async fn cached_greeting_does_not_wait_for_database() {
 async fn cache_miss_greets_without_database() {
     assert_eq!(
         greeting(None, Duration::ZERO).await,
-        "Hello! I'm Vox, your personal AI assistant. What should I call you?"
+        "Hi there! It seems you're calling for the first time. How can I help you?"
     );
 }
 
@@ -110,7 +110,7 @@ async fn cache_miss_greets_without_database() {
 async fn slow_cache_falls_back_without_database() {
     assert_eq!(
         greeting(Some("Rahul"), Duration::from_secs(30)).await,
-        "Hello! I'm Vox, your personal AI assistant. What should I call you?"
+        "Hi there! It seems you're calling for the first time. How can I help you?"
     );
 }
 

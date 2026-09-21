@@ -26,11 +26,11 @@ async fn main() {
         ConversationAgent::with_db(&config, db.clone())
             .expect("Vox Core agent configuration is invalid"),
     );
-    let cache = config.redis_url.as_deref().map(|url| {
-        Arc::new(RedisContextCache::new(url).expect("Vox Core Redis URL is invalid"))
-            as Arc<dyn ContextCache>
-    });
+    let cache = RedisContextCache::new("redis://redis:6379")
+        .ok()
+        .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
+    let _ = memory.sync_greeting_names().await;
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");

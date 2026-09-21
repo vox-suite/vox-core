@@ -17,6 +17,14 @@ pub trait ContextCache: Send + Sync {
     ) -> Result<Option<String>, CacheError> {
         Ok(None)
     }
+    async fn set_greeting_name(
+        &self,
+        _channel: &str,
+        _external_id: &str,
+        _name: &str,
+    ) -> Result<(), CacheError> {
+        Ok(())
+    }
     async fn replace_greeting_names(
         &self,
         _names: &[(String, String, String)],
@@ -87,6 +95,20 @@ impl ContextCache for RedisContextCache {
         let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
         connection
             .hget("vox:greeting-names", field)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn set_greeting_name(
+        &self,
+        channel: &str,
+        external_id: &str,
+        name: &str,
+    ) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
+        connection
+            .hset("vox:greeting-names", field, name.trim())
             .await
             .map_err(Into::into)
     }
@@ -191,7 +213,7 @@ impl ContextCache for RedisContextCache {
     ) -> Result<Option<String>, CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
-            .get(format!("vox:verification-state:{}", conversation_id))
+            .get(format!("vox:verify-state:{conversation_id}"))
             .await
             .map_err(Into::into)
     }
@@ -204,9 +226,9 @@ impl ContextCache for RedisContextCache {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
             .set_ex(
-                format!("vox:verification-state:{}", conversation_id),
+                format!("vox:verify-state:{conversation_id}"),
                 state,
-                3600,
+                86400,
             )
             .await
             .map_err(Into::into)
@@ -218,7 +240,7 @@ impl ContextCache for RedisContextCache {
     ) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         connection
-            .del(format!("vox:verification-state:{}", conversation_id))
+            .del(format!("vox:verify-state:{conversation_id}"))
             .await
             .map_err(Into::into)
     }

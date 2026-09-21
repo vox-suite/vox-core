@@ -28,10 +28,9 @@ async fn main() {
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
-    let cache = config.redis_url.as_deref().map(|url| {
-        Arc::new(RedisContextCache::new(url).expect("Vox Core Redis URL is invalid"))
-            as Arc<dyn ContextCache>
-    });
+    let cache = RedisContextCache::new("redis://redis:6379")
+        .ok()
+        .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
 
     let (triager, schema_classifier, jev_client) = if let Some(ref api_key) = config.jev_api_key {

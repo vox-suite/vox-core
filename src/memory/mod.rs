@@ -88,6 +88,19 @@ impl MemoryService {
         if let Some(cache) = &self.cache {
             let _ = cache.set_user_name(user_id, trimmed).await;
             let _ = cache.set_user_id_by_name(trimmed, user_id).await;
+            if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
+                "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
+            )
+            .bind(user_id.0)
+            .fetch_all(self.db.pool())
+            .await
+            {
+                for (channel, external_id) in identities {
+                    let _ = cache
+                        .set_greeting_name(&channel, &external_id, trimmed)
+                        .await;
+                }
+            }
         }
 
         Ok(())
@@ -128,11 +141,13 @@ impl MemoryService {
                 signature.sample_duration_ms.min(i32::MAX as u64) as i32,
             )
             .await?;
+
         if let Some(cache) = &self.cache {
             let _ = cache
                 .set_voice_signature(user_id, &signature.to_json())
                 .await;
         }
+
         Ok(())
     }
 
@@ -148,28 +163,29 @@ impl MemoryService {
             return Ok(Some(uid));
         }
 
-        let user_id = self.voiceprints.find_user_by_name(trimmed).await?;
-        if let Some(uid) = user_id
+        let uid = self.voiceprints.find_user_by_name(trimmed).await?;
+        if let Some(uid) = uid
             && let Some(cache) = &self.cache
         {
             let _ = cache.set_user_id_by_name(trimmed, uid).await;
         }
-        Ok(user_id)
+        Ok(uid)
     }
 
     pub async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Option<String> {
-        if let Some(cache) = &self.cache {
-            cache
-                .get_verification_state(conversation_id)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            None
+        if let Some(cache) = &self.cache
+            && let Ok(Some(state)) = cache.get_verification_state(conversation_id).await
+        {
+            return Some(state);
         }
+        None
     }
 
-    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
+    pub async fn set_verification_state(
+        &self,
+        conversation_id: uuid::Uuid,
+        state: &str,
+    ) {
         if let Some(cache) = &self.cache {
             let _ = cache.set_verification_state(conversation_id, state).await;
         }
@@ -192,8 +208,22 @@ impl MemoryService {
             .fetch_optional(self.db.pool())
             .await
             {
-                let _ = cache.set_user_name(user_id, &name).await;
-                let _ = cache.set_user_id_by_name(&name, user_id).await;
+                let trimmed = name.trim();
+                let _ = cache.set_user_name(user_id, trimmed).await;
+                let _ = cache.set_user_id_by_name(trimmed, user_id).await;
+                if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
+                    "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
+                )
+                .bind(user_id.0)
+                .fetch_all(self.db.pool())
+                .await
+                {
+                    for (channel, external_id) in identities {
+                        let _ = cache
+                            .set_greeting_name(&channel, &external_id, trimmed)
+                            .await;
+                    }
+                }
             }
         }
         Ok(())
