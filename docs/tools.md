@@ -264,17 +264,51 @@ This document details all agent tools available to the Gemini conversation agent
 
 ## 7. Telephony & Outbound Calling Tools
 
-### `trigger_outbound_call`
-- **Module**: `crate::agents::tools::calls::TriggerOutboundCall`
-- **Description**: Triggers an outbound phone call to the user to speak with them live, deliver an urgent update, or inform them of a completed task.
+### `schedule_outbound_call`
+- **Module**: `crate::agents::tools::calls::ScheduleOutboundCall`
+- **Description**: Schedules a reminder or notification that automatically triggers an outbound phone call to the user when due. Vox schedules the task, and at the designated time, initiates a phone call to the user via Twilio. When answered, Vox immediately speaks the opening instruction before continuing the conversational turn.
+- **Example user prompts**:
+  - *"Call me after 5 min and remind me to clean my room"*
+  - *"Call me in 30 minutes to check if the oven is preheated"*
+  - *"Schedule a reminder call for tomorrow at 9 AM to review the project roadmap"*
 - **Arguments**:
-  - `reason` *(required string)*: Brief internal reason for placing the call.
-  - `opening_instruction` *(required string)*: The spoken prompt the voice agent will deliver as soon as the user answers the phone.
+  - `reason` *(required string)*: Short title or description of the reminder or call reason (e.g. `"Clean room reminder"`).
+  - `opening_instruction` *(required string)*: Spoken prompt / greeting that Vox should speak as soon as the user answers the phone call (e.g. `"Remind the user to clean their room as requested 5 minutes ago"`).
+  - `delay_seconds` *(optional integer)*: Number of seconds from now to place the call (e.g. `300` for 5 minutes).
+  - `delay_minutes` *(optional integer)*: Number of minutes from now to place the call (e.g. `5`).
+  - `run_at` *(optional string)*: Exact ISO 8601 timestamp for when to place the call (e.g. `"2026-09-21T15:30:00Z"`).
+  - `phone_number` *(optional string)*: Phone number override in E.164 format (e.g. `"+1234567890"`). If omitted, Vox uses the user's registered phone identity.
 - **Response**:
   ```json
   {
-    "status": "call_queued",
-    "action_id": "uuid",
-    "reason": "Flight search complete"
+    "status": "scheduled",
+    "schedule_id": "019207e0-4702-7c38-89c0-112233445566",
+    "task_id": "019207e0-4702-7c38-89c0-998877665544",
+    "phone_number": "+1234567890",
+    "scheduled_time": "2026-09-21T15:35:00Z",
+    "reason": "Clean room reminder",
+    "opening_instruction": "Remind the user to clean their room as requested 5 minutes ago",
+    "message": "Outbound call scheduled for 2026-09-21T15:35:00Z to call +1234567890 with reminder: Clean room reminder"
+  }
+  ```
+
+### `trigger_outbound_call`
+- **Module**: `crate::agents::tools::calls::TriggerOutboundCall`
+- **Description**: Immediately initiates an outbound phone call to the user to speak with them live right now (e.g., for critical alerts or when requested immediately).
+- **Arguments**:
+  - `reason` *(required string)*: Brief internal description of why the call is being made.
+  - `opening_instruction` *(required string)*: Spoken instruction Vox will deliver immediately upon the user answering.
+  - `phone_number` *(optional string)*: Phone number override in E.164 format. If omitted, uses the user's registered phone identity.
+- **Response**:
+  ```json
+  {
+    "status": "call_initiated",
+    "call_id": "019207e0-4702-7c38-89c0-112233445566",
+    "conversation_id": "019207e0-4702-7c38-89c0-776655443322",
+    "phone_number": "+1234567890",
+    "provider_call_id": "CA1234567890abcdef",
+    "reason": "Critical server alert",
+    "opening_instruction": "Inform the user that the production cluster reported high CPU usage",
+    "message": "Outbound call initiated to +1234567890 for Critical server alert"
   }
   ```

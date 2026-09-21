@@ -46,7 +46,7 @@ impl ToolRouter {
             (
                 "tasks_and_records",
                 Some(
-                    "Creating or checking tasks, reminders, logging notes, updating facts, or personal records",
+                    "Creating or checking tasks, reminders, scheduling outbound phone calls, initiating calls, logging notes, updating facts, or personal records",
                 ),
             ),
             (
@@ -78,5 +78,12 @@ impl ToolRouter {
         );
 
         Ok((domain, confidence))
+    }
+
+    pub async fn route(&self, prompt: &str) -> ToolDomain {
+        match self.classify(prompt).await {
+            Ok((domain, _)) => domain,
+            Err(_) => ToolDomain::All,
+        }
     }
 }

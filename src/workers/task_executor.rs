@@ -3,10 +3,12 @@ use crate::{
     db::Db,
     identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
+    outbound::OutboundCallService,
 };
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde_json::json;
 use sqlx::Row;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -15,29 +17,27 @@ pub struct TaskExecutorHandler {
     api_key: String,
     model: String,
     jev: Option<JevClient>,
+    outbound: Option<Arc<OutboundCallService>>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TaskExecutorError {
-    #[error("database error: {0}")]
+    #[error("task database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("task execution agent failure: {0}")]
+    Agent(String),
     #[error("task not found")]
     NotFound,
-    #[error("agent provider error: {0}")]
-    Agent(String),
 }
 
 impl TaskExecutorHandler {
     pub fn new(db: Db, config: &Config) -> Self {
-        let jev = config
-            .jev_api_key
-            .as_ref()
-            .map(|k| JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
         Self {
             db,
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
-            jev,
+            jev: None,
+            outbound: None,
         }
     }
 
@@ -47,7 +47,13 @@ impl TaskExecutorHandler {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
             jev,
+            outbound: None,
         }
+    }
+
+    pub fn with_outbound(mut self, outbound: Arc<OutboundCallService>) -> Self {
+        self.outbound = Some(outbound);
+        self
     }
 
     pub async fn handle(&self, task_id: Uuid) -> Result<(), TaskExecutorError> {
@@ -99,7 +105,7 @@ impl TaskExecutorHandler {
 
         let agent = client
             .agent(&self.model)
-            .preamble("You are a proactive autonomous worker. Fulfill the user's instructions directly and objectively.")
+            .preamble("You are Vox's background task execution engine. You process tasks autonomously and summarize the final result clearly.")
             .build();
 
         let response = agent
@@ -108,13 +114,13 @@ impl TaskExecutorHandler {
             .map_err(|e| TaskExecutorError::Agent(e.to_string()))?;
 
         let execution_result = json!({
+            "outcome": "success",
             "summary": response.trim(),
-            "completed_at": chrono::Utc::now().to_rfc3339()
+            "completed_at": chrono::Utc::now().to_rfc3339(),
         });
 
         sqlx::query(
-            "UPDATE tasks SET \
-             status = 'completed', \
+            "UPDATE tasks SET status = 'completed', \
              execution_result = $1, \
              completed_at = now(), \
              updated_at = now() \
@@ -166,6 +172,17 @@ impl TaskExecutorHandler {
                     );
                     return Ok(());
                 }
+        }
+
+        if let Some(outbound) = &self.outbound {
+            let reason = format!("Task notification: {}", title);
+            let opening = format!(
+                "Inform the user that their task '{}' has finished: {}",
+                title, summary
+            );
+            let _ = outbound
+                .initiate_call_for_user(owner, &reason, &opening, None, Some(task_id))
+                .await;
         }
 
         Ok(())

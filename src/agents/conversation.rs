@@ -4,7 +4,9 @@ use crate::{
     db::Db,
     identity::{ResourceOwner, UserId},
 };
+use crate::outbound::OutboundCallService;
 use async_trait::async_trait;
+use std::sync::Arc;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +46,7 @@ pub struct ConversationAgent {
     exa_api_key: String,
     google_maps_api_key: Option<String>,
     db: Option<Db>,
+    outbound: Option<Arc<OutboundCallService>>,
     tool_router: Option<crate::jev::ToolRouter>,
     tts_provider: String,
 }
@@ -79,6 +82,7 @@ impl ConversationAgent {
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
             db: None,
+            outbound: None,
             tool_router,
             tts_provider: config.tts_provider.clone(),
         })
@@ -86,8 +90,22 @@ impl ConversationAgent {
 
     pub fn with_db(config: &Config, db: Db) -> Result<Self, AgentError> {
         let mut agent = Self::new(config)?;
+        let bridge_client = config.bridge_url.as_ref().and_then(|url| {
+            crate::bridge_client::BridgeClient::new(url.clone(), config.service_token.clone())
+                .ok()
+                .map(|c| Arc::new(c) as Arc<dyn crate::bridge_client::OutboundBridge>)
+        });
+        agent.outbound = Some(Arc::new(OutboundCallService::new(
+            db.clone(),
+            bridge_client,
+        )));
         agent.db = Some(db);
         Ok(agent)
+    }
+
+    pub fn with_outbound(mut self, outbound: Arc<OutboundCallService>) -> Self {
+        self.outbound = Some(outbound);
+        self
     }
 
     pub fn with_tool_router(mut self, router: crate::jev::ToolRouter) -> Self {
@@ -159,6 +177,16 @@ impl ConversationAgent {
                         .preamble(preamble)
                         .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
                         .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                        .tool(tools::calls::ScheduleOutboundCall::new(
+                            self.db.clone(),
+                            self.outbound.clone(),
+                            prompt.owner,
+                        ))
+                        .tool(tools::calls::TriggerOutboundCall::new(
+                            self.db.clone(),
+                            self.outbound.clone(),
+                            prompt.owner,
+                        ))
                         .tool(tools::records::CreateUserRecord::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -212,6 +240,16 @@ impl ConversationAgent {
                         ))
                         .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
                         .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                        .tool(tools::calls::ScheduleOutboundCall::new(
+                            self.db.clone(),
+                            self.outbound.clone(),
+                            prompt.owner,
+                        ))
+                        .tool(tools::calls::TriggerOutboundCall::new(
+                            self.db.clone(),
+                            self.outbound.clone(),
+                            prompt.owner,
+                        ))
                         .tool(tools::records::CreateUserRecord::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -267,6 +305,16 @@ impl ConversationAgent {
                     .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                     .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
                     .tool(tools::tasks::UpdateTask::new(self.db.clone(), prompt.owner))
+                    .tool(tools::calls::ScheduleOutboundCall::new(
+                        self.db.clone(),
+                        self.outbound.clone(),
+                        prompt.owner,
+                    ))
+                    .tool(tools::calls::TriggerOutboundCall::new(
+                        self.db.clone(),
+                        self.outbound.clone(),
+                        prompt.owner,
+                    ))
                     .tool(tools::records::DefineDataSchema::new(
                         self.db.clone(),
                         prompt.user_id,
