@@ -11,6 +11,7 @@ pub mod conversations;
 pub mod db;
 pub mod durable_tasks;
 pub mod events;
+pub mod execution_policy;
 pub mod host_trust;
 pub mod http;
 pub mod identity;

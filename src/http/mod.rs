@@ -8,6 +8,7 @@ pub mod connections;
 pub mod conversations;
 pub mod durable_tasks;
 pub mod events;
+pub mod execution_policy;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
     pub(crate) db: Option<Db>,
     pub(crate) durable_tasks: Option<Arc<crate::durable_tasks::DurableTaskService>>,
+    pub(crate) execution_policy: Option<Arc<crate::execution_policy::ExecutionPolicyService>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
     pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
@@ -57,6 +59,7 @@ impl AppState {
             approvals: None,
             db: None,
             durable_tasks: None,
+            execution_policy: None,
             conversations: None,
             connections: None,
             capability_grants: None,
@@ -109,6 +112,9 @@ impl AppState {
             durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
                 db.clone(),
             ))),
+            execution_policy: Some(Arc::new(
+                crate::execution_policy::ExecutionPolicyService::new(db.clone()),
+            )),
             conversations: Some(Arc::new(conv)),
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -146,6 +152,9 @@ impl AppState {
             durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
                 db.clone(),
             ))),
+            execution_policy: Some(Arc::new(
+                crate::execution_policy::ExecutionPolicyService::new(db.clone()),
+            )),
             conversations: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -194,6 +203,14 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
         .route("/v1/action-proposals", post(approvals::propose))
+        .route(
+            "/v1/spending-policies",
+            post(execution_policy::set_spending_policy),
+        )
+        .route(
+            "/v1/operational-quotas",
+            post(execution_policy::set_operational_quota),
+        )
         .route(
             "/v1/action-proposals/{id}/approve",
             post(approvals::approve),
