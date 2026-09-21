@@ -66,6 +66,9 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             text: "hello".into(),
             initiation_context: None,
             voice_signature: None,
+            turn_id: None,
+            revision: None,
+            tts_provider: None,
         })
         .await
         .unwrap();
@@ -76,6 +79,9 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             text: "hello".into(),
             initiation_context: None,
             voice_signature: None,
+            turn_id: None,
+            revision: None,
+            tts_provider: None,
         })
         .await
         .unwrap();
@@ -163,6 +169,9 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             text: "resume".into(),
             initiation_context: None,
             voice_signature: None,
+            turn_id: None,
+            revision: None,
+            tts_provider: None,
         })
         .await
         .unwrap();

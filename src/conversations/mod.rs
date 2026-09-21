@@ -1,4 +1,5 @@
 pub mod service;
+pub(crate) mod speculation;
 
 use crate::identity::ChannelIdentity;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,12 @@ pub struct RespondRequest {
     pub initiation_context: Option<String>,
     #[serde(default)]
     pub voice_signature: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    #[serde(default)]
+    pub revision: Option<u64>,
+    #[serde(default)]
+    pub tts_provider: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,4 +35,13 @@ pub struct RespondResponse {
 pub struct CompleteConversationRequest {
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SpeculateRequest {
+    pub identity: ChannelIdentity,
+    pub external_conversation_id: String,
+    pub text: String,
+    pub turn_id: String,
+    pub revision: u64,
 }

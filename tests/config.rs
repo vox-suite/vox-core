@@ -27,6 +27,18 @@ fn loads_required_configuration_without_redis() {
     assert_eq!(config.jev_api_key, None);
     assert!(!config.jev_enabled);
     assert_eq!(config.jev_base_url, "https://api.typesafe.ai/v1/systemone");
+    assert_eq!(config.tts_provider, "elevenlabs");
+}
+
+#[test]
+fn loads_custom_tts_provider_when_set() {
+    let mut values = values();
+    values.insert("VOX_TTS_PROVIDER", "sarvam");
+
+    let config = Config::from_values(|name| values.get(name).map(|value| value.to_string()))
+        .expect("valid configuration");
+
+    assert_eq!(config.tts_provider, "sarvam");
 }
 
 #[test]

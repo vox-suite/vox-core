@@ -12,8 +12,9 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 pub use super::prompts::{
-    GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE, is_voice_channel,
-    onboarding_instruction, preamble_for_channel,
+    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE,
+    is_elevenlabs_provider, is_voice_channel, onboarding_instruction, preamble_for_channel,
+    preamble_for_channel_and_tts,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -32,6 +33,8 @@ pub struct ConversationPrompt {
     pub user_text: String,
     pub initiation_context: Option<String>,
     pub needs_onboarding: bool,
+    #[serde(default)]
+    pub tts_provider: Option<String>,
 }
 
 pub struct ConversationAgent {
@@ -42,6 +45,7 @@ pub struct ConversationAgent {
     google_maps_api_key: Option<String>,
     db: Option<Db>,
     tool_router: Option<crate::jev::ToolRouter>,
+    tts_provider: String,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -76,6 +80,7 @@ impl ConversationAgent {
             google_maps_api_key: config.google_maps_api_key.clone(),
             db: None,
             tool_router,
+            tts_provider: config.tts_provider.clone(),
         })
     }
 
@@ -97,7 +102,8 @@ impl ConversationAgent {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
 
         let is_voice = is_voice_channel(&prompt.channel);
-        let preamble = preamble_for_channel(&prompt.channel);
+        let tts = prompt.tts_provider.as_deref().unwrap_or(&self.tts_provider);
+        let preamble = preamble_for_channel_and_tts(&prompt.channel, Some(tts));
         let is_call_opening =
             is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
         let onboarding_instruction =
@@ -599,6 +605,14 @@ mod tests {
         assert_eq!(
             spoken_response("It looks busy near your office, so I'd leave ten minutes early."),
             "It looks busy near your office, so I'd leave ten minutes early."
+        );
+    }
+
+    #[test]
+    fn preserves_audio_tags_and_pauses_for_elevenlabs() {
+        assert_eq!(
+            spoken_response("[thoughtful] Let me check your calendar... [happy] You are free tomorrow!"),
+            "[thoughtful] Let me check your calendar... [happy] You are free tomorrow!"
         );
     }
 

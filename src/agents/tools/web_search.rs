@@ -37,7 +37,7 @@ impl WebSearch {
         })
     }
 
-    async fn call(&self, args: SearchArgs) -> Result<Value, io::Error> {
+    pub(crate) async fn call(&self, args: SearchArgs) -> Result<Value, io::Error> {
         let query = args.query.trim();
         if query.is_empty() {
             return Err(io::Error::other("Search query must not be empty"));

@@ -12,6 +12,8 @@ pub struct VoiceSignature {
     #[serde(default)]
     pub sample_count: usize,
     #[serde(default)]
+    pub sample_duration_ms: u64,
+    #[serde(default)]
     pub model: Option<String>,
 }
 
@@ -19,6 +21,7 @@ impl VoiceSignature {
     pub fn new(features: Vec<f32>) -> Self {
         Self {
             sample_count: 1,
+            sample_duration_ms: 0,
             model: Some("vox-v1".into()),
             features,
         }
@@ -211,13 +214,8 @@ impl VoiceprintService {
         conversation_id: Uuid,
         user_id: UserId,
     ) -> Result<(), sqlx::Error> {
-        let owner = IdentityService::new(self.db.clone())
-            .owner_for_user(user_id)
-            .await
-            .map_err(identity_storage_error)?;
-        sqlx::query("UPDATE conversations SET user_id = $1, user_context_id = $2 WHERE id = $3")
+        sqlx::query("UPDATE conversations SET active_user_id = $1 WHERE id = $2")
             .bind(user_id.0)
-            .bind(owner.user_context_id.0)
             .bind(conversation_id)
             .execute(self.db.pool())
             .await?;
@@ -244,7 +242,7 @@ pub fn verify_phone_match(spoken: &str, registered: &str) -> bool {
     let s_digits = extract_phone_digits(spoken);
     let r_digits = extract_phone_digits(registered);
 
-    if s_digits.is_empty() || r_digits.is_empty() {
+    if s_digits.len() < 10 || r_digits.len() < 10 {
         return false;
     }
 
@@ -254,57 +252,41 @@ pub fn verify_phone_match(spoken: &str, registered: &str) -> bool {
     }
 
     // Suffix match (e.g. 10-digit phone spoken, registered has country code)
-    if s_digits.len() >= 7 && r_digits.ends_with(&s_digits) {
+    if s_digits.len() >= 10 && r_digits.ends_with(&s_digits) {
         return true;
     }
 
-    if r_digits.len() >= 7 && s_digits.ends_with(&r_digits) {
+    if r_digits.len() >= 10 && s_digits.ends_with(&r_digits) {
         return true;
     }
 
     false
 }
 
-/// Verifies whether an incoming voice matches the registered user's voice signature.
-/// Uses Jev System 1 evaluation if configured, or falls back to standard cosine similarity threshold (>= 0.75).
-pub async fn verify_voice_match_with_jev(
-    jev: Option<&crate::jev::JevClient>,
-    similarity: f64,
-    registered_name: &str,
-) -> bool {
-    // 1. High-confidence heuristic bounds
-    if similarity >= 0.85 {
-        return true;
-    }
-    if similarity < 0.60 {
-        return false;
-    }
-
-    // 2. Ambiguous similarity region (0.60 .. 0.85): Use Jev System 1 choice evaluation if available
-    if let Some(client) = jev {
-        let state = serde_json::json!({
-            "cosine_similarity": similarity,
-            "registered_user": registered_name,
-            "decision_context": "Voice biometrics identity verification for incoming telephony call"
-        });
-
-        if let Ok((choice, confidence, _)) = client
-            .choice(
-                state,
-                "Determine if the incoming voice sample matches the registered user profile.",
-                &[
-                    ("match", Some("Acoustic features match the registered speaker with acceptable biometric tolerance")),
-                    ("mismatch", Some("Acoustic features indicate a different or distinct speaker")),
-                ],
-            )
-            .await
-            && confidence >= 0.70 {
-                return choice == "match";
-            }
+impl VoiceSignature {
+    pub fn usable(&self) -> bool {
+        self.sample_duration_ms >= 1000
+            && self.model.as_deref().is_some_and(|model| {
+                model.strip_prefix("onnx-sha256:").is_some_and(|hash| {
+                    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+            })
+            && !self.features.is_empty()
+            && self.features.iter().all(|v| v.is_finite())
+            && self
+                .features
+                .iter()
+                .map(|v| (*v as f64).powi(2))
+                .sum::<f64>()
+                > 0.0
     }
 
-    // 3. Fallback threshold
-    similarity >= 0.75
+    pub fn comparable(&self, other: &Self) -> bool {
+        self.usable()
+            && other.usable()
+            && self.model == other.model
+            && self.features.len() == other.features.len()
+    }
 }
 
 #[cfg(test)]
@@ -357,5 +339,28 @@ mod tests {
         ));
         assert!(!verify_phone_match("1234567890", "+919876543210"));
         assert!(!verify_phone_match("", "+919876543210"));
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+    #[test]
+    fn only_real_compatible_sufficient_samples_are_comparable() {
+        let mut signature = VoiceSignature::new(vec![1.0, 0.5]);
+        assert!(!signature.usable());
+        signature.model = Some(format!("onnx-sha256:{}", "a".repeat(64)));
+        signature.sample_duration_ms = 999;
+        assert!(!signature.usable());
+        signature.sample_duration_ms = 1000;
+        assert!(signature.comparable(&signature));
+        let mut other = signature.clone();
+        other.model = Some(format!("onnx-sha256:{}", "b".repeat(64)));
+        assert!(!signature.comparable(&other));
+        other = signature.clone();
+        other.features[0] = f32::NAN;
+        assert!(!other.usable());
+        other.features = vec![0.0, 0.0];
+        assert!(!other.usable());
     }
 }

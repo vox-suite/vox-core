@@ -81,6 +81,9 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
             text: "I prefer Bengaluru".into(),
             initiation_context: None,
             voice_signature: None,
+            turn_id: None,
+            revision: None,
+            tts_provider: None,
         })
         .await
         .unwrap();

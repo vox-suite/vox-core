@@ -74,6 +74,9 @@ async fn greeting(name: Option<&str>, delay: Duration) -> String {
         text: "The call just connected. Greet the user.".into(),
         initiation_context: None,
         voice_signature: None,
+        turn_id: None,
+        revision: None,
+        tts_provider: None,
     };
     tokio::time::timeout(Duration::from_millis(500), async {
         let mut stream = service.respond_stream(request).await.unwrap();
@@ -140,6 +143,9 @@ async fn replies_and_hangup_wait_for_opening_even_after_stream_is_dropped() {
         text: "The call just connected. Greet the user.".into(),
         initiation_context: None,
         voice_signature: None,
+        turn_id: None,
+        revision: None,
+        tts_provider: None,
     };
     let greeting = service.respond_stream(request.clone()).await.unwrap();
     drop(greeting);

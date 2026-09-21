@@ -52,9 +52,10 @@ pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), 
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
         for req_field in required {
             if let Some(field_name) = req_field.as_str()
-                && (!data_obj.contains_key(field_name) || data_obj[field_name].is_null()) {
-                    return Err(format!("missing required field '{field_name}'"));
-                }
+                && (!data_obj.contains_key(field_name) || data_obj[field_name].is_null())
+            {
+                return Err(format!("missing required field '{field_name}'"));
+            }
         }
     }
 
@@ -89,26 +90,29 @@ pub fn validate_data_against_schema(schema: &Value, data: &Value) -> Result<(), 
 
                 // Check enum constraints
                 if let Some(enum_vals) = field_spec.get("enum").and_then(|e| e.as_array())
-                    && !enum_vals.iter().any(|v| v == val) {
-                        return Err(format!(
-                            "field '{field_name}' with value '{val}' is not in allowed enum list"
-                        ));
-                    }
+                    && !enum_vals.iter().any(|v| v == val)
+                {
+                    return Err(format!(
+                        "field '{field_name}' with value '{val}' is not in allowed enum list"
+                    ));
+                }
 
                 // Check numerical bounds
                 if let Some(num) = val.as_f64() {
                     if let Some(min) = field_spec.get("minimum").and_then(|m| m.as_f64())
-                        && num < min {
-                            return Err(format!(
-                                "field '{field_name}' ({num}) is less than minimum permitted ({min})"
-                            ));
-                        }
+                        && num < min
+                    {
+                        return Err(format!(
+                            "field '{field_name}' ({num}) is less than minimum permitted ({min})"
+                        ));
+                    }
                     if let Some(max) = field_spec.get("maximum").and_then(|m| m.as_f64())
-                        && num > max {
-                            return Err(format!(
-                                "field '{field_name}' ({num}) exceeds maximum permitted ({max})"
-                            ));
-                        }
+                        && num > max
+                    {
+                        return Err(format!(
+                            "field '{field_name}' ({num}) exceeds maximum permitted ({max})"
+                        ));
+                    }
                 }
             }
         }

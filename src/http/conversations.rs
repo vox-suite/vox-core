@@ -48,6 +48,9 @@ pub async fn respond_stream(
     match service.respond_stream(request).await {
         Ok(stream) => {
             let sse_stream = stream.map(|item| match item {
+                Ok(delta) if delta == crate::conversations::speculation::LOOKUP_PENDING => {
+                    Ok("event: lookup_pending\ndata: {}\n\n".to_string())
+                }
                 Ok(delta) => {
                     let data = serde_json::json!({ "delta": delta }).to_string();
                     Ok::<_, std::convert::Infallible>(format!("data: {data}\n\n"))
@@ -93,6 +96,24 @@ pub async fn complete(
     }
     match service.complete(request).await {
         Ok(()) => StatusCode::OK.into_response(),
+        Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+pub async fn speculate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversations::SpeculateRequest>,
+) -> Response {
+    if !auth::authorized(&headers, &state.service_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(service) = state.conversations.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.speculate(request).await {
+        Ok(status) => Json(serde_json::json!({"status":status})).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }

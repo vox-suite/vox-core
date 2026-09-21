@@ -12,6 +12,7 @@ pub struct Config {
     pub jev_api_key: Option<String>,
     pub jev_base_url: String,
     pub jev_enabled: bool,
+    pub tts_provider: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -36,6 +37,9 @@ impl Config {
         let jev_base_url = get("JEV_BASE_URL")
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "https://api.typesafe.ai/v1/systemone".to_string());
+        let tts_provider = get("VOX_TTS_PROVIDER")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "elevenlabs".to_string());
 
         Ok(Self {
             bind_address: non_empty(&get, "VOX_CORE_BIND_ADDRESS")?,
@@ -53,6 +57,7 @@ impl Config {
             jev_api_key,
             jev_base_url,
             jev_enabled,
+            tts_provider,
         })
     }
 }

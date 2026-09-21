@@ -37,7 +37,7 @@ async fn setup() -> Db {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn test_full_voice_verification_and_identity_switch_flow() {
+async fn synthetic_voice_cannot_override_phone_identity() {
     let db = setup().await;
     let app = router(AppState::with_dependencies(
         db.clone(),
@@ -113,64 +113,17 @@ async fn test_full_voice_verification_and_identity_switch_flow() {
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(
-        text2,
-        "Your voice is not matching with Rahul. What is your name?"
-    );
-
-    // -------------------------------------------------------------------------
-    // Step 3: Girlfriend introduces herself as "Priya"
-    // System finds matching profile for Priya and asks for phone confirmation
-    // -------------------------------------------------------------------------
-    let req3 = Request::post("/v1/conversations/respond")
-        .header("authorization", "Bearer test-token")
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"identity":{{"channel":"phone","external_id":"{rahul_phone}"}},"external_conversation_id":"CALL-2","text":"I'm Priya"}}"#
-        )))
+    assert!(text2.starts_with("Agent response for user"));
+    let enrolled: i64 = sqlx::query_scalar("SELECT count(*) FROM user_voiceprints")
+        .fetch_one(db.pool())
+        .await
         .unwrap();
-
-    let res3 = app.clone().oneshot(req3).await.unwrap();
-    assert_eq!(res3.status(), StatusCode::OK);
-    let b3 = to_bytes(res3.into_body(), 4096).await.unwrap();
-    let text3 = serde_json::from_slice::<serde_json::Value>(&b3).unwrap()["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(
-        text3,
-        "I found a matching profile for Priya in my system. Can you tell me your phone number to confirm?"
-    );
-
-    // -------------------------------------------------------------------------
-    // Step 4: Priya states her phone number to confirm identity
-    // -------------------------------------------------------------------------
-    let req4 = Request::post("/v1/conversations/respond")
-        .header("authorization", "Bearer test-token")
-        .header("content-type", "application/json")
-        .body(Body::from(format!(
-            r#"{{"identity":{{"channel":"phone","external_id":"{rahul_phone}"}},"external_conversation_id":"CALL-2","text":"It is 9123456789"}}"#
-        )))
-        .unwrap();
-
-    let res4 = app.clone().oneshot(req4).await.unwrap();
-    assert_eq!(res4.status(), StatusCode::OK);
-    let b4 = to_bytes(res4.into_body(), 4096).await.unwrap();
-    let text4 = serde_json::from_slice::<serde_json::Value>(&b4).unwrap()["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        text4.contains("Awesome, verified! Hello Priya!"),
-        "got: {text4}"
-    );
-
-    // Verify database: Conversation user was updated to Priya's UUID!
+    assert_eq!(enrolled, 0);
     let conv_user: uuid::Uuid = sqlx::query_scalar(
         "SELECT user_id FROM conversations WHERE channel = 'phone' AND external_id = 'CALL-2'",
     )
     .fetch_one(db.pool())
     .await
     .unwrap();
-    assert_eq!(conv_user, priya_uid);
+    assert_ne!(conv_user, priya_uid);
 }
