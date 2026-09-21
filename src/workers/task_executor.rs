@@ -173,37 +173,8 @@ impl TaskExecutorHandler {
                 }
         }
 
-        let idempotency_key = format!("task_complete_call:{}:{}", task_id, Uuid::new_v4());
-        let payload = json!(
-            {
-            "reason": format!("Autonomous task completed: {}", title),
-            "opening_instruction": format!("Inform the user that their task '{}' has finished: {}", title, summary)
-        });
-
-        let mut tx = self.db.pool().begin().await?;
-
-        let action_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actions (user_context_id, user_id, task_id, kind, payload, state, idempotency_key) \
-             VALUES ($1, $2, $3, 'outbound_call', $4, 'pending', $5) \
-             RETURNING id",
-        )
-        .bind(owner.user_context_id.0)
-        .bind(owner.user_id.0)
-        .bind(task_id)
-        .bind(payload)
-        .bind(idempotency_key)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO jobs (kind, payload_reference_id) \
-             VALUES ('dispatch_action', $1)",
-        )
-        .bind(action_id)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
+        // Durable task completion remains observable through task state. It
+        // cannot trigger a privileged outbound call.
         Ok(())
     }
 }

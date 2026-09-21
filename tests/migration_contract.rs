@@ -23,8 +23,8 @@ async fn migration_creates_the_complete_core_schema() {
     let names: Vec<String> = rows.iter().map(|row| row.get("table_name")).collect();
 
     for expected in [
-        "action_attempts",
-        "actions",
+        "execution_attempts",
+        "executions",
         "conversation_summaries",
         "conversations",
         "events",
@@ -76,7 +76,7 @@ async fn migration_creates_the_complete_core_schema() {
     .fetch_all(&pool)
     .await
     .expect("list context-owned resources");
-    for expected in ["actions", "conversations", "scheduled_tasks", "tasks"] {
+    for expected in ["executions", "conversations", "scheduled_tasks", "tasks"] {
         assert!(
             scoped_resources.iter().any(|table| table == expected),
             "{expected} is missing canonical user-context ownership"

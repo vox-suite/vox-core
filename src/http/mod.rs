@@ -1,4 +1,3 @@
-pub mod actions;
 pub mod admin;
 pub mod agent_registry;
 pub mod approvals;
@@ -9,6 +8,7 @@ pub mod conversations;
 pub mod durable_tasks;
 pub mod events;
 pub mod execution_policy;
+pub mod execution;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
@@ -39,6 +39,7 @@ pub struct AppState {
     pub(crate) db: Option<Db>,
     pub(crate) durable_tasks: Option<Arc<crate::durable_tasks::DurableTaskService>>,
     pub(crate) execution_policy: Option<Arc<crate::execution_policy::ExecutionPolicyService>>,
+    pub(crate) execution: Option<Arc<crate::execution::ExecutionCoordinator>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
     pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
@@ -60,6 +61,7 @@ impl AppState {
             db: None,
             durable_tasks: None,
             execution_policy: None,
+            execution: None,
             conversations: None,
             connections: None,
             capability_grants: None,
@@ -115,6 +117,7 @@ impl AppState {
             execution_policy: Some(Arc::new(
                 crate::execution_policy::ExecutionPolicyService::new(db.clone()),
             )),
+            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(db.clone()))),
             conversations: Some(Arc::new(conv)),
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -155,6 +158,7 @@ impl AppState {
             execution_policy: Some(Arc::new(
                 crate::execution_policy::ExecutionPolicyService::new(db.clone()),
             )),
+            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(db.clone()))),
             conversations: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.clone(),
@@ -237,7 +241,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
-        .route("/v1/actions/{id}/result", post(actions::record_result))
+        .route("/v1/executions", post(execution::start))
+        .route("/v1/executions/{id}", post(execution::get))
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route("/v1/agent-selections", post(agent_registry::select))
         .route(
