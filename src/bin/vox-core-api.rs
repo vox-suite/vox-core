@@ -46,6 +46,9 @@ async fn main() {
     {
         state = state.with_admin(admin);
     }
+    if let Some(token) = config.audit_admin_token {
+        state = state.with_audit_admin_token(token);
+    }
 
     axum::serve(listener, router(state))
         .await
