@@ -24,6 +24,9 @@ async fn migration_creates_the_complete_core_schema() {
 
     for expected in [
         "execution_attempts",
+        "audit_events",
+        "audit_sink_definitions",
+        "audit_sink_deliveries",
         "executions",
         "conversation_summaries",
         "conversations",
