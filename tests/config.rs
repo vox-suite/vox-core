@@ -44,7 +44,7 @@ fn loads_custom_tts_provider_when_set() {
 #[test]
 fn loads_jev_configuration_when_set() {
     let mut values = values();
-    values.insert("JEV", "test-jev-token");
+    values.insert("JEV_API_KEY", "test-jev-token");
 
     let config = Config::from_values(|name| values.get(name).map(|value| value.to_string()))
         .expect("valid configuration");

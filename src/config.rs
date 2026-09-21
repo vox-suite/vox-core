@@ -30,7 +30,7 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let jev_api_key = get("JEV")
+        let jev_api_key = get("JEV_API_KEY")
             .filter(|value| !value.trim().is_empty());
         let jev_enabled = jev_api_key.is_some();
         let jev_base_url = get("JEV_BASE_URL")
