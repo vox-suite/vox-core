@@ -1,3 +1,7 @@
+/**
+ * Administrative HTTP endpoints for inspecting runtime state.
+ */
+
 use super::{AppState, auth};
 use axum::{
     Json,

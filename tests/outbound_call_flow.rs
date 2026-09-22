@@ -1,3 +1,7 @@
+/**
+ * Integration tests for outbound calling workflow.
+ */
+
 use async_trait::async_trait;
 use chrono::Utc;
 use rig::tool::Tool;
@@ -106,7 +110,6 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
     assert_eq!(record.state, "in_progress");
     assert!(record.provider_call_id.is_some());
 
-    // Verify row in outbound_calls
     let row = sqlx::query(
         "SELECT id, phone_number, reason, state, provider_call_id FROM outbound_calls WHERE id = $1",
     )
@@ -123,7 +126,6 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
     assert_eq!(db_reason, "Clean room reminder");
     assert_eq!(db_state, "in_progress");
 
-    // Verify mock bridge received the call request
     let calls = mock_bridge.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].identity.external_id, phone);
@@ -143,7 +145,7 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
         .call(
             &mut rig::prelude::ToolContext::default(),
             ScheduleCallArgs {
-                delay_seconds: Some(-1), // already due
+                delay_seconds: Some(-1),
                 delay_minutes: None,
                 run_at: None,
                 reason: "Clean bedroom".into(),
@@ -158,7 +160,6 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     let schedule_id: Uuid = output["schedule_id"].as_str().unwrap().parse().unwrap();
     let task_id: Uuid = output["task_id"].as_str().unwrap().parse().unwrap();
 
-    // Verify scheduled_tasks and tasks were populated
     let st = sqlx::query("SELECT state, instruction FROM scheduled_tasks WHERE id = $1")
         .bind(schedule_id)
         .fetch_one(db.pool())
@@ -181,12 +182,10 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     assert_eq!(t_title, "Clean bedroom");
     assert_eq!(t_exec, "autonomous");
 
-    // Ticker claims the due schedule
     let ticker = ScheduleTicker::new(db.clone());
     let count = ticker.tick(Utc::now()).await.unwrap();
     assert!(count >= 1);
 
-    // ScheduleHandler processes the occurrence and places the call
     let handler = ScheduleHandler::new(db.clone(), Arc::new(DummyPlanner))
         .with_outbound(service.clone());
 
@@ -195,7 +194,6 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
         .await
         .unwrap();
 
-    // Check that outbound call was dispatched
     {
         let calls = mock_bridge.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -203,7 +201,6 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
         assert!(calls[0].opening_instruction.contains("Remind user to clean bedroom"));
     }
 
-    // Verify task is marked completed
     let completed_task = sqlx::query("SELECT status FROM tasks WHERE id = $1")
         .bind(task_id)
         .fetch_one(db.pool())

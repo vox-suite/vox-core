@@ -1,5 +1,9 @@
 #![cfg(feature = "sandbox")]
 
+/**
+ * Integration tests for sandbox rollback and transaction isolation.
+ */
+
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

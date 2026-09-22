@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for managing execution policies and rules.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     execution_policy::{ExecutionPolicyError, OperationalQuotaRequest, SpendingPolicyRequest},

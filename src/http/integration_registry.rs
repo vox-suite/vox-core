@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for integration manifest discovery.
+ */
+
 use super::{AppState, auth};
 use crate::integration_registry::{
     IntegrationRegistryError, RegisterIntegrationRequest, SetIntegrationEnabledRequest,

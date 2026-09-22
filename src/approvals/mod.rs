@@ -1,3 +1,7 @@
+/**
+ * Human-in-the-loop approval workflows for high-privilege agent operations.
+ */
+
 use crate::{capability_grants::CapabilityGrantService, db::Db, identity::ResolvedUserContext};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

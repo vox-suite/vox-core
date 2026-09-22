@@ -1,14 +1,27 @@
+/**
+ * API service entry point running HTTP server and lifecycle listeners.
+ */
+
+mod auth;
+mod config;
+mod openapi;
+mod router;
+mod routes;
+mod state;
+
 use std::sync::Arc;
 use vox_core::{
     agents::conversation::ConversationAgent,
     config::Config,
     db::Db,
-    http::{AppState, router},
+    http::AppState,
     memory::{
         MemoryService,
         cache::{ContextCache, RedisContextCache},
     },
 };
+
+use crate::{router::build_api_router, state::ApiState};
 
 #[tokio::main]
 async fn main() {
@@ -39,22 +52,25 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
-    let mut state =
-        AppState::with_memory_and_jev(db, agent, memory, config.service_token, jev_client);
-    if let Some(admin) =
-        vox_core::http::admin::RedisAdmin::from_token_with_url(
+    let mut legacy_state =
+        AppState::with_memory_and_jev(db.clone(), agent, memory, config.service_token, jev_client);
+    if let Some(admin) = vox_core::http::admin::RedisAdmin::from_token_with_url(
         config.redis_url.as_deref().or(Some("redis://redis:6379")),
         std::env::var("VOX_ADMIN_TOKEN").ok(),
     )
-            .expect("Vox admin Redis URL is invalid")
+    .expect("Vox admin Redis URL is invalid")
     {
-        state = state.with_admin(admin);
+        legacy_state = legacy_state.with_admin(admin);
     }
     if let Some(token) = config.audit_admin_token {
-        state = state.with_audit_admin_token(token);
+        legacy_state = legacy_state.with_audit_admin_token(token);
     }
 
-    axum::serve(listener, router(state))
+    let api_state = ApiState::new(legacy_state, db);
+    let app = build_api_router(api_state);
+
+    tracing::info!("Vox Core API listening on {}", config.bind_address);
+    axum::serve(listener, app)
         .await
-        .expect("Vox Core API failed");
+        .expect("Vox Core API server failed");
 }

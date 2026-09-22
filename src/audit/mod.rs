@@ -1,8 +1,6 @@
-//! Append-only, privacy-minimized evidence for authority and execution events.
-//!
-//! Audit evidence is local and durable by default. External observability is an
-//! optional, redacted copy controlled by the deployment rather than a fallback
-//! logging path.
+/**
+ * Security audit logging and event tracking for sensitive actions.
+ */
 
 use crate::db::Db;
 use chrono::{DateTime, Utc};
@@ -60,7 +58,6 @@ pub trait AuditSinkSecretStore: Send + Sync {
     async fn get(&self, key: &str) -> Result<String, AuditError>;
 }
 
-/// Delivery is best-effort only after the local append-only write has committed.
 pub struct AuditDeliveryWorker {
     db: Db,
     secrets: Arc<dyn AuditSinkSecretStore>,
@@ -197,7 +194,6 @@ fn trimmed(value: &str, max: usize) -> Option<&str> {
     (!value.is_empty() && value.len() <= max).then_some(value)
 }
 
-/// The admin interface can only record already-redacted scalar metadata.
 fn safe_details(value: &Value) -> bool {
     value.as_object().is_some_and(|map| {
         map.len() <= 16

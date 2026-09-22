@@ -1,3 +1,7 @@
+/**
+ * Event subscription and delivery coordination service.
+ */
+
 use super::{EventId, IngestEventRequest, IngestEventResponse};
 use crate::{
     db::Db,

@@ -1,3 +1,7 @@
+/**
+ * Outbound call dispatch and phone channel communication.
+ */
+
 use crate::{
     bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest},
     db::Db,
@@ -83,7 +87,6 @@ impl OutboundCallService {
         let conversation_id = Uuid::new_v4();
         let idempotency_key = format!("outbound:{}:{}", owner.user_id.0, call_id);
 
-        // Ensure user has this phone identity recorded
         let _ = sqlx::query(
             "INSERT INTO user_identities (user_id, channel, external_id) \
              VALUES ($1, 'phone', $2) \
@@ -94,7 +97,6 @@ impl OutboundCallService {
         .execute(self.db.pool())
         .await;
 
-        // Ensure a conversation row exists for tracking the upcoming voice session
         let _ = sqlx::query(
             "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id) \
              VALUES ($1, $2, $3, 'phone', $4) \
@@ -107,7 +109,6 @@ impl OutboundCallService {
         .execute(self.db.pool())
         .await;
 
-        // Record the outbound call intent
         let row = sqlx::query(
             "INSERT INTO outbound_calls ( \
                  id, user_context_id, user_id, task_id, schedule_id, \
@@ -134,7 +135,6 @@ impl OutboundCallService {
         let created_at: DateTime<Utc> = row.get("created_at");
         let initial_state: String = row.get("state");
 
-        // Dispatch call to bridge if configured
         let provider_call_id = if let Some(bridge) = &self.bridge {
             tracing::info!(
                 call_id = %call_id,

@@ -1,3 +1,7 @@
+/**
+ * Adapters translating external channel identities into core user identities.
+ */
+
 use crate::{
     db::Db,
     identity::{DeploymentId, ResolvedUserContext, UserContextId},

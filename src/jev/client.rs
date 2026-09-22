@@ -1,3 +1,7 @@
+/**
+ * HTTP client communicating with the Jev classification service.
+ */
+
 use super::types::{Answer, Question, SystemOneRequest, SystemOneResponse};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;

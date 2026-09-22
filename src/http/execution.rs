@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for triggering agent workflow execution.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     execution::{ExecutionError, StartExecutionRequest},

@@ -1,3 +1,7 @@
+/**
+ * Personalized user greetings and sync management.
+ */
+
 use super::{MemoryService, cache::CacheError};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;

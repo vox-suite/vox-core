@@ -1,3 +1,7 @@
+/**
+ * Core conversational engine handling user turns, greetings, and LLM responses.
+ */
+
 use super::{CompleteConversationRequest, ConversationId, RespondRequest, RespondResponse};
 use crate::{
     agents::{
@@ -7,7 +11,6 @@ use crate::{
     db::Db,
     identity::{IdentityError, IdentityService, ResourceOwner, UserId},
     memory::MemoryService,
-    voiceprint::{VoiceSignature, verify_phone_match},
 };
 use futures_util::{FutureExt, Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -21,14 +24,15 @@ type OpeningTask =
 pub type ConversationTextStream =
     Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum VerificationState {
     AwaitingName {
         original_user_id: UserId,
         #[serde(default)]
         original_text: String,
         original_user_name: String,
-        voice_signature: Option<VoiceSignature>,
+        #[serde(default)]
+        voice_signature: Option<String>,
     },
     AwaitingPhoneConfirm {
         original_user_id: UserId,
@@ -38,7 +42,8 @@ pub enum VerificationState {
         candidate_name: String,
         #[serde(default)]
         digits: String,
-        voice_signature: Option<VoiceSignature>,
+        #[serde(default)]
+        voice_signature: Option<String>,
     },
 }
 
@@ -108,6 +113,8 @@ impl ConversationService {
         &self,
         request: RespondRequest,
     ) -> Result<RespondResponse, ConversationError> {
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
@@ -255,6 +262,14 @@ impl ConversationService {
         &self,
         request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
+        if crate::agents::conversation::is_voice_channel(&request.identity.channel)
+            && request.text.trim() == "The call just connected. Greet the user."
+            && request.voice_signature.is_none()
+        {
+            return self.cached_opening(request).await;
+        }
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
@@ -676,181 +691,16 @@ impl ConversationService {
     async fn process_voice_verification(
         &self,
         user_id: UserId,
-        conversation_id: ConversationId,
+        _conversation_id: ConversationId,
         request: &mut RespondRequest,
         prior_messages: &[PromptMessage],
     ) -> Result<VoiceVerificationOutcome, ConversationError> {
-        let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
-        if !is_voice {
-            let known_name = self.memory.get_user_name(user_id).await?;
-            let has_name = known_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_some();
-            return Ok(VoiceVerificationOutcome::Continue {
-                active_user_id: user_id,
-                needs_onboarding: !has_name,
-            });
-        }
-
-        let parsed_sig = request
-            .voice_signature
-            .as_deref()
-            .and_then(VoiceSignature::from_raw)
-            .filter(VoiceSignature::usable);
-        let state_json: Option<serde_json::Value> =
-            sqlx::query_scalar("SELECT verification_state FROM conversations WHERE id = $1")
-                .bind(conversation_id.0)
-                .fetch_one(self.db.pool())
-                .await?;
-        let cached = self.memory.get_verification_state(conversation_id.0).await;
-        let state = state_json
-            .and_then(|v| serde_json::from_value::<VerificationState>(v).ok())
-            .or_else(|| cached.and_then(|v| serde_json::from_str(&v).ok()));
-        match state {
-            Some(VerificationState::AwaitingPhoneConfirm {
-                original_user_id,
-                original_text,
-                candidate_user_id,
-                candidate_name,
-                voice_signature,
-                digits,
-            }) => {
-                let incoming = crate::voiceprint::extract_phone_digits(&request.text);
-                let combined = accumulate_phone(&digits, &incoming);
-                let phones = self
-                    .memory
-                    .voiceprints()
-                    .get_user_phones(candidate_user_id)
-                    .await?;
-                if phones
-                    .iter()
-                    .any(|phone| verify_phone_match(&combined, phone))
-                {
-                    self.memory
-                        .voiceprints()
-                        .update_conversation_user(conversation_id.0, candidate_user_id)
-                        .await?;
-                    if let Some(ref sig) = voice_signature {
-                        let _ = self
-                            .memory
-                            .set_voice_signature(candidate_user_id, sig)
-                            .await;
-                    }
-                    self.save_verification(conversation_id, None).await?;
-                    self.memory
-                        .clear_verification_state(conversation_id.0)
-                        .await;
-                    let _ = self.memory.refresh(candidate_user_id).await;
-                    if !original_text.is_empty() {
-                        request.text = original_text.clone();
-                    } else if let Some(original) = prior_messages.windows(2).find(|pair| {
-                        pair[0].role == "user"
-                            && (pair[1].text.starts_with("Your voice is not matching")
-                                || pair[1].text.starts_with("It sounds like someone else"))
-                    }) {
-                        request.text = original[0].text.clone();
-                    }
-                    return Ok(VoiceVerificationOutcome::Continue {
-                        active_user_id: candidate_user_id,
-                        needs_onboarding: false,
-                    });
-                }
-                let incomplete = combined.len() < 10;
-                self.save_verification(
-                    conversation_id,
-                    Some(VerificationState::AwaitingPhoneConfirm {
-                        original_user_id,
-                        original_text,
-                        candidate_user_id,
-                        candidate_name,
-                        voice_signature,
-                        digits: if incomplete { combined } else { String::new() },
-                    }),
-                )
-                .await?;
-                return Ok(VoiceVerificationOutcome::Intercept(if incomplete {
-                    "Please continue with the remaining phone number digits.".into()
-                } else {
-                    "That number did not match. Please say the full registered phone number again."
-                        .into()
-                }));
-            }
-            Some(VerificationState::AwaitingName {
-                original_user_id,
-                original_text,
-                voice_signature,
-                ..
-            }) => {
-                let found_name =
-                    explicit_name(&request.text).or_else(|| extract_name_from_text(&request.text));
-                let Some(name) = found_name else {
-                    return Ok(VoiceVerificationOutcome::Intercept(
-                        "Please introduce yourself by saying my name is, followed by your name."
-                            .into(),
-                    ));
-                };
-                if let Some(candidate_user_id) = self.memory.find_user_by_name(&name).await? {
-                    self.save_verification(
-                        conversation_id,
-                        Some(VerificationState::AwaitingPhoneConfirm {
-                            original_user_id,
-                            original_text,
-                            candidate_user_id,
-                            candidate_name: name,
-                            voice_signature,
-                            digits: String::new(),
-                        }),
-                    )
-                    .await?;
-                    return Ok(VoiceVerificationOutcome::Intercept(
-                        "Please say your full registered phone number to confirm.".into(),
-                    ));
-                }
-                let new_user = self
-                    .memory
-                    .voiceprints()
-                    .create_user_with_name(&name)
-                    .await?;
-                self.memory
-                    .voiceprints()
-                    .update_conversation_user(conversation_id.0, new_user)
-                    .await?;
-                if let Some(ref sig) = voice_signature {
-                    let _ = self.memory.set_voice_signature(new_user, sig).await;
-                }
-                self.save_verification(conversation_id, None).await?;
-                self.memory
-                    .clear_verification_state(conversation_id.0)
-                    .await;
-                let _ = self.memory.refresh(new_user).await;
-                if !original_text.is_empty() {
-                    request.text = original_text.clone();
-                }
-                if prior_messages.is_empty() && original_text.is_empty() {
-                    return Ok(VoiceVerificationOutcome::Intercept(format!(
-                        "Nice to meet you {}! How can I help you today?",
-                        name
-                    )));
-                } else {
-                    return Ok(VoiceVerificationOutcome::Continue {
-                        active_user_id: new_user,
-                        needs_onboarding: false,
-                    });
-                }
-            }
-            None => {}
-        }
         let known_name = self.memory.get_user_name(user_id).await?;
         let has_name = known_name
             .as_deref()
             .is_some_and(|name| !name.trim().is_empty());
         if !has_name && let Some(name) = extract_name_from_text(&request.text) {
             self.memory.set_user_name(user_id, &name).await?;
-            if let Some(ref sig) = parsed_sig {
-                let _ = self.memory.set_voice_signature(user_id, sig).await;
-            }
             if prior_messages.is_empty() {
                 return Ok(VoiceVerificationOutcome::Intercept(format!(
                     "Nice to meet you {}! How can I help you today?",
@@ -863,55 +713,13 @@ impl ConversationService {
                 });
             }
         }
-        let mut current_user_id = user_id;
-        if let Some(ref sig) = parsed_sig {
-            let stored = self.memory.get_voice_signature(user_id).await?;
-            if let Some(ref stored_sig) = stored {
-                if sig.comparable(stored_sig) {
-                    let similarity = sig.cosine_similarity(stored_sig);
-                    tracing::info!(similarity, "CORE_VOICE_SIMILARITY");
-                    let similarity_threshold = std::env::var("VOX_VOICE_SIMILARITY_THRESHOLD")
-                        .ok()
-                        .and_then(|v| v.parse::<f64>().ok())
-                        .unwrap_or(0.50);
-                    if similarity < similarity_threshold {
-                        if let Ok(Some((matched_uid, _))) = self
-                            .memory
-                            .voiceprints()
-                            .find_matching_user(sig, 0.65)
-                            .await
-                        {
-                            self.memory
-                                .voiceprints()
-                                .update_conversation_user(conversation_id.0, matched_uid)
-                                .await?;
-                            current_user_id = matched_uid;
-                        } else {
-                            let state = VerificationState::AwaitingName {
-                                original_user_id: user_id,
-                                original_text: request.text.clone(),
-                                original_user_name: known_name.clone().unwrap_or_default(),
-                                voice_signature: Some(sig.clone()),
-                            };
-                            self.save_verification(conversation_id, Some(state)).await?;
-                            let reply =
-                                "It sounds like someone else is speaking. What is your name?"
-                                    .to_string();
-                            return Ok(VoiceVerificationOutcome::Intercept(reply));
-                        }
-                    }
-                }
-            } else if has_name {
-                let _ = self.memory.set_voice_signature(user_id, sig).await;
-            }
-        }
-        let _ = prior_messages;
         Ok(VoiceVerificationOutcome::Continue {
-            active_user_id: current_user_id,
+            active_user_id: user_id,
             needs_onboarding: !has_name,
         })
     }
 
+    #[allow(dead_code)]
     async fn save_verification(
         &self,
         id: ConversationId,
@@ -929,6 +737,8 @@ impl ConversationService {
         &self,
         request: CompleteConversationRequest,
     ) -> Result<(), ConversationError> {
+        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+            .await?;
         let owner = self
             .identities
             .resolve_legacy_owner(&request.identity)
@@ -1254,24 +1064,23 @@ mod tests {
             original_user_id: UserId(Uuid::new_v4()),
             original_text: "Question".into(),
             original_user_name: "Rahul".into(),
-            voice_signature: Some(VoiceSignature::new(vec![0.1, 0.2, 0.3])),
+            voice_signature: None,
         };
         let serialized = serde_json::to_string(&state).unwrap();
         let deserialized: VerificationState = serde_json::from_str(&serialized).unwrap();
         match deserialized {
             VerificationState::AwaitingName {
                 original_user_name,
-                voice_signature,
                 ..
             } => {
                 assert_eq!(original_user_name, "Rahul");
-                assert_eq!(voice_signature.unwrap().features, vec![0.1, 0.2, 0.3]);
             }
             _ => panic!("unexpected state"),
         }
     }
 }
 
+#[allow(dead_code)]
 fn accumulate_phone(previous: &str, incoming: &str) -> String {
     if incoming.len() >= 10 || previous.len() + incoming.len() > 15 {
         incoming.to_string()
@@ -1280,6 +1089,7 @@ fn accumulate_phone(previous: &str, incoming: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn explicit_name(text: &str) -> Option<String> {
     let lower = text.trim().to_lowercase();
     if !["my name is ", "i am ", "i'm ", "call me "]

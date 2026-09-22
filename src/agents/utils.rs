@@ -1,3 +1,7 @@
+/**
+ * Utility functions for text processing and JSON fence extraction in agent outputs.
+ */
+
 pub fn structured_json(raw: &str) -> &str {
     let trimmed = raw.trim();
     trimmed

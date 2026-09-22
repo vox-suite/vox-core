@@ -1,3 +1,7 @@
+/**
+ * Integration tests for agent registry and capability lookup.
+ */
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},

@@ -1,3 +1,7 @@
+/**
+ * Integration tests verifying migration checksums match baseline fixtures.
+ */
+
 use sha2::{Digest, Sha384};
 use std::{collections::BTreeMap, fs, path::PathBuf};
 

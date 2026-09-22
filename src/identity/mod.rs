@@ -1,3 +1,7 @@
+/**
+ * User identity management, channel mapping, and caller lookup.
+ */
+
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

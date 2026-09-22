@@ -1,7 +1,6 @@
-//! Durable, user-scoped status change hints.
-//!
-//! Events and webhooks are never authoritative. Consumers recover by cursor,
-//! then fetch task/execution state through the authenticated Core APIs.
+/**
+ * Service health status, metrics, and diagnostics.
+ */
 
 use crate::{
     db::Db,
@@ -57,8 +56,6 @@ pub struct WebhookSubscription {
     pub secret: Option<String>,
 }
 
-/// Deployment-owned custody for signing material. PostgreSQL stores only a
-/// one-way verifier, so a deployment must inject a KMS/vault-backed store.
 #[async_trait::async_trait]
 pub trait WebhookSecretStore: Send + Sync {
     async fn put(&self, subscription_id: Uuid, secret: String) -> Result<(), StatusError>;
@@ -82,15 +79,12 @@ impl WebhookSecretStore for UnavailableWebhookSecretStore {
     }
 }
 
-/// A fact constructed only after an enabled adapter verifies the provider
-/// request. It is intentionally not a host-facing HTTP request schema.
 #[derive(Clone, Debug)]
 pub struct VerifiedIntegrationEvent {
     pub integration_external_key: String,
     pub execution_id: Uuid,
     pub provider_event_id: String,
-    /// Adapter-verified provider account identity; Core compares its digest to
-    /// the immutable connection record without persisting the raw value.
+
     pub external_account_reference: String,
     pub outcome: AdapterOutcome,
 }
@@ -199,8 +193,7 @@ impl StatusService {
         context: &ResolvedUserContext,
         id: Uuid,
     ) -> Result<WebhookSubscription, StatusError> {
-        // Verify ownership before mutating external custody. Keep the old
-        // material so a database failure can be compensated.
+
         self.subscription(context, id, None).await?;
         let previous_secret = self.secrets.get(id).await?;
         let secret = new_secret();
@@ -244,8 +237,6 @@ impl StatusService {
             .collect())
     }
 
-    /// Applies an authenticated provider fact only to an already-existing,
-    /// exact execution. It cannot create tasks, grants, proposals, or actions.
     pub async fn apply_verified_external_event(
         &self,
         coordinator: &ExecutionCoordinator,
@@ -306,8 +297,6 @@ impl StatusService {
     }
 }
 
-/// Leases and delivers one due outbox item. It is invoked by a deployment's
-/// worker loop, never by a host request.
 pub struct WebhookDeliveryWorker {
     db: Db,
     secrets: Arc<dyn WebhookSecretStore>,

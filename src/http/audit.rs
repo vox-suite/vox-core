@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for querying security audit logs.
+ */
+
 use super::{AppState, auth};
 use crate::audit::{AuditError, AuditQuery};
 use axum::{

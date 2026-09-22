@@ -1,3 +1,7 @@
+/**
+ * Integration tests for identity mapping and channel adapters.
+ */
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},

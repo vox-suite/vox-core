@@ -1,3 +1,7 @@
+/**
+ * Rate limiting middleware and IP tracking for HTTP endpoints.
+ */
+
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
@@ -95,7 +99,6 @@ impl RateLimiter {
 
         let mut clients = self.clients.lock().unwrap();
 
-        // Evict old entries if map grows large
         if clients.len() > 10_000 {
             if let Some(cutoff) = now.checked_sub(self.config.window) {
                 clients.retain(|_, state| state.last_seen > cutoff);

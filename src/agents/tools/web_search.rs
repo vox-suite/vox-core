@@ -1,3 +1,7 @@
+/**
+ * Agent tools for executing web searches via external search providers.
+ */
+
 use rig::tool::{Tool, ToolContext};
 use serde::Deserialize;
 use serde_json::{Value, json};

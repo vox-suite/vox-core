@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for conversation turns, audio streams, and history.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::conversations::{
     CompleteConversationRequest, RespondRequest, RespondResponse, service::ConversationError,
@@ -13,8 +17,6 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde::Deserialize;
 
-/// The channel identity remains conversation metadata while the signed host context is
-/// the authority boundary. The two must describe the same channel-scoped principal.
 #[derive(Deserialize)]
 pub struct AuthenticatedRespondRequest {
     pub host_context: HostContextRequest,
@@ -189,8 +191,7 @@ async fn authenticated_channel_context(
     context: &HostContextRequest,
     identity: &crate::identity::ChannelIdentity,
 ) -> Option<crate::identity::ResolvedUserContext> {
-    // Do this syntactic binding before the database check so a credential for one
-    // channel principal cannot be used to operate another channel's conversation.
+
     let phone = normalize_channel_phone(&identity.external_id)?;
     let expected_host_user_id = format!("{}:{phone}", identity.channel);
     if context.host_user_id != expected_host_user_id {

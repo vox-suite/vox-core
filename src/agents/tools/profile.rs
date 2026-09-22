@@ -1,3 +1,7 @@
+/**
+ * Agent tools for reading and writing user profile facts and preferences.
+ */
+
 use crate::{db::Db, identity::UserId};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};

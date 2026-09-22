@@ -37,8 +37,8 @@ tower = { version = "0.5", features = ["util"] }
 
 [[bin]]
 name = "vox-core-api"
-path = "src/bin/vox-core-api.rs"
+path = "services/api/main.rs"
 
 [[bin]]
 name = "vox-core-worker"
-path = "src/bin/vox-core-worker.rs"
+path = "services/worker/main.rs"

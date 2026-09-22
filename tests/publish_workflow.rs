@@ -1,3 +1,7 @@
+/**
+ * Integration tests for publishing agent workflows and tasks.
+ */
+
 use std::fs;
 
 #[test]

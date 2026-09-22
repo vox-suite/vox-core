@@ -1,3 +1,7 @@
+/**
+ * Access control grants and privilege scoping for integration capabilities.
+ */
+
 use crate::{db::Db, identity::ResolvedUserContext};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;

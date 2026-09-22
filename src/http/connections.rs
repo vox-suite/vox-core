@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for managing external service connections.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     connections::{AuthorizeConnectionRequest, ConnectionError},

@@ -1,3 +1,7 @@
+/**
+ * Background worker loops and asynchronous job processors.
+ */
+
 pub mod task_executor;
 pub mod whatsapp_sweeper;
 

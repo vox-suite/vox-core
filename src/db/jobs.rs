@@ -1,3 +1,7 @@
+/**
+ * PostgreSQL job queue querying and transactional claiming helpers.
+ */
+
 use super::Db;
 use crate::jobs::{ClaimedJob, JobKind};
 use chrono::{DateTime, Duration, Utc};

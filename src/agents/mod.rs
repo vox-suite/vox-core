@@ -1,3 +1,7 @@
+/**
+ * Agent subsystem root coordinating LLM orchestration and tools.
+ */
+
 pub mod conversation;
 pub mod event_planner;
 pub mod prompts;

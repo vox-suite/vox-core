@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for scheduling and tracking durable tasks.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     durable_tasks::{DurableTaskError, StartTaskRequest, WaitRequest},

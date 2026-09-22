@@ -1,3 +1,7 @@
+/**
+ * Authentication extractors and middleware for HTTP endpoints.
+ */
+
 use axum::http::HeaderMap;
 use subtle::ConstantTimeEq;
 

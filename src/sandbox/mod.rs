@@ -1,3 +1,7 @@
+/**
+ * Isolated execution sandbox for untrusted scripts and tools.
+ */
+
 use crate::execution::{AdapterOutcome, AdapterRequest, ExecutionAdapter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

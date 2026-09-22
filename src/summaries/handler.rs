@@ -1,3 +1,7 @@
+/**
+ * Background handler processing finished conversations into summaries.
+ */
+
 use crate::{
     agents::{
         AgentError,

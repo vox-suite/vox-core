@@ -1,3 +1,7 @@
+/**
+ * Agent execution sandbox, tool dispatch, and step evaluation.
+ */
+
 use crate::{
     db::Db,
     execution_policy::{ExecutionIdentity, ExecutionPolicyService, ExecutionRequest},
@@ -119,8 +123,7 @@ impl ExecutionCoordinator {
             .split('.')
             .next()
             .ok_or(ExecutionError::Invalid)?;
-        // The policy service owns immutable policy evidence and exact quota reservation.
-        // It is evaluated before the external boundary; any later failure stays internal.
+
         tx.commit().await?;
         let decision = ExecutionPolicyService::new(self.db.clone())
             .evaluate(
@@ -244,9 +247,7 @@ impl ExecutionCoordinator {
         self.persist_outcome(context, execution_id, outcome, now, false)
             .await
     }
-    /// Records a fact that has already passed the enabled integration-adapter
-    /// verification boundary. Hosts and agents must use `start`/`dispatch`; they
-    /// cannot use this internal integration seam.
+
     pub async fn record_verified_external_outcome(
         &self,
         context: &ResolvedUserContext,
@@ -257,8 +258,7 @@ impl ExecutionCoordinator {
         self.persist_outcome(context, execution_id, outcome, now, true)
             .await
     }
-    /// Internal integration seam used when the adapter replay ledger and the
-    /// execution transition must commit as one database transaction.
+
     pub async fn record_verified_external_outcome_in_transaction(
         &self,
         transaction: &mut Transaction<'_, Postgres>,

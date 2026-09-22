@@ -1,3 +1,7 @@
+/**
+ * Database greeting behavior and transaction isolation tests.
+ */
+
 use super::Db;
 use crate::{
     agents::{

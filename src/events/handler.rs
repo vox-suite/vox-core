@@ -1,3 +1,7 @@
+/**
+ * Domain event processing handlers and notification triggers.
+ */
+
 use super::EventId;
 use crate::{
     agents::{event_planner::EventPlanning, tools::records::validate_data_against_schema},

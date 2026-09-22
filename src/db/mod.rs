@@ -1,3 +1,7 @@
+/**
+ * Database connection pool management and migration execution.
+ */
+
 pub mod jobs;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};

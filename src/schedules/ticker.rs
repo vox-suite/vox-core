@@ -1,3 +1,7 @@
+/**
+ * Background ticker polling and triggering due schedules.
+ */
+
 use super::service::compute_next_recurring;
 use crate::db::Db;
 use chrono::{DateTime, Utc};

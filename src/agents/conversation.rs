@@ -1,3 +1,7 @@
+/**
+ * Conversational agent logic, prompting structures, and TTS token chunking.
+ */
+
 use super::{AgentError, tools};
 use crate::{
     config::Config,

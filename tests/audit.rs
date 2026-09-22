@@ -1,4 +1,6 @@
-//! PostgreSQL acceptance coverage for append-only Core audit evidence.
+/**
+ * Integration tests for security audit logging and immutability.
+ */
 
 use chrono::Utc;
 use uuid::Uuid;

@@ -1,3 +1,7 @@
+/**
+ * Task worker dispatch loops, job claiming, and execution runtime.
+ */
+
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -17,10 +21,7 @@ use vox_core::{
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
 };
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
-    let config = Config::from_env().expect("Vox Core configuration is invalid");
+pub async fn run_worker(config: Config, cancellation: CancellationToken) -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::connect(&config.database_url)
         .await
         .expect("Vox Core database is unavailable");
@@ -86,18 +87,9 @@ async fn main() {
         summaries,
         task_executor,
         wa_sweeper,
-        worker_id.clone(),
+        worker_id,
     );
-    let cancellation = CancellationToken::new();
 
-    let shutdown_signal = cancellation.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("Worker shutting down via Ctrl+C");
-            shutdown_signal.cancel();
-        }
-    });
-
-    tracing::info!(%worker_id, "Vox Core background worker started");
     let _ = worker.run(cancellation).await;
+    Ok(())
 }

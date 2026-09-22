@@ -1,3 +1,7 @@
+/**
+ * Status, ping, and observability health check HTTP endpoints.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     host_trust::{HostContextRequest, HostTrustService},

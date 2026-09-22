@@ -1,3 +1,7 @@
+/**
+ * Integration tests verifying full database schema migrations.
+ */
+
 use sqlx::Row;
 use vox_core::db::Db;
 

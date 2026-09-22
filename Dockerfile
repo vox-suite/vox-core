@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations
+COPY contracts ./contracts
+COPY services ./services
 COPY src ./src
 
 RUN cargo build --release --locked --bins

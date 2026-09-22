@@ -1,3 +1,7 @@
+/**
+ * HTTP endpoints for reviewing and resolving pending approvals.
+ */
+
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     approvals::{ApprovalError, CreateProposalRequest},

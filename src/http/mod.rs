@@ -1,3 +1,7 @@
+/**
+ * HTTP server endpoints, routing, and middleware assembly.
+ */
+
 pub mod admin;
 pub mod agent_registry;
 pub mod approvals;
@@ -230,9 +234,6 @@ impl AppState {
         self
     }
 
-    /// Enables webhook subscriptions only when the deployment provides durable
-    /// secret custody. The default status service fails closed instead of
-    /// persisting delivery secrets in the database.
     pub fn with_status_secret_store(
         mut self,
         secrets: Arc<dyn crate::status::WebhookSecretStore>,

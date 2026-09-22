@@ -1,3 +1,7 @@
+/**
+ * Event triaging using fast LLM classification.
+ */
+
 use super::{JevError, client::JevClient, types::Question};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -1,3 +1,7 @@
+/**
+ * Schema and entity classification logic for structured ingestion.
+ */
+
 use super::{JevError, client::JevClient};
 use crate::db::Db;
 use serde::{Deserialize, Serialize};

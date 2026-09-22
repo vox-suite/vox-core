@@ -1,3 +1,7 @@
+/**
+ * Integration tests for end-to-end domain event dispatching.
+ */
+
 use async_trait::async_trait;
 use axum::{
     body::{Body, to_bytes},

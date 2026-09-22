@@ -1,3 +1,7 @@
+/**
+ * Conversational state, turn handling, and dialogue domain types.
+ */
+
 pub mod service;
 pub(crate) mod speculation;
 

@@ -1,3 +1,7 @@
+/**
+ * Handlers executed when scheduled cron triggers fire.
+ */
+
 use super::ScheduleId;
 use crate::{
     agents::event_planner::EventPlanning,
@@ -152,7 +156,6 @@ impl ScheduleHandler {
                 .await;
         }
 
-        // Complete any pending tasks linked to this scheduled instruction
         let _ = sqlx::query(
             "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
              WHERE user_id = $1 AND status = 'pending' AND (raw_instruction = $2 OR title = $2)",

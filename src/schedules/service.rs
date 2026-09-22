@@ -1,3 +1,7 @@
+/**
+ * Schedule registration and database persistence service.
+ */
+
 use super::{
     CreateScheduleRequest, ScheduleId, ScheduleKind, ScheduleResponse, UpdateScheduleRequest,
 };

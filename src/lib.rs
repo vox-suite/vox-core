@@ -1,7 +1,12 @@
+/**
+ * Core library module root exporting domains, services, and shared utilities.
+ */
+
 pub mod agent_registry;
-pub mod audit;
 pub mod agents;
+pub mod application;
 pub mod approvals;
+pub mod audit;
 pub mod bridge_client;
 pub mod capability_grants;
 pub mod config;
@@ -9,6 +14,8 @@ pub mod conformance;
 pub mod connections;
 pub mod conversations;
 pub mod db;
+pub mod devices;
+pub mod domain;
 pub mod durable_tasks;
 pub mod events;
 pub mod execution;
@@ -17,6 +24,7 @@ pub mod host_trust;
 pub mod http;
 pub mod identity;
 pub mod identity_adapters;
+pub mod ingestion;
 pub mod integration_registry;
 pub mod jev;
 pub mod jobs;
@@ -26,6 +34,6 @@ pub mod outbound;
 pub mod sandbox;
 pub mod schedules;
 pub mod status;
+pub mod storage;
 pub mod summaries;
-pub mod voiceprint;
 pub mod workers;

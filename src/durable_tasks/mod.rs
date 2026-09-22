@@ -1,3 +1,7 @@
+/**
+ * Durable task state machine, execution tracking, and retries.
+ */
+
 use crate::{db::Db, identity::ResolvedUserContext};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

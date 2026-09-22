@@ -1,3 +1,7 @@
+/**
+ * Background job queue management and scheduler implementation.
+ */
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
