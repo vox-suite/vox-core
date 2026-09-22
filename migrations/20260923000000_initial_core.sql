@@ -466,3 +466,154 @@ CREATE OR REPLACE VIEW client_devices AS
 SELECT 
     id, user_id, device_identifier, platform, label AS device_name, is_active, last_seen_at, capabilities AS telemetry, created_at, updated_at
 FROM devices;
+
+-- ============================================================================
+-- Row Level Security (RLS) Configuration
+-- ============================================================================
+
+-- Ensure Supabase auth schema and helper exist (idempotent on Supabase)
+CREATE SCHEMA IF NOT EXISTS auth;
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+    SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$$;
+
+-- Ensure default Supabase roles exist (idempotent on Supabase)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
+        CREATE ROLE anon NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
+        CREATE ROLE authenticated NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
+        CREATE ROLE service_role NOLOGIN;
+    END IF;
+END $$;
+
+-- Grants for standard roles
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+-- Enable RLS on all 21 core tables
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_identities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE channel_identities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE job_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE data_schemas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE action_proposals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE action_approvals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE executions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE execution_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inbound_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
+
+-- Service role bypass policies (ensures backend/service_role is never blocked)
+CREATE POLICY "service_role_users" ON users FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_auth_identities" ON auth_identities FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_channel_identities" ON channel_identities FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_auth_sessions" ON auth_sessions FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_conversations" ON conversations FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_messages" ON messages FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_collections" ON collections FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_tasks" ON tasks FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_schedules" ON schedules FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_jobs" ON jobs FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_job_attempts" ON job_attempts FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_data_schemas" ON data_schemas FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_records" ON records FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_devices" ON devices FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_connections" ON connections FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_action_proposals" ON action_proposals FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_action_approvals" ON action_approvals FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_executions" ON executions FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_execution_attempts" ON execution_attempts FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_inbound_events" ON inbound_events FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_audit_events" ON audit_events FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- Authenticated user policies: users table
+CREATE POLICY "users_select_own" ON users FOR SELECT TO authenticated USING (id = auth.uid());
+CREATE POLICY "users_update_own" ON users FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+
+-- Authenticated user policies: direct user-scoped tables
+CREATE POLICY "auth_identities_user_all" ON auth_identities FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "channel_identities_user_all" ON channel_identities FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "auth_sessions_user_all" ON auth_sessions FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "conversations_user_all" ON conversations FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "collections_user_all" ON collections FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "tasks_user_all" ON tasks FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "schedules_user_all" ON schedules FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "records_user_all" ON records FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "devices_user_all" ON devices FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "connections_user_all" ON connections FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "action_proposals_user_all" ON action_proposals FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "inbound_events_user_all" ON inbound_events FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "audit_events_user_all" ON audit_events FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+
+-- Authenticated user policies: data_schemas (can view system schemas where user_id IS NULL, and manage their own)
+CREATE POLICY "data_schemas_user_select" ON data_schemas FOR SELECT TO authenticated USING (user_id IS NULL OR user_id = auth.uid());
+CREATE POLICY "data_schemas_user_insert" ON data_schemas FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY "data_schemas_user_update" ON data_schemas FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "data_schemas_user_delete" ON data_schemas FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- Authenticated user policies: messages (scoped by conversation ownership)
+CREATE POLICY "messages_user_select" ON messages FOR SELECT TO authenticated USING (
+    EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())
+);
+CREATE POLICY "messages_user_insert" ON messages FOR INSERT TO authenticated WITH CHECK (
+    EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())
+);
+CREATE POLICY "messages_user_update" ON messages FOR UPDATE TO authenticated USING (
+    EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())
+) WITH CHECK (
+    EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())
+);
+CREATE POLICY "messages_user_delete" ON messages FOR DELETE TO authenticated USING (
+    EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())
+);
+
+-- Authenticated user policies: action_approvals & executions (scoped via action_proposals)
+CREATE POLICY "action_approvals_user_all" ON action_approvals FOR ALL TO authenticated USING (
+    EXISTS (SELECT 1 FROM action_proposals p WHERE p.id = action_approvals.proposal_id AND p.user_id = auth.uid())
+) WITH CHECK (
+    EXISTS (SELECT 1 FROM action_proposals p WHERE p.id = action_approvals.proposal_id AND p.user_id = auth.uid())
+);
+
+CREATE POLICY "executions_user_select" ON executions FOR SELECT TO authenticated USING (
+    EXISTS (SELECT 1 FROM action_proposals p WHERE p.id = executions.proposal_id AND p.user_id = auth.uid())
+);
+
+CREATE POLICY "execution_attempts_user_select" ON execution_attempts FOR SELECT TO authenticated USING (
+    EXISTS (
+        SELECT 1 FROM executions e 
+        JOIN action_proposals p ON p.id = e.proposal_id 
+        WHERE e.id = execution_attempts.execution_id AND p.user_id = auth.uid()
+    )
+);
+
+-- Security invoker for backward-compatible views (applies RLS to view queries)
+ALTER VIEW user_records SET (security_invoker = true);
+ALTER VIEW user_goals SET (security_invoker = true);
+ALTER VIEW user_insights SET (security_invoker = true);
+ALTER VIEW events SET (security_invoker = true);
+ALTER VIEW scheduled_tasks SET (security_invoker = true);
+ALTER VIEW projects SET (security_invoker = true);
+ALTER VIEW client_devices SET (security_invoker = true);
