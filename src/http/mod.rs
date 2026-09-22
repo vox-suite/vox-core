@@ -291,6 +291,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/conversations/complete", post(conversations::complete))
         .route("/v1/connections/authorize", post(connections::authorize))
+        .route("/v1/connections/list", post(connections::list))
+        .route("/v1/connections/{id}/disconnect", post(connections::disconnect))
         .route(
             "/v1/capability-grants",
             post(capability_grants::create).delete(capability_grants::revoke),

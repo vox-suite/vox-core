@@ -138,6 +138,65 @@ fn grant(agent: &str, connection_id: Uuid) -> CreateGrantRequest {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
+async fn disconnect_revokes_grants_that_reconnection_must_not_restore() {
+    let db = setup().await;
+    let (deployment, context) = context(&db).await;
+    agent(&AgentRegistry::new(db.clone()), &deployment, "planner").await;
+    let connection_id = connection(&db, &deployment, &context).await;
+    let grants = CapabilityGrantService::new(db.clone());
+    grants
+        .grant(&context, grant("planner", connection_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        grants
+            .effective_for_agent(&context, "planner")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let connections = ConnectionService::new(db.clone());
+    connections
+        .disconnect(&context, connection_id)
+        .await
+        .unwrap();
+    assert!(
+        grants
+            .effective_for_agent(&context, "planner")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let reconnected = connections
+        .record(
+            &context,
+            AuthorizeConnectionRequest {
+                integration_external_key: "calendar".into(),
+                external_account_reference: "account@example.test".into(),
+                credential_custody: CredentialCustody::ExternalOperator,
+                authorization_state: AuthorizationState::Authorized,
+                authorized_capabilities: vec!["calendar.read".into()],
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+                failure_code: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reconnected.id, connection_id);
+    assert!(
+        grants
+            .effective_for_agent(&context, "planner")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn grants_are_explicit_context_bound_and_fail_closed_on_revocation() {
     let db = setup().await;
     let (deployment, context) = context(&db).await;

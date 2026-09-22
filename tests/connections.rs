@@ -1,19 +1,61 @@
 /**
 * Integration tests for external connection persistence.
 */
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use chrono::{Duration, Utc};
+use tower::ServiceExt;
 use uuid::Uuid;
 use vox_core::{
     connections::{
-        AuthorizationState, AuthorizeConnectionRequest, ConnectionService, CredentialCustody,
+        AuthorizationState, AuthorizeConnectionRequest, ConnectionError, ConnectionService,
+        CredentialCustody,
     },
     db::Db,
     host_trust::{HostContextRequest, HostTrustService, RegisterHostAppRequest},
+    http::{AppState, router},
     integration_registry::{
         CapabilityDeclaration, CapabilityEffect, IntegrationProtocol, IntegrationRegistry,
         RegisterIntegrationRequest, SetIntegrationEnabledRequest,
     },
 };
+
+#[tokio::test]
+async fn host_cannot_claim_provider_authorization_or_platform_credential_custody() {
+    let app = router(AppState::new(false));
+    for (state, custody) in [
+        ("authorized", "external_operator"),
+        ("pending", "platform_held"),
+    ] {
+        let body = serde_json::json!({
+            "host_context": {"host_user_id": "user"},
+            "authorization": {
+                "integration_external_key": "calendar",
+                "external_account_reference": "example",
+                "credential_custody": custody,
+                "authorization_state": state,
+                "authorized_capabilities": ["read"],
+                "expires_at": null,
+                "failure_code": null
+            }
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/connections/authorize")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
 async fn setup() -> Db {
     let url = std::env::var("TEST_DATABASE_URL").unwrap();
     let db = Db::connect(&url).await.unwrap();
@@ -21,7 +63,7 @@ async fn setup() -> Db {
     db
 }
 
-async fn context(db: &Db) -> (String, vox_core::identity::ResolvedUserContext) {
+async fn create_context(db: &Db) -> (String, vox_core::identity::ResolvedUserContext) {
     let trust = HostTrustService::new(db.clone());
     let host = trust
         .register_host_app(RegisterHostAppRequest {
@@ -94,7 +136,7 @@ fn request(state: AuthorizationState) -> AuthorizeConnectionRequest {
 #[ignore = "requires isolated PostgreSQL"]
 async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
     let db = setup().await;
-    let (deployment, context) = context(&db).await;
+    let (deployment, context) = create_context(&db).await;
     enable(&db, &deployment).await;
     let service = ConnectionService::new(db.clone());
     let mut authorized = request(AuthorizationState::Authorized);
@@ -118,4 +160,25 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
     .await
     .unwrap();
     assert_eq!(hash_length, 32, "only the account hash is persisted");
+    let listed = service.list(&context).await.unwrap();
+    assert!(listed.iter().any(|connection| connection.id == created.id));
+
+    let (_, other_context) = create_context(&db).await;
+    assert!(service.list(&other_context).await.unwrap().is_empty());
+    assert!(matches!(
+        service.disconnect(&other_context, created.id).await,
+        Err(ConnectionError::NotFound)
+    ));
+
+    let revoked = service.disconnect(&context, created.id).await.unwrap();
+    assert_eq!(revoked.authorization_state, AuthorizationState::Revoked);
+    assert!(revoked.authorized_capabilities.is_empty());
+    assert_eq!(
+        service
+            .disconnect(&context, created.id)
+            .await
+            .unwrap()
+            .authorization_state,
+        AuthorizationState::Revoked
+    );
 }
