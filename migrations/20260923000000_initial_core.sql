@@ -472,7 +472,7 @@ FROM devices;
 -- ============================================================================
 
 -- Ensure Supabase auth helper exists for standalone/test environments
-DO $$
+DO $do$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_proc p 
@@ -481,15 +481,20 @@ BEGIN
     ) THEN
         BEGIN
             CREATE SCHEMA IF NOT EXISTS auth;
-            EXECUTE $create$CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid; $fn$$create$;
+            EXECUTE $create$
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$
+SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$fn$;
+$create$;
         EXCEPTION WHEN OTHERS THEN
             NULL;
         END;
     END IF;
-END $$;
+END
+$do$;
 
 -- Ensure default Supabase roles exist (idempotent on Supabase)
-DO $$
+DO $do$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
         CREATE ROLE anon NOLOGIN;
@@ -500,7 +505,8 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
         CREATE ROLE service_role NOLOGIN;
     END IF;
-END $$;
+END
+$do$;
 
 -- Grants for standard roles
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
