@@ -7,7 +7,7 @@ use vox_core::config::Config;
 fn values() -> HashMap<&'static str, &'static str> {
     HashMap::from([
         ("DATABASE_URL", "postgres://vox:test@db/vox"),
-        ("VOX_CORE_SERVICE_TOKEN", "test-service-token"),
+        ("VOX_AUTH_TOKEN", "test-service-token"),
         ("GEMINI_API_KEY", "gemini-test-key"),
         ("EXA_API_KEY", "exa-test-key"),
     ])

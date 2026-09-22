@@ -25,7 +25,7 @@ host-app IDs, organization IDs, or user-context IDs from an untrusted payload.
 ## Operator workflow
 
 The platform operator calls `POST /v1/host-apps` with the platform bootstrap
-credential (`VOX_CORE_SERVICE_TOKEN`). The response includes the host-app ID,
+credential (`VOX_AUTH_TOKEN`). The response includes the host-app ID,
 audience, credential ID, and raw signing secret. The secret is returned only
 in that response; Core stores only its SHA-256 verifier. The operator places
 the secret in the host app's server-side secret manager. Credential-bearing

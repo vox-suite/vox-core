@@ -95,7 +95,7 @@ Database integration tests require an isolated PostgreSQL database and `TEST_DAT
 
 ## Redis administration
 
-`GET`, `PUT` and `DELETE /v1/admin/redis` are enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_CORE_SERVICE_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
+`GET`, `PUT` and `DELETE /v1/admin/redis` are enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_AUTH_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
 
 Query parameters:
 
