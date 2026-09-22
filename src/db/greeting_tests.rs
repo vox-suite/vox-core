@@ -5,7 +5,7 @@ use crate::{
         conversation::{ConversationPrompt, ConversationResponder},
     },
     conversations::{RespondRequest, service::ConversationService},
-    identity::{ChannelIdentity, UserId},
+    identity::{ResourceOwner, UserContextId, UserId},
     memory::{
         MemoryService,
         cache::{CacheError, ContextCache},
@@ -45,8 +45,8 @@ impl ContextCache for GreetingCache {
         channel: &str,
         external_id: &str,
     ) -> Result<Option<String>, CacheError> {
-        assert_eq!(channel, "phone");
-        assert_eq!(external_id, "+919876543210");
+        assert_eq!(channel, "user_context");
+        assert!(!external_id.is_empty());
         tokio::time::sleep(self.delay).await;
         Ok(self.name.clone())
     }
@@ -67,11 +67,12 @@ async fn greeting(name: Option<&str>, delay: Duration) -> String {
         })),
     );
     let service = ConversationService::with_memory(db, Arc::new(UnusedAgent), memory);
+    let owner = ResourceOwner {
+        user_context_id: UserContextId(uuid::Uuid::new_v4()),
+        user_id: UserId(uuid::Uuid::new_v4()),
+    };
     let request = RespondRequest {
-        identity: ChannelIdentity {
-            channel: "phone".into(),
-            external_id: "+919876543210".into(),
-        },
+        channel: "phone".into(),
         external_conversation_id: "CA-cache-greeting".into(),
         text: "The call just connected. Greet the user.".into(),
         initiation_context: None,
@@ -81,7 +82,7 @@ async fn greeting(name: Option<&str>, delay: Duration) -> String {
         tts_provider: None,
     };
     tokio::time::timeout(Duration::from_millis(500), async {
-        let mut stream = service.respond_stream(request).await.unwrap();
+        let mut stream = service.respond_stream(owner, request).await.unwrap();
         let mut text = String::new();
         while let Some(chunk) = stream.next().await {
             text.push_str(&chunk.unwrap());
@@ -136,11 +137,12 @@ async fn replies_and_hangup_wait_for_opening_even_after_stream_is_dropped() {
         })),
     );
     let service = ConversationService::with_memory(db, Arc::new(UnusedAgent), memory);
+    let owner = ResourceOwner {
+        user_context_id: UserContextId(uuid::Uuid::new_v4()),
+        user_id: UserId(uuid::Uuid::new_v4()),
+    };
     let mut request = RespondRequest {
-        identity: ChannelIdentity {
-            channel: "phone".into(),
-            external_id: "+919876543210".into(),
-        },
+        channel: "phone".into(),
         external_conversation_id: "CA-background-opening".into(),
         text: "The call just connected. Greet the user.".into(),
         initiation_context: None,
@@ -149,7 +151,10 @@ async fn replies_and_hangup_wait_for_opening_even_after_stream_is_dropped() {
         revision: None,
         tts_provider: None,
     };
-    let greeting = service.respond_stream(request.clone()).await.unwrap();
+    let greeting = service
+        .respond_stream(owner, request.clone())
+        .await
+        .unwrap();
     drop(greeting);
     let (_opening_connection, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
         .await
@@ -158,16 +163,20 @@ async fn replies_and_hangup_wait_for_opening_even_after_stream_is_dropped() {
     request.text = "What's on my calendar?".into();
     let reply_service = service.clone();
     let reply_request = request.clone();
-    let reply = tokio::spawn(async move { reply_service.respond_stream(reply_request).await });
+    let reply =
+        tokio::spawn(async move { reply_service.respond_stream(owner, reply_request).await });
     let unary_service = service.clone();
     let unary_request = request.clone();
-    let unary = tokio::spawn(async move { unary_service.respond(unary_request).await });
+    let unary = tokio::spawn(async move { unary_service.respond(owner, unary_request).await });
     let hangup = tokio::spawn(async move {
         service
-            .complete(crate::conversations::CompleteConversationRequest {
-                identity: request.identity,
-                external_conversation_id: request.external_conversation_id,
-            })
+            .complete(
+                owner,
+                crate::conversations::CompleteConversationRequest {
+                    channel: request.channel,
+                    external_conversation_id: request.external_conversation_id,
+                },
+            )
             .await
     });
     assert!(

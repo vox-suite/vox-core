@@ -36,12 +36,11 @@ impl Default for RateLimitConfig {
 }
 
 pub fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = forwarded.split(',').next().map(|s| s.trim()) {
-            if !first.is_empty() {
-                return first.to_string();
-            }
-        }
+    if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(first) = forwarded.split(',').next().map(|s| s.trim())
+        && !first.is_empty()
+    {
+        return first.to_string();
     }
     if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
         let trimmed = real_ip.trim();
@@ -96,10 +95,10 @@ impl RateLimiter {
         let mut clients = self.clients.lock().unwrap();
 
         // Evict old entries if map grows large
-        if clients.len() > 10_000 {
-            if let Some(cutoff) = now.checked_sub(self.config.window) {
-                clients.retain(|_, state| state.last_seen > cutoff);
-            }
+        if clients.len() > 10_000
+            && let Some(cutoff) = now.checked_sub(self.config.window)
+        {
+            clients.retain(|_, state| state.last_seen > cutoff);
         }
 
         let entry = clients.entry(key.to_string()).or_insert_with(|| ClientState {

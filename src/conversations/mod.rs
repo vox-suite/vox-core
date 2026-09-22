@@ -1,7 +1,6 @@
 pub mod service;
 pub(crate) mod speculation;
 
-use crate::identity::ChannelIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,7 +10,7 @@ pub struct ConversationId(pub Uuid);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RespondRequest {
-    pub identity: ChannelIdentity,
+    pub channel: String,
     pub external_conversation_id: String,
     pub text: String,
     pub initiation_context: Option<String>,
@@ -33,13 +32,13 @@ pub struct RespondResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CompleteConversationRequest {
-    pub identity: ChannelIdentity,
+    pub channel: String,
     pub external_conversation_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpeculateRequest {
-    pub identity: ChannelIdentity,
+    pub channel: String,
     pub external_conversation_id: String,
     pub text: String,
     pub turn_id: String,

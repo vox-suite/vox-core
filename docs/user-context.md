@@ -27,10 +27,9 @@ exact context. Missing contexts and cross-context user identifiers both fail
 closed as `IdentityError::AccessDenied`; callers must not infer other users or
 contexts from a denial.
 
-This ticket does not expose context resolution directly over HTTP. Host
-registration and authenticated host assertions are added by the host-trust
-work. Until then, only already-trusted in-process callers may invoke the new
-interface.
+Host registration and signed assertions expose this context through the
+host-trust boundary. Conversation, schedule, and event handlers resolve it once
+and pass a `ResourceOwner` into their services.
 
 ## Persistence constraints
 
@@ -44,17 +43,14 @@ The additive migration creates `platform_deployments`, `host_apps`,
 - A host user is unique within the complete deployment/host/organization scope.
 - Every context owns a distinct internal `users` row.
 
-The schema deliberately does not backfill existing resources. Conversations,
-schedules, tasks, and actions continue using their existing `user_id` ownership
-until the resource-migration ticket assigns legacy users to canonical contexts.
+Every active user-owned runtime row has non-null context ownership. Contact
+points are context-scoped delivery metadata and cannot resolve a context.
 
-## Legacy compatibility
+## No implicit identity authority
 
-`ChannelIdentity` and `IdentityService::resolve` remain unchanged during the
-expansion window. Current phone, WhatsApp, and other channel callers therefore
-continue to resolve through `user_identities`. Channel identity is not promoted
-to a canonical cross-host identity, and the compatibility path will be removed
-only after Core resources and Bridge have migrated.
+There is no channel-identity compatibility path. Matching phone numbers,
+WhatsApp senders, names, or voices never create, link, or select a context.
+Proof-based identity adapters are the only cross-context linking mechanism.
 
 ## Verification and rollback
 
@@ -63,6 +59,5 @@ cross-host-app, cross-organization, and cross-user separation; it also rejects
 an organization used under the wrong host app. Existing API tests continue to
 exercise the legacy channel payload.
 
-Because the migration is additive, rollback means disabling the new resolution
-path while retaining assigned context identifiers. Do not drop or remap
-contexts: later migration can safely resume from the retained stable IDs.
+Because this is a pre-launch contraction, legacy databases are rebuilt. Do not
+drop or remap canonical contexts in an active canonical database.

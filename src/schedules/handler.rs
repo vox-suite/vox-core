@@ -74,9 +74,8 @@ impl ScheduleHandler {
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query(
-            "SELECT s.user_id, COALESCE(s.user_context_id, c.id) AS user_context_id, s.instruction \
+            "SELECT s.user_id, s.user_context_id, s.instruction \
              FROM scheduled_tasks s \
-             JOIN user_contexts c ON c.user_id = s.user_id \
              WHERE s.id = $1",
         )
         .bind(schedule_id.0)
@@ -146,7 +145,10 @@ impl ScheduleHandler {
             }
         } else if let Some(outbound) = &self.outbound {
             let reason = format!("Scheduled reminder: {}", instruction);
-            let opening = format!("Remind the user of their scheduled reminder: {}", instruction);
+            let opening = format!(
+                "Remind the user of their scheduled reminder: {}",
+                instruction
+            );
             let _ = outbound
                 .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
                 .await;
@@ -155,8 +157,9 @@ impl ScheduleHandler {
         // Complete any pending tasks linked to this scheduled instruction
         let _ = sqlx::query(
             "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
-             WHERE user_id = $1 AND status = 'pending' AND (raw_instruction = $2 OR title = $2)",
+             WHERE user_context_id = $1 AND user_id = $2 AND status IN ('pending', 'executing') AND (raw_instruction = $3 OR title = $3)",
         )
+        .bind(owner.user_context_id.0)
         .bind(user_id.0)
         .bind(&instruction)
         .execute(self.db.pool())

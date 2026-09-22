@@ -30,10 +30,6 @@ impl MemoryService {
         self.cache.as_ref()
     }
 
-    pub fn voiceprints(&self) -> &VoiceprintService {
-        &self.voiceprints
-    }
-
     pub async fn load(&self, user_id: UserId) -> Result<String, sqlx::Error> {
         if let Some(cache) = &self.cache
             && let Ok(Some(value)) = cache.get(user_id).await
@@ -65,7 +61,6 @@ impl MemoryService {
             && let Some(cache) = &self.cache
         {
             let _ = cache.set_user_name(user_id, n).await;
-            let _ = cache.set_user_id_by_name(n, user_id).await;
         }
 
         Ok(name)
@@ -87,9 +82,8 @@ impl MemoryService {
 
         if let Some(cache) = &self.cache {
             let _ = cache.set_user_name(user_id, trimmed).await;
-            let _ = cache.set_user_id_by_name(trimmed, user_id).await;
             if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
+                "SELECT channel, external_id FROM user_contact_points WHERE user_id = $1",
             )
             .bind(user_id.0)
             .fetch_all(self.db.pool())
@@ -151,48 +145,6 @@ impl MemoryService {
         Ok(())
     }
 
-    pub async fn find_user_by_name(&self, name: &str) -> Result<Option<UserId>, sqlx::Error> {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        if let Some(cache) = &self.cache
-            && let Ok(Some(uid)) = cache.get_user_id_by_name(trimmed).await
-        {
-            return Ok(Some(uid));
-        }
-
-        let uid = self.voiceprints.find_user_by_name(trimmed).await?;
-        if let Some(uid) = uid
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_user_id_by_name(trimmed, uid).await;
-        }
-        Ok(uid)
-    }
-
-    pub async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Option<String> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(state)) = cache.get_verification_state(conversation_id).await
-        {
-            return Some(state);
-        }
-        None
-    }
-
-    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.set_verification_state(conversation_id, state).await;
-        }
-    }
-
-    pub async fn clear_verification_state(&self, conversation_id: uuid::Uuid) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.clear_verification_state(conversation_id).await;
-        }
-    }
-
     pub async fn refresh(&self, user_id: UserId) -> Result<(), sqlx::Error> {
         let value = projection::build(&self.db, user_id).await?;
         if let Some(cache) = &self.cache {
@@ -206,9 +158,8 @@ impl MemoryService {
             {
                 let trimmed = name.trim();
                 let _ = cache.set_user_name(user_id, trimmed).await;
-                let _ = cache.set_user_id_by_name(trimmed, user_id).await;
                 if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                    "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
+                    "SELECT channel, external_id FROM user_contact_points WHERE user_id = $1",
                 )
                 .bind(user_id.0)
                 .fetch_all(self.db.pool())

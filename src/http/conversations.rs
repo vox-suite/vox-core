@@ -1,37 +1,35 @@
-use super::{AppState, host_apps::assertion_from_headers};
+use super::{AppState, host_apps::authenticated_context};
 use crate::conversations::{
     CompleteConversationRequest, RespondRequest, RespondResponse, service::ConversationError,
 };
-use crate::host_trust::{HostContextRequest, HostTrustService};
+use crate::host_trust::HostContextRequest;
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use chrono::Utc;
 use futures_util::StreamExt;
 use serde::Deserialize;
 
-/// The channel identity remains conversation metadata while the signed host context is
-/// the authority boundary. The two must describe the same channel-scoped principal.
+/// Channel is presentation metadata; the signed host context is the authority boundary.
 #[derive(Deserialize)]
 pub struct AuthenticatedRespondRequest {
-    pub host_context: HostContextRequest,
+    pub host_context: Option<HostContextRequest>,
     #[serde(flatten)]
     pub conversation: RespondRequest,
 }
 
 #[derive(Deserialize)]
 pub struct AuthenticatedCompleteRequest {
-    pub host_context: HostContextRequest,
+    pub host_context: Option<HostContextRequest>,
     #[serde(flatten)]
     pub conversation: CompleteConversationRequest,
 }
 
 #[derive(Deserialize)]
 pub struct AuthenticatedSpeculateRequest {
-    pub host_context: HostContextRequest,
+    pub host_context: Option<HostContextRequest>,
     #[serde(flatten)]
     pub conversation: crate::conversations::SpeculateRequest,
 }
@@ -44,20 +42,16 @@ pub async fn respond(
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let Some(context) = authenticated_channel_context(
+    let Some(context) = authenticated_context(
         state.host_trust.as_deref(),
         &headers,
-        &request.host_context,
-        &request.conversation.identity,
+        request.host_context.as_ref(),
     )
     .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match service
-        .respond_for_owner(context.owner(), request.conversation)
-        .await
-    {
+    match service.respond(context.owner(), request.conversation).await {
         Ok(response) => (StatusCode::OK, Json::<RespondResponse>(response)).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ConversationError::Agent(_)) => StatusCode::BAD_GATEWAY.into_response(),
@@ -78,18 +72,17 @@ pub async fn respond_stream(
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let Some(context) = authenticated_channel_context(
+    let Some(context) = authenticated_context(
         state.host_trust.as_deref(),
         &headers,
-        &request.host_context,
-        &request.conversation.identity,
+        request.host_context.as_ref(),
     )
     .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     match service
-        .respond_stream_for_owner(context.owner(), request.conversation)
+        .respond_stream(context.owner(), request.conversation)
         .await
     {
         Ok(stream) => {
@@ -137,18 +130,17 @@ pub async fn complete(
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let Some(context) = authenticated_channel_context(
+    let Some(context) = authenticated_context(
         state.host_trust.as_deref(),
         &headers,
-        &request.host_context,
-        &request.conversation.identity,
+        request.host_context.as_ref(),
     )
     .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     match service
-        .complete_for_owner(context.owner(), request.conversation)
+        .complete(context.owner(), request.conversation)
         .await
     {
         Ok(()) => StatusCode::OK.into_response(),
@@ -165,51 +157,21 @@ pub async fn speculate(
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    if authenticated_channel_context(
+    let Some(context) = authenticated_context(
         state.host_trust.as_deref(),
         &headers,
-        &request.host_context,
-        &request.conversation.identity,
+        request.host_context.as_ref(),
     )
     .await
-    .is_none()
-    {
+    else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match service.speculate(request.conversation).await {
+    };
+    match service
+        .speculate(context.owner(), request.conversation)
+        .await
+    {
         Ok(status) => Json(serde_json::json!({"status":status})).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
-}
-
-async fn authenticated_channel_context(
-    trust: Option<&HostTrustService>,
-    headers: &HeaderMap,
-    context: &HostContextRequest,
-    identity: &crate::identity::ChannelIdentity,
-) -> Option<crate::identity::ResolvedUserContext> {
-    // Do this syntactic binding before the database check so a credential for one
-    // channel principal cannot be used to operate another channel's conversation.
-    let phone = normalize_channel_phone(&identity.external_id)?;
-    let expected_host_user_id = format!("{}:{phone}", identity.channel);
-    if context.host_user_id != expected_host_user_id {
-        return None;
-    }
-    let (Some(trust), Ok(assertion)) = (trust, assertion_from_headers(headers)) else {
-        return None;
-    };
-    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
-    trust
-        .resolve_authenticated_context(&assertion, context, origin, Utc::now())
-        .await
-        .ok()
-}
-
-fn normalize_channel_phone(value: &str) -> Option<String> {
-    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
-    if !(7..=15).contains(&digits.len()) {
-        return None;
-    }
-    Some(format!("+{digits}"))
 }

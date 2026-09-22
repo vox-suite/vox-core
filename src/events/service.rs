@@ -1,15 +1,11 @@
 use super::{EventId, IngestEventRequest, IngestEventResponse};
-use crate::{
-    db::Db,
-    identity::{IdentityError, IdentityService},
-};
+use crate::{db::Db, identity::ResourceOwner};
 use sqlx::Row;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct EventService {
     db: Db,
-    identities: IdentityService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -18,38 +14,26 @@ pub enum EventError {
     Invalid,
     #[error("event storage unavailable")]
     Database(#[from] sqlx::Error),
-    #[error("event identity unavailable")]
-    Identity(#[from] IdentityError),
 }
 
 impl EventService {
     pub fn new(db: Db) -> Self {
-        Self {
-            identities: IdentityService::new(db.clone()),
-            db,
-        }
+        Self { db }
     }
 
     pub async fn ingest(
         &self,
+        owner: ResourceOwner,
         request: IngestEventRequest,
     ) -> Result<IngestEventResponse, EventError> {
-        if request.idempotency_key.trim().is_empty()
-            || request.event_type.trim().is_empty()
-            || request.identity.channel.trim().is_empty()
-            || request.identity.external_id.trim().is_empty()
-        {
+        if request.idempotency_key.trim().is_empty() || request.event_type.trim().is_empty() {
             return Err(EventError::Invalid);
         }
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let user_id = owner.user_id;
         let mut tx = self.db.pool().begin().await?;
         let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO events (user_id, idempotency_key, event_type, occurred_at, payload) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
-        ).bind(user_id.0).bind(request.idempotency_key.trim()).bind(request.event_type.trim())
+            "INSERT INTO events (user_context_id, user_id, idempotency_key, event_type, occurred_at, payload) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_context_id, idempotency_key) DO NOTHING RETURNING id",
+        ).bind(owner.user_context_id.0).bind(user_id.0).bind(request.idempotency_key.trim()).bind(request.event_type.trim())
             .bind(request.occurred_at).bind(request.payload).fetch_optional(&mut *tx).await?;
         let event_id = if let Some(id) = inserted {
             sqlx::query(
@@ -60,7 +44,8 @@ impl EventService {
             .await?;
             id
         } else {
-            let row = sqlx::query("SELECT id, user_id FROM events WHERE idempotency_key = $1")
+            let row = sqlx::query("SELECT id, user_id FROM events WHERE user_context_id = $1 AND idempotency_key = $2")
+                .bind(owner.user_context_id.0)
                 .bind(request.idempotency_key.trim())
                 .fetch_one(&mut *tx)
                 .await?;

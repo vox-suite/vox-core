@@ -13,7 +13,7 @@ use vox_core::{
     },
     bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest, OutboundCallResponse},
     db::Db,
-    identity::{ResourceOwner, UserContextId, UserId},
+    identity::{DeploymentId, HostAppId, IdentityService, ResourceOwner, UserContextSubject},
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
 };
@@ -41,7 +41,10 @@ struct DummyPlanner;
 
 #[async_trait]
 impl EventPlanning for DummyPlanner {
-    async fn plan(&self, _: EventPlanningPrompt) -> Result<Vec<PlannedAction>, vox_core::agents::AgentError> {
+    async fn plan(
+        &self,
+        _: EventPlanningPrompt,
+    ) -> Result<Vec<PlannedAction>, vox_core::agents::AgentError> {
         Ok(vec![])
     }
 }
@@ -51,34 +54,39 @@ async fn setup() -> (Db, ResourceOwner, String) {
     let db = Db::connect(&url).await.unwrap();
     db.migrate().await.unwrap();
 
-    let user_id = Uuid::new_v4();
-    let context_id = Uuid::new_v4();
     let phone = "+15551234567";
-
-    sqlx::query("INSERT INTO users (id) VALUES ($1)")
-        .bind(user_id)
-        .execute(db.pool())
+    let deployment_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO platform_deployments (external_key) VALUES ($1) RETURNING id",
+    )
+    .bind(format!("test.outbound.{}", Uuid::new_v4()))
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let host_app_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO host_apps (deployment_id, external_key) VALUES ($1, 'test.host') RETURNING id",
+    )
+    .bind(deployment_id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let owner = IdentityService::new(db.clone())
+        .resolve_context(&UserContextSubject {
+            deployment_id: DeploymentId(deployment_id),
+            host_app_id: HostAppId(host_app_id),
+            organization_id: None,
+            host_user_id: format!("phone:{phone}"),
+        })
         .await
-        .unwrap();
+        .unwrap()
+        .owner();
 
-    sqlx::query("INSERT INTO user_contexts (id, user_id) VALUES ($1, $2)")
-        .bind(context_id)
-        .bind(user_id)
-        .execute(db.pool())
-        .await
-        .unwrap();
-
-    sqlx::query("INSERT INTO user_identities (user_id, channel, external_id) VALUES ($1, 'phone', $2)")
-        .bind(user_id)
+    sqlx::query("INSERT INTO user_contact_points (user_context_id, user_id, channel, external_id) VALUES ($1, $2, 'phone', $3)")
+        .bind(owner.user_context_id.0)
+        .bind(owner.user_id.0)
         .bind(phone)
         .execute(db.pool())
         .await
         .unwrap();
-
-    let owner = ResourceOwner {
-        user_context_id: UserContextId(context_id),
-        user_id: UserId(user_id),
-    };
 
     (db, owner, phone.to_string())
 }
@@ -126,7 +134,7 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
     // Verify mock bridge received the call request
     let calls = mock_bridge.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].identity.external_id, phone);
+    assert_eq!(calls[0].recipient.external_id, phone);
     assert_eq!(calls[0].reason, "Clean room reminder");
 }
 
@@ -135,7 +143,10 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
 async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     let (db, owner, phone) = setup().await;
     let mock_bridge = Arc::new(MockBridge::default());
-    let service = Arc::new(OutboundCallService::new(db.clone(), Some(mock_bridge.clone())));
+    let service = Arc::new(OutboundCallService::new(
+        db.clone(),
+        Some(mock_bridge.clone()),
+    ));
 
     let tool = ScheduleOutboundCall::new(Some(db.clone()), Some(service.clone()), owner);
 
@@ -187,8 +198,8 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     assert!(count >= 1);
 
     // ScheduleHandler processes the occurrence and places the call
-    let handler = ScheduleHandler::new(db.clone(), Arc::new(DummyPlanner))
-        .with_outbound(service.clone());
+    let handler =
+        ScheduleHandler::new(db.clone(), Arc::new(DummyPlanner)).with_outbound(service.clone());
 
     handler
         .handle(vox_core::schedules::ScheduleId(schedule_id), Utc::now())
@@ -199,8 +210,12 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     {
         let calls = mock_bridge.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].identity.external_id, phone);
-        assert!(calls[0].opening_instruction.contains("Remind user to clean bedroom"));
+        assert_eq!(calls[0].recipient.external_id, phone);
+        assert!(
+            calls[0]
+                .opening_instruction
+                .contains("Remind user to clean bedroom")
+        );
     }
 
     // Verify task is marked completed
@@ -218,7 +233,10 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
 async fn trigger_outbound_call_tool_places_immediate_call() {
     let (db, owner, phone) = setup().await;
     let mock_bridge = Arc::new(MockBridge::default());
-    let service = Arc::new(OutboundCallService::new(db.clone(), Some(mock_bridge.clone())));
+    let service = Arc::new(OutboundCallService::new(
+        db.clone(),
+        Some(mock_bridge.clone()),
+    ));
 
     let tool = TriggerOutboundCall::new(Some(db.clone()), Some(service.clone()), owner);
 
@@ -239,7 +257,7 @@ async fn trigger_outbound_call_tool_places_immediate_call() {
 
     let calls = mock_bridge.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].identity.external_id, phone);
+    assert_eq!(calls[0].recipient.external_id, phone);
     assert_eq!(calls[0].reason, "Emergency water leak");
     assert_eq!(calls[0].opening_instruction, "Alert user about water leak");
 }

@@ -294,7 +294,7 @@ impl Tool for ListTasks {
                     "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                      FROM tasks t \
                      LEFT JOIN projects p ON p.id = t.project_id \
-                     WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                     WHERE t.user_id = $1 AND t.user_context_id = $2 \
                        AND t.project_id = $3 \
                      ORDER BY t.created_at DESC LIMIT $4",
                 )
@@ -309,7 +309,7 @@ impl Tool for ListTasks {
                     "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                      FROM tasks t \
                      LEFT JOIN projects p ON p.id = t.project_id \
-                     WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                     WHERE t.user_id = $1 AND t.user_context_id = $2 \
                        AND t.project_id = $3 AND t.status = $4 \
                      ORDER BY t.created_at DESC LIMIT $5",
                 )
@@ -326,7 +326,7 @@ impl Tool for ListTasks {
                 "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                 WHERE t.user_id = $1 AND t.user_context_id = $2 \
                  ORDER BY t.created_at DESC LIMIT $3",
             )
             .bind(self.owner.user_id.0)
@@ -339,7 +339,7 @@ impl Tool for ListTasks {
                 "SELECT t.id, t.title, t.status, t.execution_type, t.due_at, t.created_at, p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                 WHERE t.user_id = $1 AND t.user_context_id = $2 \
                    AND t.status = $3 \
                  ORDER BY t.created_at DESC LIMIT $4",
             )
@@ -442,7 +442,7 @@ impl Tool for GetTask {
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
                  WHERE t.id = $1 AND t.user_id = $2 \
-                   AND (t.user_context_id = $3 OR t.user_context_id IS NULL)",
+                   AND t.user_context_id = $3",
             )
             .bind(tid)
             .bind(self.owner.user_id.0)
@@ -456,7 +456,7 @@ impl Tool for GetTask {
                  p.name as project_name \
                  FROM tasks t \
                  LEFT JOIN projects p ON p.id = t.project_id \
-                 WHERE t.user_id = $1 AND (t.user_context_id = $2 OR t.user_context_id IS NULL) \
+                 WHERE t.user_id = $1 AND t.user_context_id = $2 \
                    AND t.title ILIKE '%' || $3 || '%' \
                  ORDER BY t.created_at DESC LIMIT 1",
             )
@@ -580,10 +580,9 @@ impl Tool for UpdateTask {
              feasibility_reasoning = COALESCE($2, feasibility_reasoning), \
              execution_result = COALESCE($3, execution_result), \
              completed_at = CASE WHEN $4 THEN now() ELSE completed_at END, \
-             user_context_id = COALESCE(user_context_id, $7), \
              updated_at = now() \
              WHERE id = $5 AND user_id = $6 \
-               AND (user_context_id = $7 OR user_context_id IS NULL)",
+               AND user_context_id = $7",
         )
         .bind(args.status.as_deref())
         .bind(args.feasibility_reasoning.as_deref())

@@ -2,6 +2,7 @@ use super::{AppState, auth};
 use crate::host_trust::{
     HostContextAssertion, HostContextRequest, HostTrustError, RegisterHostAppRequest,
 };
+use crate::{host_trust::HostTrustService, identity::ResolvedUserContext};
 use axum::{
     Json,
     extract::{Path, State},
@@ -152,6 +153,21 @@ pub(crate) fn assertion_from_headers(
         signature,
         secret,
     ))
+}
+
+pub(crate) async fn authenticated_context(
+    trust: Option<&HostTrustService>,
+    headers: &HeaderMap,
+    request: Option<&HostContextRequest>,
+) -> Option<ResolvedUserContext> {
+    let trust = trust?;
+    let request = request?;
+    let assertion = assertion_from_headers(headers).ok()?;
+    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
+    trust
+        .resolve_authenticated_context(&assertion, request, origin, Utc::now())
+        .await
+        .ok()
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

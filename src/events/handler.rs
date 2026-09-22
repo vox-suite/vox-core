@@ -2,7 +2,7 @@ use super::EventId;
 use crate::{
     agents::{event_planner::EventPlanning, tools::records::validate_data_against_schema},
     db::Db,
-    identity::{IdentityService, UserId},
+    identity::{ResourceOwner, UserContextId, UserId},
     jev::{
         event_triage::{EventTriageAction, EventTriager},
         schema_classifier::{SchemaClassificationResult, SchemaClassifier},
@@ -67,19 +67,16 @@ impl EventHandler {
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
         let row = sqlx::query(
-            "SELECT user_id, event_type, occurred_at, payload FROM events WHERE id = $1",
+            "SELECT user_context_id, user_id, event_type, occurred_at, payload FROM events WHERE id = $1",
         )
         .bind(event_id.0)
         .fetch_one(self.db.pool())
         .await?;
         let user_id = UserId(row.get("user_id"));
-        let _owner = IdentityService::new(self.db.clone())
-            .owner_for_user(user_id)
-            .await
-            .map_err(|error| match error {
-                crate::identity::IdentityError::Database(error) => error,
-                other => sqlx::Error::Protocol(other.to_string()),
-            })?;
+        let _owner = ResourceOwner {
+            user_context_id: UserContextId(row.get("user_context_id")),
+            user_id,
+        };
         let event_type: String = row.get("event_type");
         let occurred_at: DateTime<Utc> = row.get("occurred_at");
         let payload: Value = row.get("payload");

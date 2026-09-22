@@ -1,10 +1,6 @@
-use crate::{
-    db::Db,
-    identity::{IdentityError, IdentityService, UserId},
-};
+use crate::{db::Db, identity::UserId};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct VoiceSignature {
@@ -141,113 +137,6 @@ impl VoiceprintService {
         .await?;
 
         Ok(())
-    }
-
-    pub async fn find_user_by_name(&self, name: &str) -> Result<Option<UserId>, sqlx::Error> {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        let user_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM user_profiles \
-             WHERE LOWER(facts->>'name') = LOWER($1) \
-             LIMIT 1",
-        )
-        .bind(trimmed)
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        Ok(user_id.map(UserId))
-    }
-
-    pub async fn get_user_phones(&self, user_id: UserId) -> Result<Vec<String>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT external_id FROM user_identities \
-             WHERE user_id = $1 AND channel = 'phone'",
-        )
-        .bind(user_id.0)
-        .fetch_all(self.db.pool())
-        .await?;
-
-        Ok(rows.into_iter().map(|r| r.get("external_id")).collect())
-    }
-
-    pub async fn create_user_with_name(&self, name: &str) -> Result<UserId, sqlx::Error> {
-        let mut tx = self.db.pool().begin().await?;
-        let user_id =
-            sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
-                .fetch_one(&mut *tx)
-                .await?;
-
-        sqlx::query(
-            "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-             VALUES ($1, jsonb_build_object('name', $2::text), 1, now())",
-        )
-        .bind(user_id)
-        .bind(name.trim())
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        let user_id = UserId(user_id);
-        IdentityService::new(self.db.clone())
-            .owner_for_user(user_id)
-            .await
-            .map_err(identity_storage_error)?;
-        Ok(user_id)
-    }
-
-    pub async fn update_conversation_user(
-        &self,
-        conversation_id: Uuid,
-        user_id: UserId,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE conversations SET active_user_id = $1 WHERE id = $2")
-            .bind(user_id.0)
-            .bind(conversation_id)
-            .execute(self.db.pool())
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn find_matching_user(
-        &self,
-        sig: &VoiceSignature,
-        threshold: f64,
-    ) -> Result<Option<(UserId, String)>, sqlx::Error> {
-        if !sig.usable() {
-            return Ok(None);
-        }
-        let rows = sqlx::query(
-            "SELECT v.user_id, p.facts->>\x27name\x27 as name, v.signature \
-             FROM user_voiceprints v \
-             JOIN user_profiles p ON p.user_id = v.user_id \
-             WHERE p.facts->>\x27name\x27 IS NOT NULL",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
-
-        for r in rows {
-            let uid: Uuid = r.get("user_id");
-            let name: String = r.get("name");
-            let val: serde_json::Value = r.get("signature");
-            if let Ok(stored_sig) = serde_json::from_value::<VoiceSignature>(val)
-                && sig.comparable(&stored_sig)
-                && sig.cosine_similarity(&stored_sig) >= threshold
-            {
-                return Ok(Some((UserId(uid), name)));
-            }
-        }
-        Ok(None)
-    }
-}
-
-fn identity_storage_error(error: IdentityError) -> sqlx::Error {
-    match error {
-        IdentityError::Database(error) => error,
-        other => sqlx::Error::Protocol(other.to_string()),
     }
 }
 

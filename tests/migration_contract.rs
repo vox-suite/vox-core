@@ -62,7 +62,7 @@ async fn migration_creates_the_complete_core_schema() {
         "scheduled_tasks",
         "outbound_calls",
         "user_contexts",
-        "user_identities",
+        "user_contact_points",
         "user_profiles",
         "users",
     ] {
@@ -80,10 +80,36 @@ async fn migration_creates_the_complete_core_schema() {
     .fetch_all(&pool)
     .await
     .expect("list context-owned resources");
-    for expected in ["executions", "conversations", "scheduled_tasks", "tasks", "outbound_calls"] {
+    for expected in [
+        "executions",
+        "conversations",
+        "events",
+        "scheduled_tasks",
+        "tasks",
+        "outbound_calls",
+        "user_contact_points",
+    ] {
         assert!(
             scoped_resources.iter().any(|table| table == expected),
             "{expected} is missing canonical user-context ownership"
         );
     }
+
+    let nullable_authority_columns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name = ANY($1) AND column_name='user_context_id' AND is_nullable='YES'",
+    ).bind(vec!["conversations", "events", "scheduled_tasks", "tasks", "outbound_calls", "user_contact_points"]).fetch_one(&pool).await.unwrap();
+    assert_eq!(nullable_authority_columns, 0);
+    assert!(!names.iter().any(|name| name == "user_identities"));
+    let legacy_scopes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform_deployments d LEFT JOIN host_apps h ON h.deployment_id=d.id WHERE d.external_key='vox.legacy.deployment' OR h.external_key='vox.legacy.channel-host'",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(legacy_scopes, 0);
+    let legacy_conversation_columns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='conversations' AND column_name IN ('active_user_id','verification_state')",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(legacy_conversation_columns, 0);
+    let legacy_null_indexes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexdef ILIKE '%user_context_id IS NULL%'",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(legacy_null_indexes, 0);
 }

@@ -101,12 +101,10 @@ impl ScheduleTicker {
             .execute(&mut *tx)
             .await?;
 
-            sqlx::query(
-                "UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1",
-            )
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1")
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await?;
         }
 
         tx.commit().await?;

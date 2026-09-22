@@ -82,9 +82,8 @@ impl TaskExecutorHandler {
         let instruction: String = task_row.get("raw_instruction");
 
         sqlx::query(
-            "UPDATE tasks SET status = 'executing', \
-                    user_context_id = COALESCE(user_context_id, $1), updated_at = now() \
-             WHERE id = $2",
+            "UPDATE tasks SET status = 'executing', updated_at = now() \
+             WHERE id = $2 AND user_context_id = $1",
         )
         .bind(owner.user_context_id.0)
         .bind(task_id)
@@ -145,8 +144,9 @@ impl TaskExecutorHandler {
         summary: &str,
     ) -> Result<(), TaskExecutorError> {
         let has_phone: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = $1 AND channel = 'phone')",
+            "SELECT EXISTS(SELECT 1 FROM user_contact_points WHERE user_context_id = $1 AND user_id = $2 AND channel = 'phone')",
         )
+        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .fetch_one(self.db.pool())
         .await?;

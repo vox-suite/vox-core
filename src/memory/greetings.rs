@@ -17,7 +17,7 @@ impl MemoryService {
         };
         let names = sqlx::query_as::<_, (String, String, String)>(
             "SELECT i.channel, i.external_id, p.facts->>'name' \
-             FROM user_identities i JOIN user_profiles p ON p.user_id = i.user_id \
+             FROM user_contact_points i JOIN user_profiles p ON p.user_id = i.user_id \
              WHERE p.facts->>'name' IS NOT NULL",
         )
         .fetch_all(self.db.pool())

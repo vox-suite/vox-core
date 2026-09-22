@@ -2,7 +2,6 @@ pub mod handler;
 pub mod service;
 pub mod ticker;
 
-use crate::identity::ChannelIdentity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -37,7 +36,6 @@ impl ScheduleKind {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateScheduleRequest {
-    pub identity: ChannelIdentity,
     pub instruction: String,
     pub schedule_kind: ScheduleKind,
     pub run_at: Option<DateTime<Utc>>,
@@ -47,7 +45,6 @@ pub struct CreateScheduleRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UpdateScheduleRequest {
-    pub identity: ChannelIdentity,
     pub state: Option<String>,
     pub run_at: Option<DateTime<Utc>>,
     pub recurrence_expression: Option<String>,

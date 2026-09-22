@@ -1,10 +1,7 @@
 use super::{
     CreateScheduleRequest, ScheduleId, ScheduleKind, ScheduleResponse, UpdateScheduleRequest,
 };
-use crate::{
-    db::Db,
-    identity::{IdentityError, IdentityService},
-};
+use crate::{db::Db, identity::ResourceOwner};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
@@ -14,7 +11,6 @@ use std::str::FromStr;
 #[derive(Clone)]
 pub struct ScheduleService {
     db: Db,
-    identities: IdentityService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,42 +21,31 @@ pub enum ScheduleError {
     NotFound,
     #[error("schedule storage unavailable")]
     Database(#[from] sqlx::Error),
-    #[error("schedule identity unavailable")]
-    Identity(#[from] IdentityError),
 }
 
 impl ScheduleService {
     pub fn new(db: Db) -> Self {
-        Self {
-            identities: IdentityService::new(db.clone()),
-            db,
-        }
+        Self { db }
     }
 
     pub async fn create(
         &self,
+        owner: ResourceOwner,
         request: CreateScheduleRequest,
     ) -> Result<ScheduleResponse, ScheduleError> {
-        self.create_at(request, Utc::now()).await
+        self.create_at(owner, request, Utc::now()).await
     }
 
     pub async fn create_at(
         &self,
+        owner: ResourceOwner,
         request: CreateScheduleRequest,
         now: DateTime<Utc>,
     ) -> Result<ScheduleResponse, ScheduleError> {
-        if request.identity.channel.trim().is_empty()
-            || request.identity.external_id.trim().is_empty()
-            || request.instruction.trim().is_empty()
-            || request.timezone.trim().is_empty()
-        {
+        if request.instruction.trim().is_empty() || request.timezone.trim().is_empty() {
             return Err(ScheduleError::Invalid);
         }
         let timezone = Tz::from_str(request.timezone.trim()).map_err(|_| ScheduleError::Invalid)?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let (next_run_at, recurrence_expression) = match request.schedule_kind {
             ScheduleKind::Once => {
                 if request.recurrence_expression.is_some() {
@@ -105,14 +90,16 @@ impl ScheduleService {
 
     pub async fn update(
         &self,
+        owner: ResourceOwner,
         id: ScheduleId,
         request: UpdateScheduleRequest,
     ) -> Result<ScheduleResponse, ScheduleError> {
-        self.update_at(id, request, Utc::now()).await
+        self.update_at(owner, id, request, Utc::now()).await
     }
 
     pub async fn update_at(
         &self,
+        owner: ResourceOwner,
         id: ScheduleId,
         request: UpdateScheduleRequest,
         now: DateTime<Utc>,
@@ -123,20 +110,11 @@ impl ScheduleService {
         if operation_count != 1 {
             return Err(ScheduleError::Invalid);
         }
-        if request.identity.channel.trim().is_empty()
-            || request.identity.external_id.trim().is_empty()
-        {
-            return Err(ScheduleError::Invalid);
-        }
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let row = sqlx::query(
             "SELECT schedule_kind, recurrence_expression, timezone, next_run_at, state \
              FROM scheduled_tasks \
              WHERE id = $1 AND user_id = $2 \
-               AND (user_context_id = $3 OR user_context_id IS NULL)",
+               AND user_context_id = $3",
         )
         .bind(id.0)
         .bind(owner.user_id.0)
@@ -177,9 +155,9 @@ impl ScheduleService {
         }
         let row = sqlx::query(
             "UPDATE scheduled_tasks SET state = $1, next_run_at = $2, recurrence_expression = $3, \
-                    user_context_id = COALESCE(user_context_id, $6), updated_at = now() \
+                    updated_at = now() \
              WHERE id = $4 AND user_id = $5 \
-               AND (user_context_id = $6 OR user_context_id IS NULL) \
+               AND user_context_id = $6 \
              RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
         )
         .bind(state)

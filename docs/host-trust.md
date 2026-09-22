@@ -93,11 +93,9 @@ issuing fresh assertions restores the host without remapping domain identity.
 
 ## Compatibility and limits
 
-Existing channel callers remain on the temporary legacy path documented in
-[`user-context.md`](user-context.md) and
-[`resource-context-migration.md`](resource-context-migration.md). They are not
-implicitly upgraded by this protocol. Bridge migration is the next consumer of
-this accepted host-trust interface.
+There is no channel-only compatibility path. Bridge and every other host must
+sign each user request. Channel and contact values remain metadata and cannot
+select a resource owner. Old service-token/channel payloads are rejected.
 
 This protocol authenticates the host application's assertion. Replaceable
 identity adapters and proof-based identity links build on that assertion as a

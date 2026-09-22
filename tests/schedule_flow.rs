@@ -2,13 +2,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 use vox_core::{
     agents::{
         AgentError,
         event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
     },
     db::Db,
-    identity::ChannelIdentity,
+    identity::{DeploymentId, HostAppId, IdentityService, ResourceOwner, UserContextSubject},
     schedules::{
         CreateScheduleRequest, ScheduleKind, UpdateScheduleRequest, handler::ScheduleHandler,
         service::ScheduleService, ticker::ScheduleTicker,
@@ -38,6 +39,21 @@ async fn setup() -> Db {
     db
 }
 
+async fn owner(db: &Db, host_user_id: &str) -> ResourceOwner {
+    let deployment_id: Uuid = sqlx::query_scalar("INSERT INTO platform_deployments (external_key) VALUES ('test.schedules') ON CONFLICT (external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id").fetch_one(db.pool()).await.unwrap();
+    let host_app_id: Uuid = sqlx::query_scalar("INSERT INTO host_apps (deployment_id, external_key) VALUES ($1, 'test.host') ON CONFLICT (deployment_id, external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id").bind(deployment_id).fetch_one(db.pool()).await.unwrap();
+    IdentityService::new(db.clone())
+        .resolve_context(&UserContextSubject {
+            deployment_id: DeploymentId(deployment_id),
+            host_app_id: HostAppId(host_app_id),
+            organization_id: None,
+            host_user_id: host_user_id.into(),
+        })
+        .await
+        .unwrap()
+        .owner()
+}
+
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap()
@@ -46,20 +62,18 @@ fn at(value: &str) -> DateTime<Utc> {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_once() {
+async fn recurring_schedule_uses_timezone_and_claims_each_occurrence_once() {
     let db = setup().await;
     let service = ScheduleService::new(db.clone());
     let ticker = ScheduleTicker::new(db.clone());
     let handler = ScheduleHandler::new(db.clone(), Arc::new(CallPlanner));
     let now = at("2026-09-13T03:00:00Z");
+    let owner = owner(&db, "phone:+919999999999").await;
 
     let schedule = service
         .create_at(
+            owner,
             CreateScheduleRequest {
-                identity: ChannelIdentity {
-                    channel: "phone".into(),
-                    external_id: "+919999999999".into(),
-                },
                 instruction: "Daily briefing".into(),
                 schedule_kind: ScheduleKind::Recurring,
                 run_at: None,
@@ -99,29 +113,21 @@ async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_on
         .fetch_one(db.pool())
         .await
         .unwrap();
-    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM actions")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
     assert_eq!(run_jobs, 2);
-    assert_eq!(actions, 2);
 }
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn validates_creation_and_accepts_exactly_one_update_operation() {
     let db = setup().await;
-    let service = ScheduleService::new(db);
+    let service = ScheduleService::new(db.clone());
     let now = Utc.with_ymd_and_hms(2026, 9, 13, 10, 0, 0).unwrap();
-    let identity = ChannelIdentity {
-        channel: "phone".into(),
-        external_id: "+919999999998".into(),
-    };
+    let owner = owner(&db, "phone:+919999999998").await;
 
     let invalid_zone = service
         .create_at(
+            owner,
             CreateScheduleRequest {
-                identity: identity.clone(),
                 instruction: "Brief me".into(),
                 schedule_kind: ScheduleKind::Recurring,
                 run_at: None,
@@ -135,8 +141,8 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
 
     let once = service
         .create_at(
+            owner,
             CreateScheduleRequest {
-                identity: identity.clone(),
                 instruction: "One-time reminder".into(),
                 schedule_kind: ScheduleKind::Once,
                 run_at: Some(now + Duration::hours(1)),
@@ -151,9 +157,9 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
     assert!(
         service
             .update_at(
+                owner,
                 once.id,
                 UpdateScheduleRequest {
-                    identity: identity.clone(),
                     state: Some("paused".into()),
                     run_at: Some(now + Duration::hours(2)),
                     recurrence_expression: None,
@@ -165,9 +171,9 @@ async fn validates_creation_and_accepts_exactly_one_update_operation() {
     );
     let paused = service
         .update_at(
+            owner,
             once.id,
             UpdateScheduleRequest {
-                identity,
                 state: Some("paused".into()),
                 run_at: None,
                 recurrence_expression: None,

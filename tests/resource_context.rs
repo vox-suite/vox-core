@@ -14,7 +14,7 @@ use vox_core::{
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
     db::Db,
-    identity::{ChannelIdentity, IdentityService},
+    identity::{DeploymentId, HostAppId, IdentityService, ResourceOwner, UserContextSubject},
     schedules::{
         CreateScheduleRequest, ScheduleKind, UpdateScheduleRequest, service::ScheduleError,
         service::ScheduleService,
@@ -41,11 +41,23 @@ async fn setup() -> Db {
     db
 }
 
-fn identity(value: &str) -> ChannelIdentity {
-    ChannelIdentity {
-        channel: "test-channel".into(),
-        external_id: value.into(),
-    }
+async fn owner(db: &Db, value: &str) -> ResourceOwner {
+    let deployment_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO platform_deployments (external_key) VALUES ('test.resource-context') ON CONFLICT (external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id",
+    ).fetch_one(db.pool()).await.unwrap();
+    let host_app_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO host_apps (deployment_id, external_key) VALUES ($1, 'test.host') ON CONFLICT (deployment_id, external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id",
+    ).bind(deployment_id).fetch_one(db.pool()).await.unwrap();
+    IdentityService::new(db.clone())
+        .resolve_context(&UserContextSubject {
+            deployment_id: DeploymentId(deployment_id),
+            host_app_id: HostAppId(host_app_id),
+            organization_id: None,
+            host_user_id: value.into(),
+        })
+        .await
+        .unwrap()
+        .owner()
 }
 
 #[tokio::test]
@@ -54,33 +66,39 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
     let db = setup().await;
     let conversations = ConversationService::new(db.clone(), Arc::new(FixedAgent));
     let schedules = ScheduleService::new(db.clone());
-    let alice = identity("alice");
-    let bob = identity("bob");
+    let alice = owner(&db, "alice").await;
+    let bob = owner(&db, "bob").await;
 
     let alice_conversation = conversations
-        .respond(RespondRequest {
-            identity: alice.clone(),
-            external_conversation_id: "shared-conversation-id".into(),
-            text: "hello".into(),
-            initiation_context: None,
-            voice_signature: None,
-            turn_id: None,
-            revision: None,
-            tts_provider: None,
-        })
+        .respond(
+            alice,
+            RespondRequest {
+                channel: "test-channel".into(),
+                external_conversation_id: "shared-conversation-id".into(),
+                text: "hello".into(),
+                initiation_context: None,
+                voice_signature: None,
+                turn_id: None,
+                revision: None,
+                tts_provider: None,
+            },
+        )
         .await
         .unwrap();
     let bob_conversation = conversations
-        .respond(RespondRequest {
-            identity: bob.clone(),
-            external_conversation_id: "shared-conversation-id".into(),
-            text: "hello".into(),
-            initiation_context: None,
-            voice_signature: None,
-            turn_id: None,
-            revision: None,
-            tts_provider: None,
-        })
+        .respond(
+            bob,
+            RespondRequest {
+                channel: "test-channel".into(),
+                external_conversation_id: "shared-conversation-id".into(),
+                text: "hello".into(),
+                initiation_context: None,
+                voice_signature: None,
+                turn_id: None,
+                revision: None,
+                tts_provider: None,
+            },
+        )
         .await
         .unwrap();
     assert_ne!(
@@ -89,10 +107,13 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
     );
 
     conversations
-        .complete(CompleteConversationRequest {
-            identity: bob.clone(),
-            external_conversation_id: "shared-conversation-id".into(),
-        })
+        .complete(
+            bob,
+            CompleteConversationRequest {
+                channel: "test-channel".into(),
+                external_conversation_id: "shared-conversation-id".into(),
+            },
+        )
         .await
         .unwrap();
     let alice_status: String = sqlx::query_scalar("SELECT status FROM conversations WHERE id = $1")
@@ -105,8 +126,8 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
     let now = Utc::now();
     let alice_schedule = schedules
         .create_at(
+            alice,
             CreateScheduleRequest {
-                identity: alice.clone(),
                 instruction: "Alice reminder".into(),
                 schedule_kind: ScheduleKind::Once,
                 run_at: Some(now + Duration::hours(1)),
@@ -119,9 +140,9 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
         .unwrap();
     let cross_context_update = schedules
         .update_at(
+            bob,
             alice_schedule.id,
             UpdateScheduleRequest {
-                identity: bob,
                 state: Some("paused".into()),
                 run_at: None,
                 recurrence_expression: None,
@@ -133,9 +154,9 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
 
     schedules
         .update_at(
+            alice,
             alice_schedule.id,
             UpdateScheduleRequest {
-                identity: alice,
                 state: Some("paused".into()),
                 run_at: None,
                 recurrence_expression: None,
@@ -145,57 +166,21 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
         .await
         .unwrap();
 
-    let charlie = identity("charlie");
-    let charlie_owner = IdentityService::new(db.clone())
-        .resolve_legacy_owner(&charlie)
-        .await
-        .unwrap();
-    let legacy_conversation_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO conversations (user_id, channel, external_id) \
-         VALUES ($1, $2, $3) RETURNING id",
-    )
-    .bind(charlie_owner.user_id.0)
-    .bind(&charlie.channel)
-    .bind("rolling-legacy-conversation")
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
-    let resumed = conversations
-        .respond(RespondRequest {
-            identity: charlie,
-            external_conversation_id: "rolling-legacy-conversation".into(),
-            text: "resume".into(),
-            initiation_context: None,
-            voice_signature: None,
-            turn_id: None,
-            revision: None,
-            tts_provider: None,
-        })
-        .await
-        .unwrap();
-    assert_eq!(resumed.conversation_id.0, legacy_conversation_id);
-    let restored_context: Uuid =
-        sqlx::query_scalar("SELECT user_context_id FROM conversations WHERE id = $1")
-            .bind(legacy_conversation_id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-    assert_eq!(restored_context, charlie_owner.user_context_id.0);
+    let legacy_insert = sqlx::query(
+        "INSERT INTO conversations (user_id, channel, external_id) VALUES ($1, 'test-channel', 'legacy')",
+    ).bind(alice.user_id.0).execute(db.pool()).await;
+    assert!(
+        legacy_insert.is_err(),
+        "null-context legacy conversations must be rejected"
+    );
 }
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
     let db = setup().await;
-    let identities = IdentityService::new(db.clone());
-    let alice = identities
-        .resolve_legacy_owner(&identity("task-alice"))
-        .await
-        .unwrap();
-    let bob = identities
-        .resolve_legacy_owner(&identity("task-bob"))
-        .await
-        .unwrap();
+    let alice = owner(&db, "task-alice").await;
+    let bob = owner(&db, "task-bob").await;
     let mut context = ToolContext::new();
 
     let bob_project_id: Uuid = sqlx::query_scalar(

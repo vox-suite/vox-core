@@ -60,6 +60,7 @@ impl ConversationService {
 
     pub async fn speculate(
         &self,
+        owner: ResourceOwner,
         request: SpeculateRequest,
     ) -> Result<&'static str, ConversationError> {
         if request.text.trim().is_empty()
@@ -73,13 +74,9 @@ impl ConversationService {
         if self.jev.is_none() {
             return Ok("unavailable");
         }
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let key = (
             owner,
-            request.identity.channel.clone(),
+            request.channel.clone(),
             request.external_conversation_id.clone(),
             request.turn_id.clone(),
         );
@@ -171,7 +168,7 @@ impl ConversationService {
         self.register_revision(
             (
                 owner,
-                request.identity.channel.clone(),
+                request.channel.clone(),
                 request.external_conversation_id.clone(),
                 turn.clone(),
             ),
@@ -190,7 +187,7 @@ impl ConversationService {
             .await
             .get(&(
                 owner,
-                request.identity.channel.clone(),
+                request.channel.clone(),
                 request.external_conversation_id.clone(),
                 turn.clone(),
             ))
@@ -209,7 +206,7 @@ impl ConversationService {
             && !turns
                 .get(&(
                     owner,
-                    request.identity.channel.clone(),
+                    request.channel.clone(),
                     request.external_conversation_id.clone(),
                     turn.clone(),
                 ))
@@ -228,7 +225,7 @@ impl ConversationService {
     ) -> Option<Work> {
         let key = (
             owner,
-            request.identity.channel.clone(),
+            request.channel.clone(),
             request.external_conversation_id.clone(),
             request.turn_id.clone()?,
         );

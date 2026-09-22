@@ -163,9 +163,8 @@ impl Tool for ScheduleOutboundCall {
             chrono::DateTime::parse_from_rfc3339(dt_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S").map(
-                        |naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc),
-                    )
+                    chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
+                        .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
                 })
                 .map_err(|_| {
                     CallToolError::InvalidInput(
@@ -181,10 +180,11 @@ impl Tool for ScheduleOutboundCall {
             let p_clean = p.trim().to_string();
             if !p_clean.is_empty() {
                 let _ = sqlx::query(
-                    "INSERT INTO user_identities (user_id, channel, external_id) \
-                     VALUES ($1, 'phone', $2) \
-                     ON CONFLICT DO NOTHING",
+                    "INSERT INTO user_contact_points (user_context_id, user_id, channel, external_id) \
+                     VALUES ($1, $2, 'phone', $3) \
+                     ON CONFLICT (user_context_id, channel, external_id) DO NOTHING",
                 )
+                .bind(self.owner.user_context_id.0)
                 .bind(self.owner.user_id.0)
                 .bind(&p_clean)
                 .execute(db.pool())
@@ -195,10 +195,11 @@ impl Tool for ScheduleOutboundCall {
             }
         } else {
             sqlx::query_scalar(
-                "SELECT external_id FROM user_identities \
-                 WHERE user_id = $1 AND channel = 'phone' \
+                "SELECT external_id FROM user_contact_points \
+                 WHERE user_context_id = $1 AND user_id = $2 AND channel = 'phone' \
                  ORDER BY created_at DESC LIMIT 1",
             )
+            .bind(self.owner.user_context_id.0)
             .bind(self.owner.user_id.0)
             .fetch_optional(db.pool())
             .await?
@@ -334,10 +335,11 @@ impl Tool for TriggerOutboundCall {
             let p_clean = phone.trim();
             if !p_clean.is_empty() {
                 let _ = sqlx::query(
-                    "INSERT INTO user_identities (user_id, channel, external_id) \
-                     VALUES ($1, 'phone', $2) \
-                     ON CONFLICT DO NOTHING",
+                    "INSERT INTO user_contact_points (user_context_id, user_id, channel, external_id) \
+                     VALUES ($1, $2, 'phone', $3) \
+                     ON CONFLICT (user_context_id, channel, external_id) DO NOTHING",
                 )
+                .bind(self.owner.user_context_id.0)
                 .bind(self.owner.user_id.0)
                 .bind(p_clean)
                 .execute(db.pool())
@@ -394,7 +396,10 @@ mod tests {
         };
         let tool = ScheduleOutboundCall::new(None, None, owner);
         assert_eq!(ScheduleOutboundCall::NAME, "schedule_outbound_call");
-        assert!(tool.description().contains("Schedule an outbound phone call"));
+        assert!(
+            tool.description()
+                .contains("Schedule an outbound phone call")
+        );
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["delay_minutes"].is_object());

@@ -1,12 +1,19 @@
-use crate::identity::ChannelIdentity;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Delivery metadata for an already-authorized outbound call. This does not
+/// identify or authorize the resource owner.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelRecipient {
+    pub channel: String,
+    pub external_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutboundCallRequest {
     pub action_id: Uuid,
-    pub identity: ChannelIdentity,
+    pub recipient: ChannelRecipient,
     pub reason: String,
     pub opening_instruction: String,
     pub conversation_id: Uuid,

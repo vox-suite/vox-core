@@ -1,7 +1,7 @@
 use crate::{
-    bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest},
+    bridge_client::{BridgeError, ChannelRecipient, OutboundBridge, OutboundCallRequest},
     db::Db,
-    identity::{ChannelIdentity, ResourceOwner, UserContextId, UserId},
+    identity::{ResourceOwner, UserContextId, UserId},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,9 @@ impl OutboundCallService {
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone_clean = phone_number.trim();
         if phone_clean.is_empty() {
-            return Err(OutboundError::InvalidInput("Phone number cannot be empty".into()));
+            return Err(OutboundError::InvalidInput(
+                "Phone number cannot be empty".into(),
+            ));
         }
         let reason_clean = reason.trim();
         if reason_clean.is_empty() {
@@ -76,19 +78,22 @@ impl OutboundCallService {
         }
         let opening_clean = opening_instruction.trim();
         if opening_clean.is_empty() {
-            return Err(OutboundError::InvalidInput("Opening instruction cannot be empty".into()));
+            return Err(OutboundError::InvalidInput(
+                "Opening instruction cannot be empty".into(),
+            ));
         }
 
         let call_id = Uuid::new_v4();
         let conversation_id = Uuid::new_v4();
         let idempotency_key = format!("outbound:{}:{}", owner.user_id.0, call_id);
 
-        // Ensure user has this phone identity recorded
+        // Store the phone number as context-scoped contact metadata only.
         let _ = sqlx::query(
-            "INSERT INTO user_identities (user_id, channel, external_id) \
-             VALUES ($1, 'phone', $2) \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO user_contact_points (user_context_id, user_id, channel, external_id) \
+             VALUES ($1, $2, 'phone', $3) \
+             ON CONFLICT (user_context_id, channel, external_id) DO NOTHING",
         )
+        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(phone_clean)
         .execute(self.db.pool())
@@ -145,7 +150,7 @@ impl OutboundCallService {
             let response = bridge
                 .initiate_outbound_call(OutboundCallRequest {
                     action_id: call_id,
-                    identity: ChannelIdentity {
+                    recipient: ChannelRecipient {
                         channel: "phone".into(),
                         external_id: phone_clean.to_string(),
                     },
@@ -204,10 +209,11 @@ impl OutboundCallService {
         task_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone: Option<String> = sqlx::query_scalar(
-            "SELECT external_id FROM user_identities \
-             WHERE user_id = $1 AND channel = 'phone' \
+            "SELECT external_id FROM user_contact_points \
+             WHERE user_context_id = $1 AND user_id = $2 AND channel = 'phone' \
              ORDER BY created_at DESC LIMIT 1",
         )
+        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .fetch_optional(self.db.pool())
         .await?;

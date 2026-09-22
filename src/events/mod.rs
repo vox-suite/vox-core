@@ -1,7 +1,6 @@
 pub mod handler;
 pub mod service;
 
-use crate::identity::ChannelIdentity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,7 +13,6 @@ pub struct EventId(pub Uuid);
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct IngestEventRequest {
     pub idempotency_key: String,
-    pub identity: ChannelIdentity,
     pub event_type: String,
     pub occurred_at: DateTime<Utc>,
     pub payload: Value,

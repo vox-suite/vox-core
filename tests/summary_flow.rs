@@ -9,7 +9,9 @@ use vox_core::{
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
     db::Db,
-    identity::{ChannelIdentity, UserId},
+    identity::{
+        DeploymentId, HostAppId, IdentityService, ResourceOwner, UserContextSubject, UserId,
+    },
     memory::{
         MemoryService,
         cache::{CacheError, ContextCache},
@@ -65,35 +67,50 @@ async fn setup() -> Db {
     db
 }
 
+async fn owner(db: &Db, host_user_id: &str) -> ResourceOwner {
+    let deployment_id: uuid::Uuid = sqlx::query_scalar("INSERT INTO platform_deployments (external_key) VALUES ('test.summary') ON CONFLICT (external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id").fetch_one(db.pool()).await.unwrap();
+    let host_app_id: uuid::Uuid = sqlx::query_scalar("INSERT INTO host_apps (deployment_id, external_key) VALUES ($1, 'test.host') ON CONFLICT (deployment_id, external_key) DO UPDATE SET external_key=EXCLUDED.external_key RETURNING id").bind(deployment_id).fetch_one(db.pool()).await.unwrap();
+    IdentityService::new(db.clone())
+        .resolve_context(&UserContextSubject {
+            deployment_id: DeploymentId(deployment_id),
+            host_app_id: HostAppId(host_app_id),
+            organization_id: None,
+            host_user_id: host_user_id.into(),
+        })
+        .await
+        .unwrap()
+        .owner()
+}
+
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
 async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
     let db = setup().await;
     let service = ConversationService::new(db.clone(), Arc::new(Responder));
-    let identity = ChannelIdentity {
-        channel: "phone".into(),
-        external_id: "+919999999997".into(),
-    };
+    let owner = owner(&db, "phone:+919999999997").await;
     let response = service
-        .respond(RespondRequest {
-            identity: identity.clone(),
-            external_conversation_id: "CA-summary".into(),
-            text: "I prefer Bengaluru".into(),
-            initiation_context: None,
-            voice_signature: None,
-            turn_id: None,
-            revision: None,
-            tts_provider: None,
-        })
+        .respond(
+            owner,
+            RespondRequest {
+                channel: "phone".into(),
+                external_conversation_id: "CA-summary".into(),
+                text: "I prefer Bengaluru".into(),
+                initiation_context: None,
+                voice_signature: None,
+                turn_id: None,
+                revision: None,
+                tts_provider: None,
+            },
+        )
         .await
         .unwrap();
     let completion = CompleteConversationRequest {
-        identity,
+        channel: "phone".into(),
         external_conversation_id: "CA-summary".into(),
     };
     let (first, second) = tokio::join!(
-        service.complete(completion.clone()),
-        service.complete(completion)
+        service.complete(owner, completion.clone()),
+        service.complete(owner, completion)
     );
     first.unwrap();
     second.unwrap();
@@ -126,14 +143,13 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
 #[ignore = "requires isolated PostgreSQL"]
 async fn projection_drops_old_recaps_before_commitments_and_stays_valid_json() {
     let db = setup().await;
-    let user_id: uuid::Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+    let owner = owner(&db, "projection-user").await;
+    let user_id = owner.user_id.0;
     for index in 0..20 {
         let conversation_id: uuid::Uuid = sqlx::query_scalar(
-            "INSERT INTO conversations (user_id, channel, external_id, status) VALUES ($1, 'phone', $2, 'completed') RETURNING id",
+            "INSERT INTO conversations (user_context_id, user_id, channel, external_id, status) VALUES ($1, $2, 'phone', $3, 'completed') RETURNING id",
         )
+        .bind(owner.user_context_id.0)
         .bind(user_id)
         .bind(format!("context-{index}"))
         .fetch_one(db.pool())
