@@ -5,6 +5,8 @@
 **Scope:** `vox-core#2` / E02 — Amazon, Expedia, Zomato, and Uber  
 **Evidence standard:** Public, first-party provider documentation and terms only
 
+> **2026-09-23 provider check:** Uber's current [GET /v3/me documentation](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get) explicitly says this endpoint requires Uber approval, even though `profile` is labelled a general scope in the [Riders scopes guide](https://developer.uber.com/docs/riders/guides/scopes). A general OAuth scope is not proof that Vox may retrieve a stable rider identity. The selected connected-read route remains disabled until Uber confirms access to the identity and history endpoints for the Vox application and live account tests pass. Recheck the current scopes and endpoint versions before implementing the production adapter.
+
 ## Executive decision
 
 Platform V1 should use the following routes:
@@ -145,6 +147,7 @@ No production adapter may declare a capability above these researched levels. In
 ### Uber connected read
 
 - Developer application registration and real OAuth credentials.
+- Provider confirmation that the Vox application can use a stable rider-identity endpoint; the current `/v3/me` documentation states that approval is required.
 - Consent screen and privacy policy reviewed against the exact `history_lite`/`history` fields.
 - Successful connect, refresh, revoke, disconnect, and cross-user-isolation tests.
 - Provider response captured in redacted form, including region/account behavior and rate-limit headers where available.
