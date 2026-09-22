@@ -35,24 +35,22 @@ delay: Duration,
 
 #[async_trait]
 impl ContextCache for GreetingCache {
-async fn get(&self, _: UserId) -> Result<Option<String>, CacheError> {
-    panic!("opening must not load user context")
-}
-
-async fn set(&self, _: UserId, _: &str) -> Result<(), CacheError> {
-    Ok(())
-}
-
-async fn get_greeting_name(
-    &self,
-    channel: &str,
-    external_id: &str,
-) -> Result<Option<String>, CacheError> {
-    assert_eq!(channel, "phone");
-    assert_eq!(external_id, "+919876543210");
-    tokio::time::sleep(self.delay).await;
-    Ok(self.name.clone())
-}
+    async fn get_user_by_channel(
+        &self,
+        channel: &str,
+        external_id: &str,
+    ) -> Result<Option<(UserId, crate::memory::cache::MinimalUserInfo)>, CacheError> {
+        assert_eq!(channel, "phone");
+        assert_eq!(external_id, "+919876543210");
+        tokio::time::sleep(self.delay).await;
+        Ok(Some((
+            UserId(uuid::Uuid::nil()),
+            crate::memory::cache::MinimalUserInfo {
+                name: self.name.clone(),
+                channels: vec![],
+            },
+        )))
+    }
 }
 
 async fn greeting(name: Option<&str>, delay: Duration) -> String {

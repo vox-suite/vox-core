@@ -48,11 +48,18 @@ struct FailingCache;
 
 #[async_trait]
 impl ContextCache for FailingCache {
-    async fn get(&self, _: UserId) -> Result<Option<String>, CacheError> {
+    async fn get_user(
+        &self,
+        _: UserId,
+    ) -> Result<Option<vox_core::memory::cache::MinimalUserInfo>, CacheError> {
         Err(redis::RedisError::from((redis::ErrorKind::IoError, "offline")).into())
     }
 
-    async fn set(&self, _: UserId, _: &str) -> Result<(), CacheError> {
+    async fn put_user(
+        &self,
+        _: UserId,
+        _: &vox_core::memory::cache::MinimalUserInfo,
+    ) -> Result<(), CacheError> {
         Err(redis::RedisError::from((redis::ErrorKind::IoError, "offline")).into())
     }
 }

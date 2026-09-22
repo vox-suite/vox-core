@@ -1,57 +1,62 @@
 /**
-* In-memory and Redis context caching for fast conversation loading.
-*/
-use crate::identity::UserId;
+ * Redis-backed minimal user cache (name + channels only).
+ */
+use crate::{identity::UserId, redis_keys};
 use async_trait::async_trait;
 use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
     #[error("context cache unavailable")]
     Redis(#[from] redis::RedisError),
+    #[error("context cache payload is invalid")]
+    Payload,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MinimalUserInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<MinimalChannel>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MinimalChannel {
+    pub channel: String,
+    pub external_id: String,
 }
 
 #[async_trait]
 pub trait ContextCache: Send + Sync {
-    async fn get_greeting_name(
-        &self,
-        _channel: &str,
-        _external_id: &str,
-    ) -> Result<Option<String>, CacheError> {
+    async fn get_user(&self, _user_id: UserId) -> Result<Option<MinimalUserInfo>, CacheError> {
         Ok(None)
     }
 
-    async fn set_greeting_name(
+    async fn put_user(
         &self,
-        _channel: &str,
-        _external_id: &str,
-        _name: &str,
+        _user_id: UserId,
+        _info: &MinimalUserInfo,
     ) -> Result<(), CacheError> {
         Ok(())
     }
 
-    async fn replace_greeting_names(
+    /// Resolve a caller by channel + external id (e.g. phone number).
+    async fn get_user_by_channel(
         &self,
-        _names: &[(String, String, String)],
+        _channel: &str,
+        _external_id: &str,
+    ) -> Result<Option<(UserId, MinimalUserInfo)>, CacheError> {
+        Ok(None)
+    }
+
+    /// Replace the entire minimal-user cache from a Postgres snapshot.
+    async fn replace_users(
+        &self,
+        _users: &[(UserId, MinimalUserInfo)],
     ) -> Result<(), CacheError> {
-        Ok(())
-    }
-
-    async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError>;
-    async fn set(&self, user_id: UserId, value: &str) -> Result<(), CacheError>;
-    async fn get_user_name(&self, _user_id: UserId) -> Result<Option<String>, CacheError> {
-        Ok(None)
-    }
-
-    async fn set_user_name(&self, _user_id: UserId, _name: &str) -> Result<(), CacheError> {
-        Ok(())
-    }
-
-    async fn get_user_id_by_name(&self, _name: &str) -> Result<Option<UserId>, CacheError> {
-        Ok(None)
-    }
-
-    async fn set_user_id_by_name(&self, _name: &str, _user_id: UserId) -> Result<(), CacheError> {
         Ok(())
     }
 }
@@ -66,111 +71,115 @@ impl RedisContextCache {
             client: redis::Client::open(url)?,
         })
     }
+
+    async fn delete_pattern(
+        connection: &mut redis::aio::MultiplexedConnection,
+        pattern: &str,
+    ) -> Result<(), CacheError> {
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(200)
+                .query_async(connection)
+                .await?;
+            if !keys.is_empty() {
+                let _: () = connection.del(keys).await?;
+            }
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl ContextCache for RedisContextCache {
-    async fn get_greeting_name(
-        &self,
-        channel: &str,
-        external_id: &str,
-    ) -> Result<Option<String>, CacheError> {
+    async fn get_user(&self, user_id: UserId) -> Result<Option<MinimalUserInfo>, CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
-        let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
-        connection
-            .hget("vox:greeting-names", field)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn set_greeting_name(
-        &self,
-        channel: &str,
-        external_id: &str,
-        name: &str,
-    ) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
-        connection
-            .hset("vox:greeting-names", field, name.trim())
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn replace_greeting_names(
-        &self,
-        names: &[(String, String, String)],
-    ) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        let mut pipeline = redis::pipe();
-        pipeline.atomic().del("vox:greeting-names").ignore();
-        for (channel, external_id, name) in names {
-            let name = name.trim();
-            if !name.is_empty() {
-                let field = serde_json::to_string(&(channel.trim(), external_id.trim())).unwrap();
-                pipeline.hset("vox:greeting-names", field, name).ignore();
-            }
+        let payload: Option<String> = connection.get(redis_keys::user(user_id)).await?;
+        match payload {
+            Some(raw) => Ok(Some(
+                serde_json::from_str(&raw).map_err(|_| CacheError::Payload)?,
+            )),
+            None => Ok(None),
         }
-        pipeline.expire("vox:greeting-names", 172800).ignore();
+    }
+
+    async fn put_user(&self, user_id: UserId, info: &MinimalUserInfo) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
+        let mut pipeline = redis::pipe();
+        pipeline
+            .atomic()
+            .set(redis_keys::user(user_id), payload)
+            .ignore();
+        for channel in &info.channels {
+            pipeline
+                .set(
+                    redis_keys::user_by_channel(&channel.channel, &channel.external_id),
+                    user_id.0.to_string(),
+                )
+                .ignore();
+        }
         pipeline
             .query_async::<()>(&mut connection)
             .await
             .map_err(Into::into)
     }
 
-    async fn get(&self, user_id: UserId) -> Result<Option<String>, CacheError> {
+    async fn get_user_by_channel(
+        &self,
+        channel: &str,
+        external_id: &str,
+    ) -> Result<Option<(UserId, MinimalUserInfo)>, CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
-        connection
-            .get(format!("vox:user-context:{}", user_id.0))
-            .await
-            .map_err(Into::into)
+        let user_id: Option<String> = connection
+            .get(redis_keys::user_by_channel(channel, external_id))
+            .await?;
+        let Some(user_id) = user_id else {
+            return Ok(None);
+        };
+        let user_id = Uuid::parse_str(&user_id)
+            .map(UserId)
+            .map_err(|_| CacheError::Payload)?;
+        let info = self.get_user(user_id).await?;
+        Ok(info.map(|info| (user_id, info)))
     }
 
-    async fn set(&self, user_id: UserId, value: &str) -> Result<(), CacheError> {
+    async fn replace_users(
+        &self,
+        users: &[(UserId, MinimalUserInfo)],
+    ) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
-        connection
-            .set(format!("vox:user-context:{}", user_id.0), value)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        connection
-            .get(format!("vox:user-name:{}", user_id.0))
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        connection
-            .set(format!("vox:user-name:{}", user_id.0), name)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn get_user_id_by_name(&self, name: &str) -> Result<Option<UserId>, CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        let id_str: Option<String> = connection
-            .get(format!("vox:user-by-name:{}", name.trim().to_lowercase()))
-            .await
-            .map_err(CacheError::Redis)?;
-        if let Some(s) = id_str
-            && let Ok(uid) = uuid::Uuid::parse_str(&s)
-        {
-            return Ok(Some(UserId(uid)));
+        Self::delete_pattern(&mut connection, redis_keys::USER_SCAN).await?;
+        Self::delete_pattern(&mut connection, redis_keys::CHANNEL_SCAN).await?;
+        if users.is_empty() {
+            return Ok(());
         }
-        Ok(None)
-    }
-
-    async fn set_user_id_by_name(&self, name: &str, user_id: UserId) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        connection
-            .set(
-                format!("vox:user-by-name:{}", name.trim().to_lowercase()),
-                user_id.0.to_string(),
-            )
+        let mut pipeline = redis::pipe();
+        pipeline.atomic();
+        for (user_id, info) in users {
+            let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
+            pipeline
+                .set(redis_keys::user(*user_id), payload)
+                .ignore();
+            for channel in &info.channels {
+                pipeline
+                    .set(
+                        redis_keys::user_by_channel(&channel.channel, &channel.external_id),
+                        user_id.0.to_string(),
+                    )
+                    .ignore();
+            }
+        }
+        pipeline
+            .query_async::<()>(&mut connection)
             .await
             .map_err(Into::into)
     }

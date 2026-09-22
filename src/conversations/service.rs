@@ -559,14 +559,15 @@ impl ConversationService {
         let name = if let Some(cache) = self.memory.cache() {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(100),
-                cache.get_greeting_name(
+                cache.get_user_by_channel(
                     request.identity.channel.trim(),
                     request.identity.external_id.trim(),
                 ),
             )
             .await
             {
-                Ok(Ok(name)) => name,
+                Ok(Ok(Some((_, info)))) => info.name,
+                Ok(Ok(None)) => None,
                 _ => {
                     tracing::warn!("Greeting cache unavailable; using generic opening");
                     None

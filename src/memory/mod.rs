@@ -1,14 +1,12 @@
 /**
-* Context cache, memory projection, and user name resolution.
-*/
+ * Context cache, memory projection, and user name resolution.
+ */
 pub mod cache;
 pub mod greetings;
 pub mod projection;
 
-use crate::{
-    db::Db,
-    identity::UserId,
-};
+use crate::{db::Db, identity::UserId};
+use cache::{MinimalChannel, MinimalUserInfo};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -19,34 +17,28 @@ pub struct MemoryService {
 
 impl MemoryService {
     pub fn new(db: Db, cache: Option<Arc<dyn cache::ContextCache>>) -> Self {
-        Self {
-            db,
-            cache,
-        }
+        Self { db, cache }
     }
 
     pub fn cache(&self) -> Option<&Arc<dyn cache::ContextCache>> {
         self.cache.as_ref()
     }
 
+    /// Full LLM context projection — always built from Postgres (not Redis).
     pub async fn load(&self, user_id: UserId) -> Result<String, sqlx::Error> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(value)) = cache.get(user_id).await
-        {
-            return Ok(value);
-        }
-        let value = projection::build(&self.db, user_id).await?;
-        if let Some(cache) = &self.cache {
-            let _ = cache.set(user_id, &value).await;
-        }
-        Ok(value)
+        projection::build(&self.db, user_id).await
     }
 
     pub async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, sqlx::Error> {
         if let Some(cache) = &self.cache
-            && let Ok(Some(name)) = cache.get_user_name(user_id).await
+            && let Ok(Some(info)) = cache.get_user(user_id).await
+            && let Some(name) = info
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
         {
-            return Ok(Some(name));
+            return Ok(Some(name.to_owned()));
         }
 
         let name: Option<String> =
@@ -58,11 +50,8 @@ impl MemoryService {
                 .await?
                 .flatten();
 
-        if let Some(ref n) = name
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_user_name(user_id, n).await;
-            let _ = cache.set_user_id_by_name(n, user_id).await;
+        if let Some(ref n) = name {
+            let _ = self.write_minimal_user(user_id, Some(n)).await;
         }
 
         Ok(name)
@@ -83,24 +72,7 @@ impl MemoryService {
         .execute(self.db.pool())
         .await?;
 
-        if let Some(cache) = &self.cache {
-            let _ = cache.set_user_name(user_id, trimmed).await;
-            let _ = cache.set_user_id_by_name(trimmed, user_id).await;
-            if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                "SELECT channel, normalized_external_id FROM channel_identities WHERE user_id = $1 AND revoked_at IS NULL",
-            )
-            .bind(user_id.0)
-            .fetch_all(self.db.pool())
-            .await
-            {
-                for (channel, external_id) in identities {
-                    let _ = cache
-                        .set_greeting_name(&channel, &external_id, trimmed)
-                        .await;
-                }
-            }
-        }
-
+        let _ = self.write_minimal_user(user_id, Some(trimmed)).await;
         Ok(())
     }
 
@@ -108,12 +80,6 @@ impl MemoryService {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return Ok(None);
-        }
-
-        if let Some(cache) = &self.cache
-            && let Ok(Some(uid)) = cache.get_user_id_by_name(trimmed).await
-        {
-            return Ok(Some(uid));
         }
 
         let user_id = sqlx::query_scalar::<_, uuid::Uuid>(
@@ -125,21 +91,50 @@ impl MemoryService {
         .fetch_optional(self.db.pool())
         .await?;
 
-        let uid = user_id.map(UserId);
-        if let Some(uid) = uid
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_user_id_by_name(trimmed, uid).await;
-        }
-        Ok(uid)
+        Ok(user_id.map(UserId))
     }
 
     pub async fn refresh(&self, user_id: UserId) -> Result<String, sqlx::Error> {
+        // Projection is Postgres-only; refresh also rewrites the minimal Redis user.
         let value = projection::build(&self.db, user_id).await?;
-        if let Some(cache) = &self.cache {
-            let _ = cache.set(user_id, &value).await;
-        }
+        let _ = self.write_minimal_user(user_id, None).await;
         Ok(value)
     }
 
+    async fn write_minimal_user(
+        &self,
+        user_id: UserId,
+        name_override: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let Some(cache) = &self.cache else {
+            return Ok(());
+        };
+        let name = if let Some(name) = name_override {
+            Some(name.to_owned())
+        } else {
+            sqlx::query_scalar(
+                "SELECT COALESCE(NULLIF(profile_facts->>'name', ''), display_name) FROM users WHERE id = $1",
+            )
+            .bind(user_id.0)
+            .fetch_optional(self.db.pool())
+            .await?
+            .flatten()
+        };
+        let channels = sqlx::query_as::<_, (String, String)>(
+            "SELECT channel, normalized_external_id FROM channel_identities \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id.0)
+        .fetch_all(self.db.pool())
+        .await?
+        .into_iter()
+        .map(|(channel, external_id)| MinimalChannel {
+            channel,
+            external_id,
+        })
+        .collect();
+        let info = MinimalUserInfo { name, channels };
+        let _ = cache.put_user(user_id, &info).await;
+        Ok(())
+    }
 }

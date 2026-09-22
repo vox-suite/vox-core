@@ -44,7 +44,7 @@ async fn main() {
         .ok()
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
-    let _ = memory.sync_greeting_names().await;
+    let _ = memory.sync_minimal_users().await;
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");
@@ -63,23 +63,6 @@ async fn main() {
         legacy_state = legacy_state.with_admin(admin);
     }
     if let Some(mut trust) = legacy_state.take_host_trust() {
-        let redis_url = config
-            .redis_url
-            .clone()
-            .unwrap_or_else(|| "redis://redis:6379".to_string());
-        match redis::Client::open(redis_url.as_str()) {
-            Ok(client) => match client.get_connection_manager().await {
-                Ok(connection) => trust = trust.with_redis(connection),
-                Err(error) => {
-                    tracing::error!(%error, "host assertion replay store is unavailable");
-                    trust = trust.require_shared_replay();
-                }
-            },
-            Err(error) => {
-                tracing::error!(%error, "host assertion replay store is unavailable");
-                trust = trust.require_shared_replay();
-            }
-        }
         trust
             .load_durable_credentials(std::env::var("VOX_HOST_CREDENTIALS_SECRET").ok())
             .await

@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, RwLock},
 };
 
 mod gsm;
@@ -196,10 +193,7 @@ pub struct HostTrustService {
     identities: IdentityService,
     credentials: Arc<RwLock<HashMap<Uuid, ConfiguredCredential>>>,
     nonces: Arc<RwLock<HashMap<(Uuid, Uuid), DateTime<Utc>>>>,
-    redis: Option<redis::aio::ConnectionManager>,
     secret_resource: Option<String>,
-    credentials_version: Arc<AtomicU64>,
-    replay_required: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -224,8 +218,6 @@ pub enum HostTrustError {
     Database(#[from] sqlx::Error),
     #[error("host credential store is unavailable")]
     CredentialStore,
-    #[error("host assertion replay store is unavailable")]
-    ReplayStore,
     #[error("host context resolution failed")]
     Identity(#[from] IdentityError),
 }
@@ -237,21 +229,8 @@ impl HostTrustService {
             db,
             credentials: Arc::new(RwLock::new(HashMap::new())),
             nonces: Arc::new(RwLock::new(HashMap::new())),
-            redis: None,
             secret_resource: None,
-            credentials_version: Arc::new(AtomicU64::new(0)),
-            replay_required: false,
         }
-    }
-
-    pub fn with_redis(mut self, redis: redis::aio::ConnectionManager) -> Self {
-        self.redis = Some(redis);
-        self
-    }
-
-    pub fn require_shared_replay(mut self) -> Self {
-        self.replay_required = true;
-        self
     }
 
     pub async fn load_durable_credentials(
@@ -272,9 +251,6 @@ impl HostTrustService {
         }
         drop(creds);
         self.secret_resource = Some(resource);
-        if let Some(version) = self.remote_credential_version().await {
-            self.credentials_version.store(version, Ordering::SeqCst);
-        }
         Ok(())
     }
 
@@ -292,48 +268,6 @@ impl HostTrustService {
         gsm::write_credentials(resource, &stored)
             .await
             .map_err(|_| HostTrustError::CredentialStore)?;
-        if let Some(mut redis) = self.redis.clone() {
-            let version: i64 = redis::cmd("INCR")
-                .arg("vox:host-credentials:version")
-                .query_async(&mut redis)
-                .await
-                .map_err(|_| HostTrustError::CredentialStore)?;
-            self.credentials_version
-                .store(u64::try_from(version).unwrap_or(0), Ordering::SeqCst);
-        }
-        Ok(())
-    }
-
-    async fn remote_credential_version(&self) -> Option<u64> {
-        let mut redis = self.redis.clone()?;
-        let version: Option<i64> = redis::cmd("GET")
-            .arg("vox:host-credentials:version")
-            .query_async(&mut redis)
-            .await
-            .ok()?;
-        version.and_then(|value| u64::try_from(value).ok())
-    }
-
-    async fn refresh_credentials_if_needed(&self) -> Result<(), HostTrustError> {
-        let Some(resource) = &self.secret_resource else {
-            return Ok(());
-        };
-        let Some(remote) = self.remote_credential_version().await else {
-            return Ok(());
-        };
-        if remote == self.credentials_version.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        let loaded = gsm::read_credentials(resource)
-            .await
-            .map_err(|_| HostTrustError::CredentialStore)?;
-        let mut creds = self.credentials.write().unwrap();
-        creds.clear();
-        for stored in loaded {
-            let id = stored.credential_id;
-            creds.insert(id, ConfiguredCredential::from_stored(stored));
-        }
-        self.credentials_version.store(remote, Ordering::SeqCst);
         Ok(())
     }
 
@@ -455,10 +389,6 @@ impl HostTrustService {
         origin: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<ResolvedUserContext, HostTrustError> {
-        if self.replay_required && self.redis.is_none() {
-            return Err(HostTrustError::ReplayStore);
-        }
-        self.refresh_credentials_if_needed().await?;
         let request = NormalizedHostContextRequest::from_request(request)?;
 
         let cred = {
@@ -519,23 +449,7 @@ impl HostTrustService {
             .verify_slice(&signature)
             .map_err(|_| HostTrustError::AuthenticationDenied)?;
 
-        // Nonce replay verification (atomic Redis or in-memory fallback)
-        if let Some(mut redis_conn) = self.redis.clone() {
-            let key = format!("vox:nonce:{}:{}", assertion.credential_id, assertion.nonce);
-            let set_result: Result<Option<String>, _> = redis::cmd("SET")
-                .arg(&key)
-                .arg("1")
-                .arg("EX")
-                .arg(HOST_ASSERTION_MAX_AGE_SECONDS)
-                .arg("NX")
-                .query_async(&mut redis_conn)
-                .await;
-
-            match set_result {
-                Ok(Some(_)) => {} // successfully set new nonce
-                _ => return Err(HostTrustError::AssertionReplayed),
-            }
-        } else {
+        {
             let mut nonces = self.nonces.write().unwrap();
             nonces.retain(|_, expires_at| *expires_at >= now);
             let key = (assertion.credential_id, assertion.nonce);
