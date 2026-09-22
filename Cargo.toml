@@ -3,9 +3,6 @@ name = "vox-core"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-sandbox = []
-
 [dependencies]
 axum = "0.8.9"
 async-trait = "0.1"

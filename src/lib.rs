@@ -29,8 +29,6 @@ pub mod jev;
 pub mod jobs;
 pub mod memory;
 pub mod outbound;
-#[cfg(any(test, feature = "sandbox"))]
-pub mod sandbox;
 pub mod schedules;
 pub mod status;
 pub mod storage;
