@@ -62,9 +62,6 @@ async fn main() {
     {
         legacy_state = legacy_state.with_admin(admin);
     }
-    if let Some(token) = config.audit_admin_token {
-        legacy_state = legacy_state.with_audit_admin_token(token);
-    }
     if let Some(mut trust) = legacy_state.take_host_trust() {
         let redis_url = config
             .redis_url

@@ -42,7 +42,6 @@ pub struct AppState {
     pub(crate) rate_limiter: rate_limit::RateLimiter,
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) audit: Option<Arc<crate::audit::AuditService>>,
-    pub(crate) audit_admin_token: Option<Arc<str>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
     pub(crate) db: Option<Db>,
@@ -68,7 +67,6 @@ impl AppState {
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: None,
-            audit_admin_token: None,
             agent_registry: None,
             approvals: None,
             db: None,
@@ -122,7 +120,6 @@ impl AppState {
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
-            audit_admin_token: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
@@ -172,20 +169,12 @@ impl AppState {
         &self.rate_limiter
     }
 
-    pub fn with_audit_admin_token(mut self, token: String) -> Self {
-        if !token.trim().is_empty() {
-            self.audit_admin_token = Some(Arc::from(token));
-        }
-        self
-    }
-
     pub fn with_host_trust(db: Db, service_token: String) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
-            audit_admin_token: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
