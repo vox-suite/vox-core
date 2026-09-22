@@ -31,4 +31,5 @@ impl Db {
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/greeting.rs"]
 mod greeting_tests;

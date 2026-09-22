@@ -976,61 +976,6 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_name_from_text() {
-        assert_eq!(
-            extract_name_from_text("My name is Rahul."),
-            Some("Rahul".into())
-        );
-        assert_eq!(
-            extract_name_from_text("my name is rahul"),
-            Some("rahul".into())
-        );
-        assert_eq!(
-            extract_name_from_text("I'm Rahul Sharma"),
-            Some("Rahul Sharma".into())
-        );
-        assert_eq!(
-            extract_name_from_text("Call me John Doe"),
-            Some("John Doe".into())
-        );
-        assert_eq!(
-            extract_name_from_text("Hi, my name is Rahul"),
-            Some("Rahul".into())
-        );
-        assert_eq!(
-            extract_name_from_text("Hey, I'm Rahul"),
-            Some("Rahul".into())
-        );
-        assert_eq!(extract_name_from_text("Rahul"), Some("Rahul".into()));
-        assert_eq!(extract_name_from_text("Nope."), None);
-        assert_eq!(extract_name_from_text("Hello there"), None);
-    }
-
-    #[test]
-    fn test_verification_state_serialization() {
-        let state = VerificationState::AwaitingName {
-            original_user_id: UserId(Uuid::new_v4()),
-            original_text: "Question".into(),
-            original_user_name: "Rahul".into(),
-        };
-        let serialized = serde_json::to_string(&state).unwrap();
-        let deserialized: VerificationState = serde_json::from_str(&serialized).unwrap();
-        match deserialized {
-            VerificationState::AwaitingName {
-                original_user_name,
-                ..
-            } => {
-                assert_eq!(original_user_name, "Rahul");
-            }
-            _ => panic!("unexpected state"),
-        }
-    }
-}
 
 #[allow(dead_code)]
 fn accumulate_phone(previous: &str, incoming: &str) -> String {
@@ -1059,15 +1004,9 @@ fn explicit_name(text: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod recovery_tests {
-    use super::*;
+#[path = "../../tests/unit/conversations_tests.rs"]
+mod tests;
 
-    #[test]
-    fn phone_fragments_accumulate_but_full_retries_replace() {
-        assert_eq!(accumulate_phone("98765", "43210"), "9876543210");
-        assert_eq!(accumulate_phone("123", "9876543210"), "9876543210");
-        assert!(explicit_name("What tasks are due?").is_none());
-        assert!(explicit_name("98765").is_none());
-        assert_eq!(explicit_name("My name is Rahul"), Some("Rahul".into()));
-    }
-}
+#[cfg(test)]
+#[path = "../../tests/unit/conversations_recovery_tests.rs"]
+mod recovery_tests;
