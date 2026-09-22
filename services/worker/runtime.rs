@@ -89,6 +89,6 @@ pub async fn run_worker(config: Config, cancellation: CancellationToken) -> Resu
         worker_id,
     );
 
-    let _ = worker.run(cancellation).await;
+    worker.run(cancellation).await?;
     Ok(())
 }

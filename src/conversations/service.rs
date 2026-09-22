@@ -30,8 +30,6 @@ pub enum VerificationState {
         #[serde(default)]
         original_text: String,
         original_user_name: String,
-        #[serde(default)]
-        voice_signature: Option<String>,
     },
     AwaitingPhoneConfirm {
         original_user_id: UserId,
@@ -41,8 +39,6 @@ pub enum VerificationState {
         candidate_name: String,
         #[serde(default)]
         digits: String,
-        #[serde(default)]
-        voice_signature: Option<String>,
     },
 }
 
@@ -263,7 +259,6 @@ impl ConversationService {
     ) -> Result<ConversationTextStream, ConversationError> {
         if crate::agents::conversation::is_voice_channel(&request.identity.channel)
             && request.text.trim() == "The call just connected. Greet the user."
-            && request.voice_signature.is_none()
         {
             return self.cached_opening(request).await;
         }
@@ -290,7 +285,6 @@ impl ConversationService {
         }
         if crate::agents::conversation::is_voice_channel(&request.identity.channel)
             && request.text.trim() == "The call just connected. Greet the user."
-            && request.voice_signature.is_none()
         {
             return self.cached_opening(request).await;
         }
@@ -562,7 +556,7 @@ impl ConversationService {
         request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
         let started = std::time::Instant::now();
-        let mut name = if let Some(cache) = self.memory.cache() {
+        let name = if let Some(cache) = self.memory.cache() {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(100),
                 cache.get_greeting_name(
@@ -574,39 +568,13 @@ impl ConversationService {
             {
                 Ok(Ok(name)) => name,
                 _ => {
-                    tracing::warn!("Greeting cache unavailable; checking database");
+                    tracing::warn!("Greeting cache unavailable; using generic opening");
                     None
                 }
             }
         } else {
             None
         };
-        if name.is_none()
-            && let Ok(Ok(Some(db_name))) = tokio::time::timeout(
-                std::time::Duration::from_millis(150),
-                sqlx::query_scalar::<_, String>(
-                    "SELECT p.facts->>'name' FROM user_identities i JOIN user_profiles p ON p.user_id = i.user_id WHERE i.channel = $1 AND i.external_id = $2 AND p.facts->>'name' IS NOT NULL",
-                )
-                .bind(request.identity.channel.trim())
-                .bind(request.identity.external_id.trim())
-                .fetch_optional(self.db.pool()),
-            )
-            .await
-        {
-            let trimmed = db_name.trim().to_string();
-            if !trimmed.is_empty() {
-                if let Some(cache) = self.memory.cache() {
-                    let _ = cache
-                        .set_greeting_name(
-                            request.identity.channel.trim(),
-                            request.identity.external_id.trim(),
-                            &trimmed,
-                        )
-                        .await;
-                }
-                name = Some(trimmed);
-            }
-        }
         let name = name
             .as_deref()
             .map(str::trim)
@@ -716,20 +684,6 @@ impl ConversationService {
             active_user_id: user_id,
             needs_onboarding: !has_name,
         })
-    }
-
-    #[allow(dead_code)]
-    async fn save_verification(
-        &self,
-        id: ConversationId,
-        state: Option<VerificationState>,
-    ) -> Result<(), ConversationError> {
-        sqlx::query("UPDATE conversations SET verification_state = $1 WHERE id = $2")
-            .bind(state.map(|state| serde_json::to_value(state).unwrap()))
-            .bind(id.0)
-            .execute(self.db.pool())
-            .await?;
-        Ok(())
     }
 
     pub async fn complete(
@@ -1063,7 +1017,6 @@ mod tests {
             original_user_id: UserId(Uuid::new_v4()),
             original_text: "Question".into(),
             original_user_name: "Rahul".into(),
-            voice_signature: None,
         };
         let serialized = serde_json::to_string(&state).unwrap();
         let deserialized: VerificationState = serde_json::from_str(&serialized).unwrap();

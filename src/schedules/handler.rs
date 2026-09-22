@@ -77,10 +77,7 @@ impl ScheduleHandler {
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query(
-            "SELECT s.user_id, COALESCE(s.user_context_id, c.id) AS user_context_id, s.instruction \
-             FROM scheduled_tasks s \
-             JOIN user_contexts c ON c.user_id = s.user_id \
-             WHERE s.id = $1",
+            "SELECT user_id, instruction FROM schedules WHERE id = $1",
         )
         .bind(schedule_id.0)
         .fetch_optional(self.db.pool())
@@ -89,7 +86,7 @@ impl ScheduleHandler {
         let row = row.ok_or(ScheduleHandlerError::NotFound)?;
         let user_id = UserId(row.get("user_id"));
         let owner = ResourceOwner {
-            user_context_id: UserContextId(row.get("user_context_id")),
+            user_context_id: UserContextId(user_id.0),
             user_id,
         };
         let instruction: String = row.get("instruction");
@@ -157,7 +154,7 @@ impl ScheduleHandler {
 
         let _ = sqlx::query(
             "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
-             WHERE user_id = $1 AND status = 'pending' AND (raw_instruction = $2 OR title = $2)",
+             WHERE user_id = $1 AND status = 'pending' AND (instruction = $2 OR title = $2)",
         )
         .bind(user_id.0)
         .bind(&instruction)

@@ -84,7 +84,15 @@ pub struct Actor {
 }
 
 impl Actor {
-    pub fn user(user_id: Uuid) -> Self {
+        pub fn device_id(&self) -> Option<Uuid> {
+        if self.principal_kind == PrincipalKind::Device {
+            Some(self.principal_id)
+        } else {
+            None
+        }
+    }
+
+pub fn user(user_id: Uuid) -> Self {
         Self {
             user_id,
             principal_id: user_id,

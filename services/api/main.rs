@@ -3,6 +3,7 @@
 */
 mod auth;
 mod config;
+mod identity_token;
 mod openapi;
 mod router;
 mod routes;
@@ -63,6 +64,30 @@ async fn main() {
     }
     if let Some(token) = config.audit_admin_token {
         legacy_state = legacy_state.with_audit_admin_token(token);
+    }
+    if let Some(mut trust) = legacy_state.take_host_trust() {
+        let redis_url = config
+            .redis_url
+            .clone()
+            .unwrap_or_else(|| "redis://redis:6379".to_string());
+        match redis::Client::open(redis_url.as_str()) {
+            Ok(client) => match client.get_connection_manager().await {
+                Ok(connection) => trust = trust.with_redis(connection),
+                Err(error) => {
+                    tracing::error!(%error, "host assertion replay store is unavailable");
+                    trust = trust.require_shared_replay();
+                }
+            },
+            Err(error) => {
+                tracing::error!(%error, "host assertion replay store is unavailable");
+                trust = trust.require_shared_replay();
+            }
+        }
+        trust
+            .load_durable_credentials(std::env::var("VOX_HOST_CREDENTIALS_SECRET").ok())
+            .await
+            .expect("host credentials are unavailable");
+        legacy_state.set_host_trust(trust);
     }
 
     let api_state = ApiState::new(legacy_state, db);

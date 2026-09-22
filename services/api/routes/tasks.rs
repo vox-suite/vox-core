@@ -10,7 +10,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 use vox_core::{
-    application::tasks::{CreateTaskInput, TaskService},
+    application::tasks::{CreateTaskInput, TaskService, TaskServiceError, UpdateTaskInput},
     domain::identity::Actor,
 };
 
@@ -40,7 +40,10 @@ pub async fn create_task(
     let task = service
         .create_task(&actor, input)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| match e {
+            TaskServiceError::CollectionNotFound => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -57,6 +60,24 @@ pub async fn get_task(
         Some(t) => Ok(Json(t)),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+pub async fn update_task(
+    State(service): State<TaskService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateTaskInput>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let task = service
+        .update_task(&actor, id, input)
+        .await
+        .map_err(|e| match e {
+            TaskServiceError::NotFound => StatusCode::NOT_FOUND,
+            TaskServiceError::VersionConflict => StatusCode::CONFLICT,
+            TaskServiceError::CollectionNotFound => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+    Ok(Json(task))
 }
 
 pub async fn delete_task(

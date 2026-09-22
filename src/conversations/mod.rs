@@ -19,8 +19,6 @@ pub struct RespondRequest {
     pub text: String,
     pub initiation_context: Option<String>,
     #[serde(default)]
-    pub voice_signature: Option<String>,
-    #[serde(default)]
     pub turn_id: Option<String>,
     #[serde(default)]
     pub revision: Option<u64>,

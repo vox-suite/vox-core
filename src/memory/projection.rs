@@ -19,7 +19,7 @@ struct UserContextProjection {
 
 pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
     let profile =
-        sqlx::query_scalar::<_, Value>("SELECT facts FROM user_profiles WHERE user_id = $1")
+        sqlx::query_scalar::<_, Value>("SELECT profile_facts FROM users WHERE id = $1")
             .bind(user_id.0)
             .fetch_optional(db.pool())
             .await?

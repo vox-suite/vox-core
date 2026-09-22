@@ -93,7 +93,7 @@ impl Tool for GetUserInfo {
         );
         let db = self.db.as_ref().ok_or(ProfileToolError::NotConfigured)?;
         let row =
-            sqlx::query("SELECT facts, persona, version FROM user_profiles WHERE user_id = $1")
+            sqlx::query("SELECT profile_facts AS facts, persona, profile_version AS version FROM users WHERE id = $1")
                 .bind(self.user_id.0)
                 .fetch_optional(db.pool())
                 .await?;
@@ -198,32 +198,35 @@ impl Tool for UpdateUserInfo {
 
         let mut tx = db.pool().begin().await?;
 
+        let display_name = facts_delta.get("name").and_then(|value| value.as_str());
         if let Some(persona_val) = persona_delta {
             sqlx::query(
-                "INSERT INTO user_profiles (user_id, facts, persona, version, updated_at) \
-                 VALUES ($1, $2, $3, 1, now()) \
-                 ON CONFLICT (user_id) DO UPDATE SET \
-                 facts = user_profiles.facts || $2, \
-                 persona = user_profiles.persona || $3, \
-                 version = user_profiles.version + 1, \
-                 updated_at = now()",
+                "UPDATE users SET \
+                 profile_facts = profile_facts || $2, \
+                 persona = persona || $3, \
+                 profile_version = profile_version + 1, \
+                 display_name = COALESCE($4, display_name), \
+                 updated_at = now() \
+                 WHERE id = $1",
             )
             .bind(self.user_id.0)
             .bind(&facts_delta)
             .bind(&persona_val)
+            .bind(display_name)
             .execute(&mut *tx)
             .await?;
         } else {
             sqlx::query(
-                "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-                 VALUES ($1, $2, 1, now()) \
-                 ON CONFLICT (user_id) DO UPDATE SET \
-                 facts = user_profiles.facts || $2, \
-                 version = user_profiles.version + 1, \
-                 updated_at = now()",
+                "UPDATE users SET \
+                 profile_facts = profile_facts || $2, \
+                 profile_version = profile_version + 1, \
+                 display_name = COALESCE($3, display_name), \
+                 updated_at = now() \
+                 WHERE id = $1",
             )
             .bind(self.user_id.0)
             .bind(&facts_delta)
+            .bind(display_name)
             .execute(&mut *tx)
             .await?;
         }
@@ -231,7 +234,7 @@ impl Tool for UpdateUserInfo {
         tx.commit().await?;
 
         let updated_row =
-            sqlx::query("SELECT facts, persona FROM user_profiles WHERE user_id = $1")
+            sqlx::query("SELECT profile_facts AS facts, persona FROM users WHERE id = $1")
                 .bind(self.user_id.0)
                 .fetch_one(db.pool())
                 .await?;

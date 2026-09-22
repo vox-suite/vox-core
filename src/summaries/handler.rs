@@ -161,12 +161,11 @@ impl SummaryHandler {
 
         if inserted.is_some() && !summary.profile_updates.is_empty() {
             sqlx::query(
-                "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-                 VALUES ($1, $2, 1, now()) \
-                 ON CONFLICT (user_id) DO UPDATE SET \
-                 facts = user_profiles.facts || EXCLUDED.facts, \
-                 version = user_profiles.version + 1, \
-                 updated_at = now()",
+                "UPDATE users SET \
+                 profile_facts = profile_facts || $2, \
+                 profile_version = profile_version + 1, \
+                 updated_at = now() \
+                 WHERE id = $1",
             )
             .bind(user_id)
             .bind(&profile_updates_val)

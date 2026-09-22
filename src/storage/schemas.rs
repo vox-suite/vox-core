@@ -107,4 +107,37 @@ impl SchemaRepository {
             }
         }))
     }
+    pub async fn get_by_id(&self, id: Uuid) -> Result<Option<DataSchema>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, user_id, owner_scope, namespace, name, version, description, json_schema, state, created_at, updated_at
+            FROM data_schemas
+            WHERE id = 
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| {
+            let state_str: String = r.get("state");
+            let owner_scope: Option<String> = r.get("owner_scope");
+            DataSchema {
+                id: r.get("id"),
+                user_id: r.get("user_id"),
+                owner_scope: owner_scope.unwrap_or_else(|| "global".to_string()),
+                namespace: r.get("namespace"),
+                name: r.get("name"),
+                version: r.get("version"),
+                description: r.get("description"),
+                json_schema: r.get("json_schema"),
+                state: match state_str.as_str() {
+                    "deprecated" => SchemaState::Deprecated,
+                    _ => SchemaState::Active,
+                },
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            }
+        }))
+    }
 }

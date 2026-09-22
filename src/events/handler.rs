@@ -70,7 +70,7 @@ impl EventHandler {
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
         let row = sqlx::query(
-            "SELECT user_id, event_type, occurred_at, payload FROM events WHERE id = $1",
+            "SELECT user_id, event_type, occurred_at, payload FROM inbound_events WHERE id = $1",
         )
         .bind(event_id.0)
         .fetch_one(self.db.pool())
@@ -100,7 +100,7 @@ impl EventHandler {
 
                     if triage.action == EventTriageAction::Ignore && triage.confidence >= 0.80 {
                         tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
-                        sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
+                        sqlx::query("UPDATE inbound_events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
                             .bind(event_id.0)
                             .execute(self.db.pool())
                             .await?;
@@ -123,21 +123,20 @@ impl EventHandler {
                                         "Jev System 1: direct ingestion into user_records"
                                     );
                                     let _ = sqlx::query(
-                                                "INSERT INTO user_records (user_id, schema_id, domain, entity_type, title, data, occurred_at, source) \
-                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                                                "INSERT INTO records (user_id, schema_id, schema_scope, kind, domain, entity_type, title, data, occurred_at, source) \
+                                                 SELECT $1, s.id, s.owner_scope, 'fact', s.namespace, s.name, $2, $3, $4, 'jev_system1_ingest' \
+                                                 FROM data_schemas s \
+                                                 WHERE s.id = $5 AND (s.user_id IS NULL OR s.user_id = $1)",
                                             )
                                             .bind(user_id.0)
-                                            .bind(schema.id)
-                                            .bind(&schema.namespace)
-                                            .bind(&schema.name)
                                             .bind(format!("{} logged", schema.qualified_name))
                                             .bind(&payload)
                                             .bind(occurred_at)
-                                            .bind("jev_system1_ingest")
+                                            .bind(schema.id)
                                             .execute(self.db.pool())
                                             .await;
 
-                                    sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
+                                    sqlx::query("UPDATE inbound_events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
                                                 .bind(event_id.0)
                                                 .execute(self.db.pool())
                                                 .await?;
@@ -160,7 +159,7 @@ impl EventHandler {
             }
         }
 
-        sqlx::query("UPDATE events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
+        sqlx::query("UPDATE inbound_events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
             .bind(event_id.0)
             .execute(self.db.pool())
             .await?;

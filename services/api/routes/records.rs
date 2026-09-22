@@ -10,7 +10,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 use vox_core::{
-    application::records::{CreateRecordInput, RecordService},
+    application::records::{CreateRecordInput, RecordService, RecordServiceError, UpdateRecordInput},
     domain::identity::Actor,
 };
 
@@ -37,11 +37,17 @@ pub async fn create_record(
     State(service): State<RecordService>,
     Extension(actor): Extension<Actor>,
     Json(input): Json<CreateRecordInput>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let record = service
         .create_record(&actor, input)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| match e {
+            RecordServiceError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            RecordServiceError::InvalidSchema(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            RecordServiceError::SchemaNotFound => (StatusCode::BAD_REQUEST, "schema not found".to_string()),
+            RecordServiceError::CollectionNotFound => (StatusCode::BAD_REQUEST, "collection not found".to_string()),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
+        })?;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -58,6 +64,25 @@ pub async fn get_record(
         Some(r) => Ok(Json(r)),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+pub async fn update_record(
+    State(service): State<RecordService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateRecordInput>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let record = service
+        .update_record(&actor, id, input)
+        .await
+        .map_err(|e| match e {
+            RecordServiceError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            RecordServiceError::InvalidSchema(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+            RecordServiceError::VersionConflict => (StatusCode::CONFLICT, "version conflict".to_string()),
+            RecordServiceError::NotFound => (StatusCode::NOT_FOUND, "record not found".to_string()),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
+        })?;
+    Ok(Json(record))
 }
 
 pub async fn delete_record(

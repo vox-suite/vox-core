@@ -512,10 +512,18 @@ impl Tool for CreateUserRecord {
             Utc::now()
         };
 
+        let Some(target_schema_id) = target_schema_id else {
+            return Err(RecordToolError::InvalidInput(
+                "a schema is required to store a record".into(),
+            ));
+        };
+
         let record_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO user_records (user_id, schema_id, domain, entity_type, title, data, occurred_at, source) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             RETURNING id",
+            "INSERT INTO records (user_id, schema_id, schema_scope, kind, domain, entity_type, title, data, occurred_at, source) \
+             SELECT $1, s.id, s.owner_scope, 'fact', $3, $4, $5, $6, $7, $8 \
+             FROM data_schemas s \
+             WHERE s.id = $2 AND (s.user_id IS NULL OR s.user_id = $1) \
+             RETURNING records.id",
         )
         .bind(self.user_id.0)
         .bind(target_schema_id)
@@ -541,7 +549,7 @@ impl Tool for CreateUserRecord {
         Ok(json!({
             "status": "created",
             "record_id": record_id.to_string(),
-            "schema_id": target_schema_id.map(|u| u.to_string()),
+            "schema_id": target_schema_id.to_string(),
             "domain": domain,
             "entity_type": entity_type,
             "title": title
@@ -630,7 +638,7 @@ impl Tool for ListUserRecords {
         let rows = sqlx::query(
             "SELECT r.id, r.schema_id, r.domain, r.entity_type, r.title, r.data, r.occurred_at, r.source, \
                     s.namespace AS schema_namespace, s.name AS schema_name \
-             FROM user_records r \
+             FROM records r \
              LEFT JOIN data_schemas s ON r.schema_id = s.id \
              WHERE r.user_id = $1 \
                AND ($2::UUID IS NULL OR r.schema_id = $2) \

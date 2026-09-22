@@ -29,6 +29,7 @@ impl RecordRepository {
         data: serde_json::Value,
         source: &str,
         occurred_at: Option<DateTime<Utc>>,
+        collection_id: Option<Uuid>,
     ) -> Result<Record, sqlx::Error> {
         let kind_str = match kind {
             RecordKind::Goal => "goal",
@@ -41,9 +42,9 @@ impl RecordRepository {
             r#"
             INSERT INTO records (
                 user_id, schema_id, schema_scope, kind, domain, entity_type,
-                title, data, source, occurred_at
+                title, data, source, occurred_at, collection_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, user_id, schema_id, schema_scope, kind, domain, entity_type,
                       title, data, occurred_at, source, source_event_id, source_record_ids,
                       collection_id, valid_until, version, created_at, updated_at
@@ -59,6 +60,7 @@ impl RecordRepository {
         .bind(data)
         .bind(source)
         .bind(occurred)
+        .bind(collection_id)
         .fetch_one(&self.pool)
         .await?;
 
@@ -88,6 +90,84 @@ impl RecordRepository {
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
+    }
+
+    pub async fn update(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        expected_version: Option<i32>,
+        title: Option<&str>,
+        data: Option<serde_json::Value>,
+    ) -> Result<crate::domain::ConcurrencyOutcome<Record>, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        let current_version = sqlx::query_scalar::<_, i32>(
+            "SELECT version FROM records WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let current_version = match current_version {
+            Some(v) => v,
+            None => return Ok(crate::domain::ConcurrencyOutcome::NotFound),
+        };
+
+        if let Some(expected) = expected_version {
+            if expected != current_version {
+                return Ok(crate::domain::ConcurrencyOutcome::Conflict);
+            }
+        }
+
+        let row = sqlx::query(
+            r#"
+            UPDATE records SET
+                title = COALESCE($3, title),
+                data = COALESCE($4, data),
+                version = version + 1,
+                updated_at = now()
+            WHERE id = $1 AND user_id = $2
+            RETURNING id, user_id, schema_id, schema_scope, kind, domain, entity_type,
+                      title, data, occurred_at, source, source_event_id, source_record_ids,
+                      collection_id, valid_until, version, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(title)
+        .bind(data)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        let k_str: String = row.get("kind");
+        Ok(crate::domain::ConcurrencyOutcome::Success(Record {
+            id: row.get("id"),
+            user_id: row.get("user_id"),
+            schema_id: row.get("schema_id"),
+            schema_scope: row.get("schema_scope"),
+            kind: match k_str.as_str() {
+                "goal" => RecordKind::Goal,
+                "insight" => RecordKind::Insight,
+                _ => RecordKind::Fact,
+            },
+            domain: row.get("domain"),
+            entity_type: row.get("entity_type"),
+            title: row.get("title"),
+            data: row.get("data"),
+            occurred_at: row.get("occurred_at"),
+            source: row.get("source"),
+            source_event_id: row.get("source_event_id"),
+            source_record_ids: row.get("source_record_ids"),
+            collection_id: row.get("collection_id"),
+            valid_until: row.get("valid_until"),
+            version: row.get("version"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
     }
 
     pub async fn get_by_id(&self, user_id: Uuid, id: Uuid) -> Result<Option<Record>, sqlx::Error> {

@@ -19,9 +19,10 @@ impl MemoryService {
             return Ok(0);
         };
         let names = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT i.channel, i.external_id, p.facts->>'name' \
-             FROM user_identities i JOIN user_profiles p ON p.user_id = i.user_id \
-             WHERE p.facts->>'name' IS NOT NULL",
+            "SELECT i.channel, i.normalized_external_id, COALESCE(NULLIF(u.profile_facts->>'name', ''), u.display_name) \
+             FROM channel_identities i JOIN users u ON u.id = i.user_id \
+             WHERE i.revoked_at IS NULL \
+               AND COALESCE(NULLIF(u.profile_facts->>'name', ''), u.display_name) IS NOT NULL",
         )
         .fetch_all(self.db.pool())
         .await?;

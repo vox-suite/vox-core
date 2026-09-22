@@ -50,7 +50,9 @@ impl MemoryService {
         }
 
         let name: Option<String> =
-            sqlx::query_scalar("SELECT facts->>\x27name\x27 FROM user_profiles WHERE user_id = $1")
+            sqlx::query_scalar(
+                "SELECT COALESCE(NULLIF(profile_facts->>'name', ''), display_name) FROM users WHERE id = $1",
+            )
                 .bind(user_id.0)
                 .fetch_optional(self.db.pool())
                 .await?
@@ -69,11 +71,12 @@ impl MemoryService {
     pub async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), sqlx::Error> {
         let trimmed = name.trim();
         sqlx::query(
-            "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-             VALUES ($1, jsonb_build_object(\x27name\x27, $2::text), 1, now()) \
-             ON CONFLICT (user_id) DO UPDATE SET \
-             facts = jsonb_set(user_profiles.facts, \x27{name}\x27, to_jsonb($2::text), true), \
-             updated_at = now()",
+            "UPDATE users SET \
+             profile_facts = jsonb_set(profile_facts, '{name}', to_jsonb($2::text), true), \
+             display_name = $2, \
+             profile_version = profile_version + 1, \
+             updated_at = now() \
+             WHERE id = $1",
         )
         .bind(user_id.0)
         .bind(trimmed)
@@ -84,7 +87,7 @@ impl MemoryService {
             let _ = cache.set_user_name(user_id, trimmed).await;
             let _ = cache.set_user_id_by_name(trimmed, user_id).await;
             if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
+                "SELECT channel, normalized_external_id FROM channel_identities WHERE user_id = $1 AND revoked_at IS NULL",
             )
             .bind(user_id.0)
             .fetch_all(self.db.pool())
@@ -114,8 +117,8 @@ impl MemoryService {
         }
 
         let user_id = sqlx::query_scalar::<_, uuid::Uuid>(
-            "SELECT user_id FROM user_profiles \
-             WHERE LOWER(facts->>\x27name\x27) = LOWER($1) \
+            "SELECT id FROM users \
+             WHERE LOWER(COALESCE(NULLIF(profile_facts->>'name', ''), display_name, '')) = LOWER($1) \
              LIMIT 1",
         )
         .bind(trimmed)
@@ -129,27 +132,6 @@ impl MemoryService {
             let _ = cache.set_user_id_by_name(trimmed, uid).await;
         }
         Ok(uid)
-    }
-
-    pub async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Option<String> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(state)) = cache.get_verification_state(conversation_id).await
-        {
-            return Some(state);
-        }
-        None
-    }
-
-    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.set_verification_state(conversation_id, state).await;
-        }
-    }
-
-    pub async fn clear_verification_state(&self, conversation_id: uuid::Uuid) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.clear_verification_state(conversation_id).await;
-        }
     }
 
     pub async fn refresh(&self, user_id: UserId) -> Result<String, sqlx::Error> {

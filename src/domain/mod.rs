@@ -16,3 +16,10 @@ pub use records::*;
 pub use schemas::*;
 pub use devices::*;
 pub use actions::*;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConcurrencyOutcome<T> {
+    Success(T),
+    Conflict,
+    NotFound,
+}

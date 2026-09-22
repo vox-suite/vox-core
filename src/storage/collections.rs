@@ -175,4 +175,45 @@ impl CollectionRepository {
 
         Ok(result.rows_affected() > 0)
     }
+    pub async fn find_by_name(&self, user_id: Uuid, name: &str) -> Result<Option<Collection>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, user_id, name, description, kind, status, metadata, version, created_at, updated_at
+            FROM collections
+            WHERE user_id =  AND LOWER(name) = LOWER()
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| {
+            let kind_str: String = r.get("kind");
+            let status_str: String = r.get("status");
+            Collection {
+                id: r.get("id"),
+                user_id: r.get("user_id"),
+                name: r.get("name"),
+                description: r.get("description"),
+                kind: match kind_str.as_str() {
+                    "trip" => CollectionKind::Trip,
+                    "course" => CollectionKind::Course,
+                    "area" => CollectionKind::Area,
+                    _ => CollectionKind::Project,
+                },
+                status: match status_str.as_str() {
+                    "paused" => CollectionStatus::Paused,
+                    "completed" => CollectionStatus::Completed,
+                    "archived" => CollectionStatus::Archived,
+                    _ => CollectionStatus::Active,
+                },
+                metadata: r.get("metadata"),
+                version: r.get("version"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            }
+        }))
+    }
 }

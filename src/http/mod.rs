@@ -221,6 +221,14 @@ impl AppState {
         }
     }
 
+    pub fn take_host_trust(&mut self) -> Option<HostTrustService> {
+        self.host_trust.take().map(|trust| HostTrustService::clone(&trust))
+    }
+
+    pub fn set_host_trust(&mut self, trust: HostTrustService) {
+        self.host_trust = Some(Arc::new(trust));
+    }
+
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
     }

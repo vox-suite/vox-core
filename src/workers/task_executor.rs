@@ -61,11 +61,9 @@ impl TaskExecutorHandler {
 
     pub async fn handle(&self, task_id: Uuid) -> Result<(), TaskExecutorError> {
         let task_row = sqlx::query(
-            "SELECT t.user_id, COALESCE(t.user_context_id, c.id) AS user_context_id, \
-                    t.title, t.raw_instruction, t.execution_type, t.status \
-             FROM tasks t \
-             JOIN user_contexts c ON c.user_id = t.user_id \
-             WHERE t.id = $1",
+            "SELECT user_id, title, instruction, execution_type, status \
+             FROM tasks \
+             WHERE id = $1",
         )
         .bind(task_id)
         .fetch_optional(self.db.pool())
@@ -77,19 +75,17 @@ impl TaskExecutorHandler {
             return Ok(());
         }
 
+        let user_id = UserId(task_row.get("user_id"));
         let owner = ResourceOwner {
-            user_context_id: UserContextId(task_row.get("user_context_id")),
-            user_id: UserId(task_row.get("user_id")),
+            user_context_id: UserContextId(user_id.0),
+            user_id,
         };
         let title: String = task_row.get("title");
-        let instruction: String = task_row.get("raw_instruction");
+        let instruction: String = task_row.get("instruction");
 
         sqlx::query(
-            "UPDATE tasks SET status = 'executing', \
-                    user_context_id = COALESCE(user_context_id, $1), updated_at = now() \
-             WHERE id = $2",
+            "UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1",
         )
-        .bind(owner.user_context_id.0)
         .bind(task_id)
         .execute(self.db.pool())
         .await?;
@@ -148,7 +144,7 @@ impl TaskExecutorHandler {
         summary: &str,
     ) -> Result<(), TaskExecutorError> {
         let has_phone: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM user_identities WHERE user_id = $1 AND channel = 'phone')",
+            "SELECT EXISTS(SELECT 1 FROM channel_identities WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL)",
         )
         .bind(owner.user_id.0)
         .fetch_one(self.db.pool())

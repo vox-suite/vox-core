@@ -471,11 +471,22 @@ FROM devices;
 -- Row Level Security (RLS) Configuration
 -- ============================================================================
 
--- Ensure Supabase auth schema and helper exist (idempotent on Supabase)
-CREATE SCHEMA IF NOT EXISTS auth;
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
-    SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
-$$;
+-- Ensure Supabase auth helper exists for standalone/test environments
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc p 
+        JOIN pg_namespace n ON p.pronamespace = n.oid 
+        WHERE n.nspname = 'auth' AND p.proname = 'uid'
+    ) THEN
+        BEGIN
+            CREATE SCHEMA IF NOT EXISTS auth;
+            EXECUTE $create$CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid; $fn$$create$;
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+    END IF;
+END $$;
 
 -- Ensure default Supabase roles exist (idempotent on Supabase)
 DO $$
@@ -500,7 +511,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO service_role;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+-- Grant selective access to authenticated users (never full DML on security-critical tables)
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON 
+    conversations, messages, collections, tasks, schedules, 
+    records, devices, connections, action_proposals, inbound_events
+TO authenticated;
+GRANT INSERT, UPDATE ON data_schemas TO authenticated;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 
 -- Enable RLS on all 21 core tables
@@ -553,10 +570,20 @@ CREATE POLICY "service_role_audit_events" ON audit_events FOR ALL TO service_rol
 CREATE POLICY "users_select_own" ON users FOR SELECT TO authenticated USING (id = auth.uid());
 CREATE POLICY "users_update_own" ON users FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid());
 
+-- Security-hardened RLS policies for auth & audit tables:
+-- auth_identities: Read-only for authenticated user; writes only by service_role
+CREATE POLICY "auth_identities_user_select" ON auth_identities FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+-- channel_identities: Read-only for authenticated user; verification/writes only by service_role
+CREATE POLICY "channel_identities_user_select" ON channel_identities FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+-- auth_sessions: Read-only for active sessions; session issuance/revocation strictly by service_role
+CREATE POLICY "auth_sessions_user_select" ON auth_sessions FOR SELECT TO authenticated USING (user_id = auth.uid() AND revoked_at IS NULL AND expires_at > now());
+
+-- audit_events: Read-only for authenticated user; strictly append-only by service_role
+CREATE POLICY "audit_events_user_select" ON audit_events FOR SELECT TO authenticated USING (user_id = auth.uid());
+
 -- Authenticated user policies: direct user-scoped tables
-CREATE POLICY "auth_identities_user_all" ON auth_identities FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY "channel_identities_user_all" ON channel_identities FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY "auth_sessions_user_all" ON auth_sessions FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "conversations_user_all" ON conversations FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "collections_user_all" ON collections FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "tasks_user_all" ON tasks FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
@@ -566,7 +593,6 @@ CREATE POLICY "devices_user_all" ON devices FOR ALL TO authenticated USING (user
 CREATE POLICY "connections_user_all" ON connections FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "action_proposals_user_all" ON action_proposals FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "inbound_events_user_all" ON inbound_events FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY "audit_events_user_all" ON audit_events FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
 -- Authenticated user policies: data_schemas (can view system schemas where user_id IS NULL, and manage their own)
 CREATE POLICY "data_schemas_user_select" ON data_schemas FOR SELECT TO authenticated USING (user_id IS NULL OR user_id = auth.uid());
