@@ -1,7 +1,6 @@
 /**
- * Domain models for users, channels, and resource ownership.
- */
-
+* Domain models for users, channels, and resource ownership.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

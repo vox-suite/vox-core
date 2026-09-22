@@ -1,7 +1,6 @@
 /**
- * Storage repository for user profiles and identity mappings.
- */
-
+* Storage repository for user profiles and identity mappings.
+*/
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

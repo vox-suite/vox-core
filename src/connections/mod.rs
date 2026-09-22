@@ -1,7 +1,6 @@
 /**
- * Third-party service connection credentials and token management.
- */
-
+* Third-party service connection credentials and token management.
+*/
 use crate::{
     db::Db,
     identity::{ResolvedUserContext, UserContextId},

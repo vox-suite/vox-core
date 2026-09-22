@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for schema registration and validation lookup.
- */
-
+* HTTP handlers for schema registration and validation lookup.
+*/
 use axum::{
     Extension, Json,
     extract::{Path, State},

@@ -1,7 +1,6 @@
 /**
- * Route definitions and Axum state assembly for the public HTTP API.
- */
-
+* Route definitions and Axum state assembly for the public HTTP API.
+*/
 use axum::{
     Router, middleware,
     routing::{get, post},

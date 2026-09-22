@@ -1,7 +1,6 @@
 /**
- * Domain models for dynamic JSONB records and search filters.
- */
-
+* Domain models for dynamic JSONB records and search filters.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

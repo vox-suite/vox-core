@@ -1,7 +1,6 @@
 /**
- * Event pub/sub bus, domain event definitions, and dispatcher.
- */
-
+* Event pub/sub bus, domain event definitions, and dispatcher.
+*/
 pub mod handler;
 pub mod service;
 

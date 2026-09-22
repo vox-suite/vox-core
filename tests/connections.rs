@@ -1,7 +1,6 @@
 /**
- * Integration tests for external connection persistence.
- */
-
+* Integration tests for external connection persistence.
+*/
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

@@ -1,7 +1,6 @@
 /**
- * Integration tests for administrative Redis cache features.
- */
-
+* Integration tests for administrative Redis cache features.
+*/
 use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 use vox_core::http::{AppState, router};

@@ -1,7 +1,6 @@
 /**
- * Storage repository for recording and auditing executed agent actions.
- */
-
+* Storage repository for recording and auditing executed agent actions.
+*/
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

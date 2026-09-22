@@ -1,7 +1,6 @@
 /**
- * Security audit logging and event tracking for sensitive actions.
- */
-
+* Security audit logging and event tracking for sensitive actions.
+*/
 use crate::db::Db;
 use chrono::{DateTime, Utc};
 use hmac::Mac;

@@ -1,7 +1,6 @@
 /**
- * Integration tests for system health checks and liveness probes.
- */
-
+* Integration tests for system health checks and liveness probes.
+*/
 use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 use vox_core::http::{AppState, router};

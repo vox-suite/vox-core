@@ -1,7 +1,6 @@
 /**
- * Shared application state container for API request handlers.
- */
-
+* Shared application state container for API request handlers.
+*/
 use vox_core::{
     application::{
         collections::CollectionService,

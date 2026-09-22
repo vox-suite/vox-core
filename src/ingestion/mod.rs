@@ -1,7 +1,6 @@
 /**
- * Data ingestion pipeline for SMS, emails, and external webhooks.
- */
-
+* Data ingestion pipeline for SMS, emails, and external webhooks.
+*/
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

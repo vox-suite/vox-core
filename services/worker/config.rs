@@ -1,7 +1,6 @@
 /**
- * Configuration loader and concurrency settings for the worker daemon.
- */
-
+* Configuration loader and concurrency settings for the worker daemon.
+*/
 use vox_core::config::Config;
 
 #[allow(dead_code)]

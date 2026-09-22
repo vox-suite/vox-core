@@ -1,7 +1,6 @@
 /**
- * Policy rules dictating auto-approval vs human-in-the-loop execution.
- */
-
+* Policy rules dictating auto-approval vs human-in-the-loop execution.
+*/
 use crate::{db::Db, identity::ResolvedUserContext};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

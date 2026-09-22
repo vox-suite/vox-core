@@ -1,7 +1,6 @@
 /**
- * Integration tests for recurring schedules and ticker execution.
- */
-
+* Integration tests for recurring schedules and ticker execution.
+*/
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;

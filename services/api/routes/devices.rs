@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for device pairing, tokens, and registration.
- */
-
+* HTTP handlers for device pairing, tokens, and registration.
+*/
 use axum::{
     Extension, Json,
     extract::{Path, State},

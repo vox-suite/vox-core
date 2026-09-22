@@ -1,7 +1,6 @@
 /**
- * Agent registry service managing agent declarations and capability manifests.
- */
-
+* Agent registry service managing agent declarations and capability manifests.
+*/
 use crate::{db::Db, identity::DeploymentId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

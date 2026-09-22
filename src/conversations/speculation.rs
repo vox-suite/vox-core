@@ -1,7 +1,6 @@
 /**
- * Speculative execution cache for low-latency voice responses.
- */
-
+* Speculative execution cache for low-latency voice responses.
+*/
 use super::{
     RespondRequest, SpeculateRequest,
     service::{ConversationError, ConversationService},

@@ -1,7 +1,6 @@
 /**
- * Host machine trust evaluation and client attestation verification.
- */
-
+* Host machine trust evaluation and client attestation verification.
+*/
 use crate::{
     db::Db,
     identity::{

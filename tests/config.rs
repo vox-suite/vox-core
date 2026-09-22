@@ -1,7 +1,6 @@
 /**
- * Integration tests for configuration loading and environment overrides.
- */
-
+* Integration tests for configuration loading and environment overrides.
+*/
 use std::collections::HashMap;
 use vox_core::config::Config;
 

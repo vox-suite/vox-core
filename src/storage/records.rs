@@ -1,7 +1,6 @@
 /**
- * Storage repository for dynamic JSONB records and document lookups.
- */
-
+* Storage repository for dynamic JSONB records and document lookups.
+*/
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

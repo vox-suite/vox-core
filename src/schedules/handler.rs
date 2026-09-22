@@ -1,7 +1,6 @@
 /**
- * Handlers executed when scheduled cron triggers fire.
- */
-
+* Handlers executed when scheduled cron triggers fire.
+*/
 use super::ScheduleId;
 use crate::{
     agents::event_planner::EventPlanning,

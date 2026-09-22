@@ -1,7 +1,6 @@
 /**
- * Integration tests for voice conversation turns and dialogue state.
- */
-
+* Integration tests for voice conversation turns and dialogue state.
+*/
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use std::sync::Arc;

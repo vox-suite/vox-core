@@ -1,7 +1,6 @@
 /**
- * HTTP endpoints for agent registration and discovery.
- */
-
+* HTTP endpoints for agent registration and discovery.
+*/
 use super::{AppState, auth};
 use crate::agent_registry::{
     AgentRegistryError, RegisterAgentDefinitionRequest, SelectAgentRequest, SetAgentEnabledRequest,

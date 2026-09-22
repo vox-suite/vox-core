@@ -1,7 +1,6 @@
 /**
- * Context cache, memory projection, and user name resolution.
- */
-
+* Context cache, memory projection, and user name resolution.
+*/
 pub mod cache;
 pub mod greetings;
 pub mod projection;

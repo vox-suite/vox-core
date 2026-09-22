@@ -1,7 +1,6 @@
 /**
- * Data contracts and wire formats for Jev service communication.
- */
-
+* Data contracts and wire formats for Jev service communication.
+*/
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for CRUD operations and querying JSONB records.
- */
-
+* HTTP handlers for CRUD operations and querying JSONB records.
+*/
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},

@@ -1,7 +1,6 @@
 /**
- * Integration tests for host trust validation and device attestation.
- */
-
+* Integration tests for host trust validation and device attestation.
+*/
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},

@@ -1,7 +1,6 @@
 /**
- * Memory projection consolidating user facts, tasks, and history.
- */
-
+* Memory projection consolidating user facts, tasks, and history.
+*/
 use crate::{db::Db, identity::UserId};
 use serde::Serialize;
 use serde_json::Value;

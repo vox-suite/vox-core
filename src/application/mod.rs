@@ -1,7 +1,6 @@
 /**
- * Application service facades providing unified business operations.
- */
-
+* Application service facades providing unified business operations.
+*/
 pub mod actor;
 pub mod tasks;
 pub mod collections;

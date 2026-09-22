@@ -1,7 +1,6 @@
 /**
- * Application configuration and environment variable loading for Vox Core.
- */
-
+* Application configuration and environment variable loading for Vox Core.
+*/
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind_address: String,

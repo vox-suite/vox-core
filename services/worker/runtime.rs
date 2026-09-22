@@ -1,7 +1,6 @@
 /**
- * Task worker dispatch loops, job claiming, and execution runtime.
- */
-
+* Task worker dispatch loops, job claiming, and execution runtime.
+*/
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;

@@ -1,7 +1,6 @@
 /**
- * Integration tests for user memory and context isolation.
- */
-
+* Integration tests for user memory and context isolation.
+*/
 use uuid::Uuid;
 use vox_core::{
     db::Db,

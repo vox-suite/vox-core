@@ -1,7 +1,6 @@
 /**
- * Storage repository for dynamic record collection definitions.
- */
-
+* Storage repository for dynamic record collection definitions.
+*/
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

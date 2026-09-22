@@ -1,7 +1,6 @@
 /**
- * OpenAPI documentation and contract definitions for API endpoints.
- */
-
+* OpenAPI documentation and contract definitions for API endpoints.
+*/
 use axum::{Json, response::IntoResponse};
 use serde_json::Value;
 

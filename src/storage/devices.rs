@@ -1,7 +1,6 @@
 /**
- * Storage repository for registered consumer devices and credentials.
- */
-
+* Storage repository for registered consumer devices and credentials.
+*/
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

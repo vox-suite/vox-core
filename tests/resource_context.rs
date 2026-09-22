@@ -1,7 +1,6 @@
 /**
- * Integration tests for resource ownership and context boundaries.
- */
-
+* Integration tests for resource ownership and context boundaries.
+*/
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use rig::{prelude::ToolContext, tool::Tool};

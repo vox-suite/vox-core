@@ -1,7 +1,6 @@
 /**
- * Domain models for durable tasks, states, and scheduling parameters.
- */
-
+* Domain models for durable tasks, states, and scheduling parameters.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

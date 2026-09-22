@@ -1,7 +1,6 @@
 /**
- * Integration tests checking provider feasibility contracts.
- */
-
+* Integration tests checking provider feasibility contracts.
+*/
 const RECORD: &str = include_str!("../docs/provider-feasibility.md");
 
 #[test]

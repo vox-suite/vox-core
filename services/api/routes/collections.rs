@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for managing dynamic record collections.
- */
-
+* HTTP handlers for managing dynamic record collections.
+*/
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},

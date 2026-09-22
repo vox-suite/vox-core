@@ -1,7 +1,6 @@
 /**
- * Worker process entry point running background schedulers and task consumers.
- */
-
+* Worker process entry point running background schedulers and task consumers.
+*/
 mod config;
 mod health;
 mod runtime;

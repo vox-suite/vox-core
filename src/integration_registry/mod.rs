@@ -1,7 +1,6 @@
 /**
- * Registry for third-party tools, webhooks, and capability descriptors.
- */
-
+* Registry for third-party tools, webhooks, and capability descriptors.
+*/
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

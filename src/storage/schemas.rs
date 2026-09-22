@@ -1,7 +1,6 @@
 /**
- * Storage repository for JSON schema definitions and versioning.
- */
-
+* Storage repository for JSON schema definitions and versioning.
+*/
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

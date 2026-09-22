@@ -1,7 +1,6 @@
 /**
- * Integration tests for execution policy rules and matching.
- */
-
+* Integration tests for execution policy rules and matching.
+*/
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

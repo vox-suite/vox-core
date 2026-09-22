@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for creating and inspecting background tasks.
- */
-
+* HTTP handlers for creating and inspecting background tasks.
+*/
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},

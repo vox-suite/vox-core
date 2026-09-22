@@ -1,7 +1,6 @@
 /**
- * Agent tools for querying and mutating dynamic user records and collections.
- */
-
+* Agent tools for querying and mutating dynamic user records and collections.
+*/
 use crate::{db::Db, identity::UserId};
 use chrono::{DateTime, Utc};
 use rig::tool::Tool;

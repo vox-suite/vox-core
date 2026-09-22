@@ -1,7 +1,6 @@
 /**
- * Domain models for consumer devices and registration credentials.
- */
-
+* Domain models for consumer devices and registration credentials.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

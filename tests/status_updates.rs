@@ -1,7 +1,6 @@
 /**
- * Integration tests for task status update webhooks.
- */
-
+* Integration tests for task status update webhooks.
+*/
 use async_trait::async_trait;
 use chrono::Utc;
 use std::{collections::HashMap, sync::Mutex};

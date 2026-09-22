@@ -1,7 +1,6 @@
 /**
- * In-memory and Redis context caching for fast conversation loading.
- */
-
+* In-memory and Redis context caching for fast conversation loading.
+*/
 use crate::identity::UserId;
 use async_trait::async_trait;
 use redis::AsyncCommands;

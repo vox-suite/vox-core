@@ -1,7 +1,6 @@
 /**
- * Shared agent tool dependency container providing database and API access.
- */
-
+* Shared agent tool dependency container providing database and API access.
+*/
 #[derive(Clone)]
 pub struct ToolDependencies {
     pub http: reqwest::Client,

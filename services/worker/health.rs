@@ -1,7 +1,6 @@
 /**
- * Health check endpoints and liveness monitoring for worker instances.
- */
-
+* Health check endpoints and liveness monitoring for worker instances.
+*/
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[allow(dead_code)]

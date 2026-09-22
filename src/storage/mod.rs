@@ -1,7 +1,6 @@
 /**
- * Database repositories and SQLx persistence implementations.
- */
-
+* Database repositories and SQLx persistence implementations.
+*/
 pub mod users;
 pub mod collections;
 pub mod tasks;

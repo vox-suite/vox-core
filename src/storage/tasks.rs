@@ -1,7 +1,6 @@
 /**
- * Storage repository for asynchronous tasks and execution states.
- */
-
+* Storage repository for asynchronous tasks and execution states.
+*/
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

@@ -1,7 +1,6 @@
 /**
- * Outbound call dispatch and phone channel communication.
- */
-
+* Outbound call dispatch and phone channel communication.
+*/
 use crate::{
     bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest},
     db::Db,

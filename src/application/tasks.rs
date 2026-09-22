@@ -1,7 +1,6 @@
 /**
- * Application service coordinating asynchronous and durable task execution.
- */
-
+* Application service coordinating asynchronous and durable task execution.
+*/
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;

@@ -1,7 +1,6 @@
 /**
- * Application service managing device registrations and presence.
- */
-
+* Application service managing device registrations and presence.
+*/
 use serde::Deserialize;
 use uuid::Uuid;
 

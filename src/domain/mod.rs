@@ -1,7 +1,6 @@
 /**
- * Domain models, entities, and validation rules for Vox Core.
- */
-
+* Domain models, entities, and validation rules for Vox Core.
+*/
 pub mod identity;
 pub mod collections;
 pub mod tasks;

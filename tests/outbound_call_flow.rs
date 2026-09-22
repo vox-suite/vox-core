@@ -1,7 +1,6 @@
 /**
- * Integration tests for outbound calling workflow.
- */
-
+* Integration tests for outbound calling workflow.
+*/
 use async_trait::async_trait;
 use chrono::Utc;
 use rig::tool::Tool;

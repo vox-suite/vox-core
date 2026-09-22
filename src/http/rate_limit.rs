@@ -1,7 +1,6 @@
 /**
- * Rate limiting middleware and IP tracking for HTTP endpoints.
- */
-
+* Rate limiting middleware and IP tracking for HTTP endpoints.
+*/
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},

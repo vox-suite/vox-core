@@ -1,7 +1,6 @@
 /**
- * Integration tests for HTTP rate limiting and client throttling.
- */
-
+* Integration tests for HTTP rate limiting and client throttling.
+*/
 use axum::{
     body::Body,
     http::{Request, StatusCode},

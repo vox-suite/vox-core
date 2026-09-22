@@ -1,7 +1,6 @@
 /**
- * Worker executor consuming and running pending background tasks.
- */
-
+* Worker executor consuming and running pending background tasks.
+*/
 use crate::{
     config::Config,
     db::Db,

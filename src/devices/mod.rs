@@ -1,7 +1,6 @@
 /**
- * Device registration, authorization tokens, and capability discovery.
- */
-
+* Device registration, authorization tokens, and capability discovery.
+*/
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

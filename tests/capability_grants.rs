@@ -1,7 +1,6 @@
 /**
- * Integration tests for capability grant enforcement.
- */
-
+* Integration tests for capability grant enforcement.
+*/
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

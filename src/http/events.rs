@@ -1,7 +1,6 @@
 /**
- * HTTP endpoints for publishing and receiving domain events.
- */
-
+* HTTP endpoints for publishing and receiving domain events.
+*/
 use super::{AppState, auth};
 use crate::events::{IngestEventRequest, service::EventError};
 use axum::{

@@ -1,7 +1,6 @@
 /**
- * Agent execution sandbox, tool dispatch, and step evaluation.
- */
-
+* Agent execution sandbox, tool dispatch, and step evaluation.
+*/
 use crate::{
     db::Db,
     execution_policy::{ExecutionIdentity, ExecutionPolicyService, ExecutionRequest},

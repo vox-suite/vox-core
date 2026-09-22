@@ -1,7 +1,6 @@
 /**
- * HTTP server endpoints, routing, and middleware assembly.
- */
-
+* HTTP server endpoints, routing, and middleware assembly.
+*/
 pub mod admin;
 pub mod agent_registry;
 pub mod approvals;

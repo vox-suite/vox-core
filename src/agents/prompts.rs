@@ -1,7 +1,6 @@
 /**
- * System prompts, personality preambles, and channel-specific LLM instructions.
- */
-
+* System prompts, personality preambles, and channel-specific LLM instructions.
+*/
 pub const GENERAL_PREAMBLE: &str = "You are Vox, an intelligent personal AI assistant running across the user's devices (desktop, mobile, voice, and messaging). \
 You assist the user with tasks, projects, data schemas, personal records, device controls, and real-time information. \
 Be direct, helpful, concise, and proactive. Use clean formatting such as Markdown, bullet points, or tables when appropriate. \

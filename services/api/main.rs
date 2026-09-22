@@ -1,7 +1,6 @@
 /**
- * API service entry point running HTTP server and lifecycle listeners.
- */
-
+* API service entry point running HTTP server and lifecycle listeners.
+*/
 mod auth;
 mod config;
 mod openapi;

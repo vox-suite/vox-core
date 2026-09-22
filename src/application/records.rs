@@ -1,7 +1,6 @@
 /**
- * Application service coordinating record validation, storage, and search.
- */
-
+* Application service coordinating record validation, storage, and search.
+*/
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;

@@ -1,7 +1,6 @@
 /**
- * Agent tools for managing user projects, notes, and tasks.
- */
-
+* Agent tools for managing user projects, notes, and tasks.
+*/
 use crate::{db::Db, identity::UserId};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};

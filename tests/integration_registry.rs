@@ -1,7 +1,6 @@
 /**
- * Integration tests for integration registry registration.
- */
-
+* Integration tests for integration registry registration.
+*/
 use uuid::Uuid;
 use vox_core::{
     db::Db,

@@ -1,7 +1,6 @@
 /**
- * HTTP endpoints for registering and communicating with host applications.
- */
-
+* HTTP endpoints for registering and communicating with host applications.
+*/
 use super::{AppState, auth};
 use crate::host_trust::{
     HostContextAssertion, HostContextRequest, HostTrustError, RegisterHostAppRequest,

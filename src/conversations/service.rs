@@ -1,7 +1,6 @@
 /**
- * Core conversational engine handling user turns, greetings, and LLM responses.
- */
-
+* Core conversational engine handling user turns, greetings, and LLM responses.
+*/
 use super::{CompleteConversationRequest, ConversationId, RespondRequest, RespondResponse};
 use crate::{
     agents::{

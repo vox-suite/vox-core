@@ -1,7 +1,6 @@
 /**
- * Agent tools for triggering and scheduling outbound telephone calls.
- */
-
+* Agent tools for triggering and scheduling outbound telephone calls.
+*/
 use crate::{
     db::Db,
     identity::ResourceOwner,

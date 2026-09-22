@@ -1,7 +1,6 @@
 /**
- * Domain models for JSON schema specifications and validation rules.
- */
-
+* Domain models for JSON schema specifications and validation rules.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

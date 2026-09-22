@@ -1,7 +1,6 @@
 /**
- * Application service managing dynamic record collections and schemas.
- */
-
+* Application service managing dynamic record collections and schemas.
+*/
 use serde::Deserialize;
 use uuid::Uuid;
 

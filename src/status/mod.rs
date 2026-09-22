@@ -1,7 +1,6 @@
 /**
- * Service health status, metrics, and diagnostics.
- */
-
+* Service health status, metrics, and diagnostics.
+*/
 use crate::{
     db::Db,
     execution::{AdapterOutcome, Execution, ExecutionCoordinator, ExecutionError},

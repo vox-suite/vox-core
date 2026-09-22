@@ -1,7 +1,6 @@
 /**
- * Fast tool routing and intent matching for agent queries.
- */
-
+* Fast tool routing and intent matching for agent queries.
+*/
 use super::{JevError, client::JevClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

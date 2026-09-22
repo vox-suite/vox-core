@@ -1,7 +1,6 @@
 /**
- * Agent tool implementations and schema declarations for external integrations.
- */
-
+* Agent tool implementations and schema declarations for external integrations.
+*/
 pub mod calls;
 pub mod dependencies;
 pub mod google_maps;

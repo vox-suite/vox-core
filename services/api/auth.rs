@@ -1,7 +1,6 @@
 /**
- * Authentication and authorization middleware for incoming API requests.
- */
-
+* Authentication and authorization middleware for incoming API requests.
+*/
 use axum::{
     extract::Request,
     http::StatusCode,

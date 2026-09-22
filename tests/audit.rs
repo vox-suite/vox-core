@@ -1,7 +1,6 @@
 /**
- * Integration tests for security audit logging and immutability.
- */
-
+* Integration tests for security audit logging and immutability.
+*/
 use chrono::Utc;
 use uuid::Uuid;
 use vox_core::{

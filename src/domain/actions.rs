@@ -1,7 +1,6 @@
 /**
- * Domain models for agent actions, audit payloads, and execution results.
- */
-
+* Domain models for agent actions, audit payloads, and execution results.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

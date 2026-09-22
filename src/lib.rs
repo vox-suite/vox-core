@@ -1,7 +1,6 @@
 /**
- * Core library module root exporting domains, services, and shared utilities.
- */
-
+* Core library module root exporting domains, services, and shared utilities.
+*/
 pub mod agent_registry;
 pub mod agents;
 pub mod application;

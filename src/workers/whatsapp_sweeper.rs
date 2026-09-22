@@ -1,7 +1,6 @@
 /**
- * Periodic sweeper polling WhatsApp messages and incoming events.
- */
-
+* Periodic sweeper polling WhatsApp messages and incoming events.
+*/
 use crate::db::Db;
 use sqlx::Row;
 use uuid::Uuid;

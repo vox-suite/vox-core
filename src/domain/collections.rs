@@ -1,7 +1,6 @@
 /**
- * Domain models for dynamic record collections and schema bindings.
- */
-
+* Domain models for dynamic record collections and schema bindings.
+*/
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -1,7 +1,6 @@
 /**
- * Application service managing JSON schema registrations and validation.
- */
-
+* Application service managing JSON schema registrations and validation.
+*/
 use serde::Deserialize;
 
 use crate::{

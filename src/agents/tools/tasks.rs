@@ -1,7 +1,6 @@
 /**
- * Agent tools for creating, updating, and querying user tasks.
- */
-
+* Agent tools for creating, updating, and querying user tasks.
+*/
 use crate::{db::Db, identity::ResourceOwner};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};

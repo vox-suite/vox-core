@@ -1,7 +1,6 @@
 /**
- * Scheduled jobs, cron triggers, and periodic task execution.
- */
-
+* Scheduled jobs, cron triggers, and periodic task execution.
+*/
 pub mod handler;
 pub mod service;
 pub mod ticker;

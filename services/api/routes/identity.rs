@@ -1,7 +1,6 @@
 /**
- * HTTP handlers for identity mapping, channels, and caller profiles.
- */
-
+* HTTP handlers for identity mapping, channels, and caller profiles.
+*/
 use axum::{
     Extension, Json,
     http::StatusCode,

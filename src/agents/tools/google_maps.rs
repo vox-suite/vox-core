@@ -1,7 +1,6 @@
 /**
- * Agent tools interfacing with Google Maps for place search and routing.
- */
-
+* Agent tools interfacing with Google Maps for place search and routing.
+*/
 use reqwest::Client;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};

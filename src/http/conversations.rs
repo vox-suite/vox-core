@@ -1,7 +1,6 @@
 /**
- * HTTP endpoints for conversation turns, audio streams, and history.
- */
-
+* HTTP endpoints for conversation turns, audio streams, and history.
+*/
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::conversations::{
     CompleteConversationRequest, RespondRequest, RespondResponse, service::ConversationError,

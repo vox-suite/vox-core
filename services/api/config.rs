@@ -1,7 +1,6 @@
 /**
- * Configuration loader and environment settings for the API service.
- */
-
+* Configuration loader and environment settings for the API service.
+*/
 use vox_core::config::Config;
 
 #[allow(dead_code)]
