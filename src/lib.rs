@@ -30,6 +30,7 @@ pub mod jobs;
 pub mod memory;
 pub mod outbound;
 pub mod preferences;
+pub mod providers;
 pub mod redis_keys;
 pub mod remote_extensions;
 pub mod schedules;

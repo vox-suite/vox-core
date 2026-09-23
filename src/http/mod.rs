@@ -7,6 +7,7 @@ pub mod approvals;
 pub mod audit;
 pub mod auth;
 pub mod capability_grants;
+pub mod connected_reads;
 pub mod connections;
 pub mod conversations;
 pub mod durable_tasks;
@@ -61,6 +62,7 @@ pub struct AppState {
     pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
+    pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -88,6 +90,7 @@ impl AppState {
             preferences: None,
             remote_extensions: None,
             status: None,
+            uber_read: None,
             service_token: Arc::from(""),
         }
     }
@@ -162,7 +165,15 @@ impl AppState {
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
-            status: Some(Arc::new(crate::status::StatusService::new(db))),
+            status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
+            uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db),
+                Arc::new(crate::providers::DefaultUberProviderClient::new(
+                    "https://api.uber.com",
+                )),
+            ))),
             service_token: Arc::from(service_token),
         }
     }
@@ -224,8 +235,24 @@ impl AppState {
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
+            uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db),
+                Arc::new(crate::providers::DefaultUberProviderClient::new(
+                    "https://api.uber.com",
+                )),
+            ))),
             service_token: Arc::from(service_token),
         }
+    }
+
+    pub fn with_uber_read(
+        mut self,
+        service: Arc<crate::providers::UberConnectedReadService>,
+    ) -> Self {
+        self.uber_read = Some(service);
+        self
     }
 
     pub fn take_host_trust(&mut self) -> Option<HostTrustService> {
@@ -430,6 +457,7 @@ pub fn router(state: AppState) -> Router {
             crate::host_trust::HOST_CONTEXT_PATH,
             post(host_apps::resolve_context),
         )
+        .route("/v1/connected-reads", post(connected_reads::read))
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
             rate_limit::rate_limit_middleware,

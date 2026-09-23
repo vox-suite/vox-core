@@ -198,24 +198,21 @@ impl ConnectionService {
             return Err(ConnectionError::InvalidState);
         }
 
-        sqlx::query(
-            "UPDATE connection_authorization_sessions SET consumed_at=now() WHERE id=$1",
-        )
-        .bind(request.session_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE connection_authorization_sessions SET consumed_at=now() WHERE id=$1")
+            .bind(request.session_id)
+            .execute(&mut *tx)
+            .await?;
 
         let integration_id: Uuid = row.get("integration_id");
         let custody_str: String = row.get("credential_custody");
         let requested_capabilities: Vec<String> = row.get("requested_capabilities");
         let credential_custody = parse_custody(&custody_str)?;
 
-        let integration_key: String = sqlx::query_scalar(
-            "SELECT external_key FROM integration_definitions WHERE id=$1",
-        )
-        .bind(integration_id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let integration_key: String =
+            sqlx::query_scalar("SELECT external_key FROM integration_definitions WHERE id=$1")
+                .bind(integration_id)
+                .fetch_one(&mut *tx)
+                .await?;
 
         let expires_at_conn = Some(Utc::now() + chrono::Duration::days(30));
         let id = sqlx::query_scalar::<_, Uuid>(
@@ -331,6 +328,27 @@ impl ConnectionService {
         rows.iter()
             .map(|row| connection_from_row(context.id, row))
             .collect()
+    }
+
+    /// Returns a single connection owned by this authenticated host user context.
+    pub async fn get(
+        &self,
+        context: &ResolvedUserContext,
+        connection_id: Uuid,
+    ) -> Result<Connection, ConnectionError> {
+        let row = sqlx::query(
+            "SELECT c.id, i.external_key, c.account_display_id, c.credential_custody, c.authorization_state, \
+             c.authorized_capabilities, c.expires_at, c.failure_code \
+             FROM external_connections c JOIN integration_definitions i ON i.id=c.integration_id \
+             WHERE c.id=$1 AND c.user_context_id=$2",
+        )
+        .bind(connection_id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(ConnectionError::NotFound)?;
+
+        connection_from_row(context.id, &row)
     }
 
     /// Revocation is context-scoped and idempotent. It blocks new Core attempts;
