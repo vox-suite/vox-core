@@ -96,7 +96,7 @@ async fn migration_creates_the_complete_core_schema() {
             .iter()
             .filter(|name| *name != "_sqlx_migrations")
             .count(),
-        41,
+        42,
         "expected consumer and platform tables, found: {names:?}"
     );
 
