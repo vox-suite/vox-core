@@ -16,6 +16,7 @@ pub mod execution_policy;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
+pub mod preferences;
 pub mod rate_limit;
 pub mod schedules;
 pub mod status;
@@ -56,6 +57,7 @@ pub struct AppState {
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
     pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
+    pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) service_token: Arc<str>,
 }
@@ -81,6 +83,7 @@ impl AppState {
             identity_adapters: None,
             integration_registry: None,
             schedules: None,
+            preferences: None,
             status: None,
             service_token: Arc::from(""),
         }
@@ -150,6 +153,7 @@ impl AppState {
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: Some(Arc::new(ScheduleService::new(db.clone()))),
+            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db))),
             service_token: Arc::from(service_token),
         }
@@ -205,6 +209,7 @@ impl AppState {
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: None,
+            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             service_token: Arc::from(service_token),
         }
@@ -358,6 +363,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/identity/authentications",
             post(identity_adapters::authenticate),
         )
+        .route("/v1/preferences", post(preferences::set).get(preferences::list))
+        .route("/v1/preferences/{key}", delete(preferences::delete_key))
+        .route("/v1/agents/{agent_key}/effective-preferences", post(preferences::effective))
         .route(
             "/v1/identity/links",
             post(identity_adapters::link).delete(identity_adapters::unlink),

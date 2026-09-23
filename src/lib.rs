@@ -29,6 +29,7 @@ pub mod jev;
 pub mod jobs;
 pub mod memory;
 pub mod outbound;
+pub mod preferences;
 pub mod redis_keys;
 pub mod schedules;
 pub mod status;

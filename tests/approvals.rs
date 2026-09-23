@@ -373,13 +373,23 @@ async fn exact_approval_is_context_bound_single_use_and_invalidated_by_change_or
         .await
         .unwrap();
     let changed_approval_id = changed_approval.approval_id.unwrap();
+    let execution_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO executions (user_id, proposal_id, approval_id, idempotency_key) VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(owner.user_id.0)
+    .bind(changed.id)
+    .bind(changed_approval_id)
+    .bind(format!("idem-{}", Uuid::new_v4()))
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     approvals
-        .consume(&owner, changed_approval_id, Uuid::new_v4(), now)
+        .consume(&owner, changed_approval_id, execution_id, now)
         .await
         .unwrap();
     assert!(matches!(
         approvals
-            .consume(&owner, changed_approval_id, Uuid::new_v4(), now)
+            .consume(&owner, changed_approval_id, execution_id, now)
             .await,
         Err(ApprovalError::Consumed)
     ));
