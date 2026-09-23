@@ -105,13 +105,8 @@ Mirror the existing task commands exactly:
 
 ## Testing
 
-- One Rust test on `TaskRepository::list`'s new `collection_id` filter:
-  create tasks in two different collections for the same user, assert
-  filtering by one collection's id returns only its own tasks (a scoping
-  correctness check — the kind of thing that silently leaks data if
-  broken).
-- No frontend test framework exists in vox-desktop today; consistent
-  with the rest of the app, no UI tests are added for this change.
+Skipped at the user's request. No new tests are added for this
+sub-project (Rust or frontend).
 
 ## Explicitly out of scope (future specs)
 
