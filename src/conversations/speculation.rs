@@ -1,3 +1,6 @@
+/**
+* Speculative execution cache for low-latency voice responses.
+*/
 use super::{
     RespondRequest, SpeculateRequest,
     service::{ConversationError, ConversationService},
@@ -116,15 +119,15 @@ impl ConversationService {
                 return tokio::time::timeout(Duration::from_secs(5), web.call(crate::agents::tools::web_search::SearchArgs { query })).await.ok()?.ok().map(|result| json!({"tool":"web_search", "result":result}));
             }
             let sql = match tool.as_str() {
-                "schedule" => "SELECT to_jsonb(t) FROM (SELECT * FROM scheduled_tasks WHERE user_context_id = $1 AND user_id = $2 LIMIT 50) t",
-                "tasks" => "SELECT to_jsonb(t) FROM (SELECT * FROM tasks WHERE user_context_id = $1 AND user_id = $2 LIMIT 50) t",
-                "projects" => "SELECT to_jsonb(t) FROM (SELECT * FROM projects WHERE user_id = $2 AND $1::uuid IS NOT NULL LIMIT 50) t",
-                "profile" => "SELECT to_jsonb(t) FROM (SELECT facts, persona FROM user_profiles WHERE user_id = $2 AND $1::uuid IS NOT NULL) t",
-                "records" => "SELECT to_jsonb(t) FROM (SELECT * FROM user_records WHERE user_id = $2 AND $1::uuid IS NOT NULL LIMIT 50) t",
+                "schedule" => "SELECT to_jsonb(t) FROM (SELECT * FROM schedules WHERE user_id = $1 LIMIT 50) t",
+                "tasks" => "SELECT to_jsonb(t) FROM (SELECT * FROM tasks WHERE user_id = $1 LIMIT 50) t",
+                "projects" => "SELECT to_jsonb(t) FROM (SELECT * FROM collections WHERE user_id = $1 AND kind = 'project' LIMIT 50) t",
+                "profile" => "SELECT to_jsonb(t) FROM (SELECT display_name, profile_facts, persona FROM users WHERE id = $1) t",
+                "records" => "SELECT to_jsonb(t) FROM (SELECT * FROM records WHERE user_id = $1 LIMIT 50) t",
                 _ => return None,
             };
             let rows = tokio::time::timeout(Duration::from_secs(5), sqlx::query_scalar::<_, Value>(sql)
-                .bind(owner.user_context_id.0).bind(owner.user_id.0).fetch_all(db.pool())).await.ok()?.ok()?;
+                .bind(owner.user_id.0).fetch_all(db.pool())).await.ok()?.ok()?;
             Some(json!({"tool":tool,"result":rows}))
         }.boxed().shared();
         let running = work.clone();
@@ -237,10 +240,7 @@ impl ConversationService {
         {
             return None;
         }
-        if self.lookup_plan(&request.text).await? != entry.plan {
-            return None;
-        }
-        if entry.plan == "web" && entry.text != request.text {
+        if entry.text != request.text {
             return None;
         }
         Some(entry.work)

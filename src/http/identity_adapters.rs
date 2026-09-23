@@ -1,3 +1,6 @@
+/**
+* HTTP endpoints for third-party identity provider resolution.
+*/
 use super::{AppState, auth, host_apps::assertion_from_headers};
 use crate::{
     host_trust::{HostContextRequest, HostTrustError},

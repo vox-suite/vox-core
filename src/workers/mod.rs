@@ -1,3 +1,6 @@
+/**
+* Background worker loops and asynchronous job processors.
+*/
 pub mod task_executor;
 pub mod whatsapp_sweeper;
 
@@ -66,7 +69,7 @@ impl Worker {
         &self,
         cancellation: CancellationToken,
     ) -> Result<(), crate::db::jobs::JobError> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             tokio::select! {
                 _ = cancellation.cancelled() => return Ok(()),

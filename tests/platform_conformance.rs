@@ -1,3 +1,6 @@
+/**
+* Integration tests verifying platform conformance contracts.
+*/
 use vox_core::conformance::{
     Command, ErrorCategory, JsonBoundary, OutcomeStatus, PlatformAdapter, ReferencePlatform,
     ResultKind, SemanticError, SemanticResult, canonical_suite, parse_suite, run_suite,

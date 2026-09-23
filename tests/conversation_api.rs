@@ -1,3 +1,6 @@
+/**
+* Integration tests for conversational HTTP API endpoints.
+*/
 use async_trait::async_trait;
 use axum::{
     body::{Body, to_bytes},

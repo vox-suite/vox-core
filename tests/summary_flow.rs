@@ -1,3 +1,6 @@
+/**
+* Integration tests for conversation summary generation flow.
+*/
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
@@ -9,7 +12,7 @@ use vox_core::{
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
     db::Db,
-    identity::{ChannelIdentity, UserId},
+    identity::{ChannelIdentity, IdentityService, UserId},
     memory::{
         MemoryService,
         cache::{CacheError, ContextCache},
@@ -45,11 +48,18 @@ struct FailingCache;
 
 #[async_trait]
 impl ContextCache for FailingCache {
-    async fn get(&self, _: UserId) -> Result<Option<String>, CacheError> {
+    async fn get_user(
+        &self,
+        _: UserId,
+    ) -> Result<Option<vox_core::memory::cache::MinimalUserInfo>, CacheError> {
         Err(redis::RedisError::from((redis::ErrorKind::IoError, "offline")).into())
     }
 
-    async fn set(&self, _: UserId, _: &str) -> Result<(), CacheError> {
+    async fn put_user(
+        &self,
+        _: UserId,
+        _: &vox_core::memory::cache::MinimalUserInfo,
+    ) -> Result<(), CacheError> {
         Err(redis::RedisError::from((redis::ErrorKind::IoError, "offline")).into())
     }
 }
@@ -80,10 +90,10 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
             external_conversation_id: "CA-summary".into(),
             text: "I prefer Bengaluru".into(),
             initiation_context: None,
-            voice_signature: None,
             turn_id: None,
             revision: None,
             tts_provider: None,
+            filler: None,
         })
         .await
         .unwrap();
@@ -110,11 +120,13 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
     let handler = SummaryHandler::with_memory(db.clone(), Arc::new(Summarizer), memory);
     handler.handle(response.conversation_id).await.unwrap();
     handler.handle(response.conversation_id).await.unwrap();
-    let summaries: i64 = sqlx::query_scalar("SELECT count(*) FROM conversation_summaries")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
-    let facts: Value = sqlx::query_scalar("SELECT facts FROM user_profiles LIMIT 1")
+    let summaries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversations WHERE summary_version > 0",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let facts: Value = sqlx::query_scalar("SELECT profile_facts FROM users LIMIT 1")
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -126,26 +138,27 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
 #[ignore = "requires isolated PostgreSQL"]
 async fn projection_drops_old_recaps_before_commitments_and_stays_valid_json() {
     let db = setup().await;
-    let user_id: uuid::Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
-        .fetch_one(db.pool())
+    let user_id = IdentityService::new(db.clone())
+        .resolve_legacy_owner(&ChannelIdentity {
+            channel: "test-channel".into(),
+            external_id: format!("projection-{}", uuid::Uuid::new_v4()),
+        })
         .await
-        .unwrap();
+        .unwrap()
+        .user_id
+        .0;
     for index in 0..20 {
-        let conversation_id: uuid::Uuid = sqlx::query_scalar(
-            "INSERT INTO conversations (user_id, channel, external_id, status) VALUES ($1, 'phone', $2, 'completed') RETURNING id",
+        sqlx::query(
+            "INSERT INTO conversations (user_id, channel, external_conversation_id, state, latest_summary, summary_version) \
+             VALUES ($1, 'phone', $2, 'completed', $3, 1)",
         )
         .bind(user_id)
         .bind(format!("context-{index}"))
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO conversation_summaries (conversation_id, user_id, recap, commitments, decisions) VALUES ($1, $2, $3, $4, '[]')",
-        )
-        .bind(conversation_id)
-        .bind(user_id)
-        .bind("x".repeat(2_000))
-        .bind(serde_json::json!(["Keep this commitment"]))
+        .bind(serde_json::json!({
+            "recap": "x".repeat(2_000),
+            "commitments": ["Keep this commitment"],
+            "decisions": [],
+        }))
         .execute(db.pool())
         .await
         .unwrap();

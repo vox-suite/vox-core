@@ -1,3 +1,6 @@
+/**
+* Handlers executed when scheduled cron triggers fire.
+*/
 use super::ScheduleId;
 use crate::{
     agents::event_planner::EventPlanning,
@@ -74,10 +77,7 @@ impl ScheduleHandler {
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query(
-            "SELECT s.user_id, COALESCE(s.user_context_id, c.id) AS user_context_id, s.instruction \
-             FROM scheduled_tasks s \
-             JOIN user_contexts c ON c.user_id = s.user_id \
-             WHERE s.id = $1",
+            "SELECT user_id, user_context_id, task_id, instruction FROM schedules WHERE id = $1",
         )
         .bind(schedule_id.0)
         .fetch_optional(self.db.pool())
@@ -89,6 +89,7 @@ impl ScheduleHandler {
             user_context_id: UserContextId(row.get("user_context_id")),
             user_id,
         };
+        let task_id: Option<uuid::Uuid> = row.get("task_id");
         let instruction: String = row.get("instruction");
 
         if let Some(jev) = &self.jev {
@@ -146,19 +147,23 @@ impl ScheduleHandler {
             }
         } else if let Some(outbound) = &self.outbound {
             let reason = format!("Scheduled reminder: {}", instruction);
-            let opening = format!("Remind the user of their scheduled reminder: {}", instruction);
+            let opening = format!(
+                "Remind the user of their scheduled reminder: {}",
+                instruction
+            );
             let _ = outbound
                 .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
                 .await;
         }
 
-        // Complete any pending tasks linked to this scheduled instruction
         let _ = sqlx::query(
             "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
-             WHERE user_id = $1 AND status = 'pending' AND (raw_instruction = $2 OR title = $2)",
+             WHERE id = $1 AND user_context_id = $2 AND user_id = $3 \
+               AND status IN ('pending', 'executing')",
         )
+        .bind(task_id)
+        .bind(owner.user_context_id.0)
         .bind(user_id.0)
-        .bind(&instruction)
         .execute(self.db.pool())
         .await;
 

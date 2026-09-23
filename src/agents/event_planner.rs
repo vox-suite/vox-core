@@ -1,3 +1,6 @@
+/**
+* Event planning agent decomposing user intents into structured action plans.
+*/
 use super::{AgentError, structured_json};
 use crate::{config::Config, identity::UserId};
 use async_trait::async_trait;

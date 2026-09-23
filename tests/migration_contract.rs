@@ -1,3 +1,6 @@
+/**
+* Integration tests verifying full database schema migrations.
+*/
 use sqlx::Row;
 use vox_core::db::Db;
 
@@ -15,7 +18,7 @@ async fn migration_creates_the_complete_core_schema() {
         .expect("inspect test database");
     let rows = sqlx::query(
         "SELECT table_name FROM information_schema.tables \
-         WHERE table_schema = 'public' ORDER BY table_name",
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name",
     )
     .fetch_all(&pool)
     .await
@@ -23,52 +26,100 @@ async fn migration_creates_the_complete_core_schema() {
     let names: Vec<String> = rows.iter().map(|row| row.get("table_name")).collect();
 
     for expected in [
-        "execution_attempts",
-        "audit_events",
-        "audit_sink_definitions",
-        "audit_sink_deliveries",
-        "executions",
-        "conversation_summaries",
+        "users",
+        "auth_identities",
+        "channel_identities",
+        "auth_sessions",
         "conversations",
-        "events",
-        "jobs",
         "messages",
+        "collections",
+        "tasks",
+        "schedules",
+        "jobs",
+        "job_attempts",
+        "data_schemas",
+        "records",
+        "devices",
+        "connections",
+        "action_proposals",
+        "action_approvals",
+        "executions",
+        "execution_attempts",
+        "inbound_events",
+        "audit_events",
+        "platform_deployments",
         "host_apps",
-        "host_app_assertion_nonces",
-        "host_app_credentials",
         "host_organizations",
+        "user_contexts",
+        "host_app_credentials",
+        "host_app_assertion_nonces",
         "identity_adapters",
+        "login_identities",
+        "federated_identity_nonces",
+        "passwordless_recovery_challenges",
         "identity_authentication_sessions",
-        "identity_link_events",
         "identity_links",
+        "identity_link_events",
         "agent_definitions",
         "agent_model_configurations",
         "deployment_agent_selections",
         "integration_definitions",
         "integration_capability_declarations",
+        "integration_declaration_versions",
         "external_connections",
         "agent_capability_grants",
+        "auth_identities",
+        "channel_identities",
+        "auth_sessions",
+        "conversations",
+        "collections",
+        "tasks",
+        "schedules",
+        "jobs",
+        "data_schemas",
+        "records",
+        "devices",
+        "connections",
         "action_proposals",
         "action_approvals",
-        "spending_policies",
-        "operational_quotas",
-        "operational_quota_reservations",
-        "execution_policy_decisions",
-        "task_runs",
-        "login_identities",
-        "federated_identity_nonces",
-        "passwordless_recovery_challenges",
-        "platform_deployments",
-        "scheduled_tasks",
-        "outbound_calls",
-        "user_contexts",
-        "user_identities",
-        "user_profiles",
-        "users",
+        "executions",
+        "inbound_events",
+        "audit_events",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
-            "missing {expected}"
+            "missing base table {expected}"
+        );
+    }
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| *name != "_sqlx_migrations")
+            .count(),
+        42,
+        "expected consumer and platform tables, found: {names:?}"
+    );
+
+    let view_rows = sqlx::query(
+        "SELECT table_name FROM information_schema.views \
+         WHERE table_schema = 'public' ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list public views");
+    let view_names: Vec<String> = view_rows.iter().map(|row| row.get("table_name")).collect();
+    for expected in [
+        "scheduled_tasks",
+        "projects",
+        "events",
+        "user_records",
+        "user_goals",
+        "user_insights",
+        "client_devices",
+    ] {
+        assert!(
+            view_names.iter().any(|name| name == expected),
+            "missing compatibility view {expected}"
         );
     }
 
@@ -79,11 +130,16 @@ async fn migration_creates_the_complete_core_schema() {
     )
     .fetch_all(&pool)
     .await
-    .expect("list context-owned resources");
-    for expected in ["executions", "conversations", "scheduled_tasks", "tasks", "outbound_calls"] {
+    .expect("list tables with user_context_id");
+    for expected in [
+        "login_identities",
+        "passwordless_recovery_challenges",
+        "external_connections",
+        "agent_capability_grants",
+    ] {
         assert!(
             scoped_resources.iter().any(|table| table == expected),
-            "{expected} is missing canonical user-context ownership"
+            "missing context scope for {expected}: {scoped_resources:?}"
         );
     }
 }

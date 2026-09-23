@@ -1,3 +1,6 @@
+/**
+* Administrative HTTP endpoints for inspecting runtime state.
+*/
 use super::{AppState, auth};
 use axum::{
     Json,
@@ -20,6 +23,10 @@ pub struct RedisAdmin {
 }
 
 impl RedisAdmin {
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
     pub fn from_token(token: Option<String>) -> Result<Option<Self>, redis::RedisError> {
         let env_url = std::env::var("REDIS_URL").ok();
         Self::from_token_with_url(env_url.as_deref().or(Some(REDIS_URL)), token)

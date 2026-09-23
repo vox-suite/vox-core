@@ -1,3 +1,6 @@
+/**
+* Integration tests for voice conversation turns and dialogue state.
+*/
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -32,10 +35,10 @@ fn request(identity: ChannelIdentity, call: &str, text: &str) -> RespondRequest 
         external_conversation_id: call.into(),
         text: text.into(),
         initiation_context: None,
-        voice_signature: None,
         turn_id: Some("turn".into()),
         revision: Some(3),
         tts_provider: None,
+        filler: None,
     }
 }
 
@@ -74,7 +77,6 @@ async fn phone_retry_preserves_owner_and_active_speaker() {
         original_text: "What tasks are due?".into(),
         candidate_user_id: speaker.user_id,
         candidate_name: "Test".into(),
-        voice_signature: None,
         digits: String::new(),
     };
     sqlx::query("UPDATE conversations SET verification_state=$1 WHERE id=$2")

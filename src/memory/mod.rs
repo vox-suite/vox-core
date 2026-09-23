@@ -1,28 +1,27 @@
+/**
+ * Context cache, memory projection, and user name resolution.
+ */
 pub mod cache;
 pub mod greetings;
 pub mod projection;
 
-use crate::{
-    db::Db,
-    identity::UserId,
-    voiceprint::{VoiceSignature, VoiceprintService},
-};
+use crate::{db::Db, identity::UserId};
+use cache::{MinimalChannel, MinimalUserInfo};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MemoryService {
     db: Db,
     cache: Option<Arc<dyn cache::ContextCache>>,
-    voiceprints: VoiceprintService,
+    projection_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<UserId, (String, std::time::Instant)>>>,
 }
 
 impl MemoryService {
     pub fn new(db: Db, cache: Option<Arc<dyn cache::ContextCache>>) -> Self {
-        let voiceprints = VoiceprintService::new(db.clone());
         Self {
             db,
             cache,
-            voiceprints,
+            projection_cache: Arc::default(),
         }
     }
 
@@ -30,124 +29,66 @@ impl MemoryService {
         self.cache.as_ref()
     }
 
-    pub fn voiceprints(&self) -> &VoiceprintService {
-        &self.voiceprints
-    }
-
+    /// Full LLM context projection — cached in-memory with TTL to avoid repeated DB scans during turns.
     pub async fn load(&self, user_id: UserId) -> Result<String, sqlx::Error> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(value)) = cache.get(user_id).await
+        if let Some((projection, at)) = self.projection_cache.read().await.get(&user_id)
+            && at.elapsed() < std::time::Duration::from_secs(30)
         {
-            return Ok(value);
+            return Ok(projection.clone());
         }
         let value = projection::build(&self.db, user_id).await?;
-        if let Some(cache) = &self.cache {
-            let _ = cache.set(user_id, &value).await;
-        }
+        self.projection_cache
+            .write()
+            .await
+            .insert(user_id, (value.clone(), std::time::Instant::now()));
         Ok(value)
     }
 
     pub async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, sqlx::Error> {
         if let Some(cache) = &self.cache
-            && let Ok(Some(name)) = cache.get_user_name(user_id).await
+            && let Ok(Some(info)) = cache.get_user(user_id).await
+            && let Some(name) = info
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
         {
-            return Ok(Some(name));
+            return Ok(Some(name.to_owned()));
         }
 
         let name: Option<String> =
-            sqlx::query_scalar("SELECT facts->>'name' FROM user_profiles WHERE user_id = $1")
+            sqlx::query_scalar(
+                "SELECT COALESCE(NULLIF(profile_facts->>'name', ''), display_name) FROM users WHERE id = $1",
+            )
                 .bind(user_id.0)
                 .fetch_optional(self.db.pool())
                 .await?
                 .flatten();
 
-        if let Some(ref n) = name
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_user_name(user_id, n).await;
-            let _ = cache.set_user_id_by_name(n, user_id).await;
+        if let Some(ref n) = name {
+            let _ = self.write_minimal_user(user_id, Some(n)).await;
         }
 
         Ok(name)
     }
 
     pub async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), sqlx::Error> {
+        self.projection_cache.write().await.remove(&user_id);
         let trimmed = name.trim();
         sqlx::query(
-            "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-             VALUES ($1, jsonb_build_object('name', $2::text), 1, now()) \
-             ON CONFLICT (user_id) DO UPDATE SET \
-             facts = jsonb_set(user_profiles.facts, '{name}', to_jsonb($2::text), true), \
-             updated_at = now()",
+            "UPDATE users SET \
+             profile_facts = jsonb_set(profile_facts, '{name}', to_jsonb($2::text), true), \
+             display_name = $2, \
+             profile_version = profile_version + 1, \
+             updated_at = now() \
+             WHERE id = $1",
         )
         .bind(user_id.0)
         .bind(trimmed)
         .execute(self.db.pool())
         .await?;
 
-        if let Some(cache) = &self.cache {
-            let _ = cache.set_user_name(user_id, trimmed).await;
-            let _ = cache.set_user_id_by_name(trimmed, user_id).await;
-            if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
-            )
-            .bind(user_id.0)
-            .fetch_all(self.db.pool())
-            .await
-            {
-                for (channel, external_id) in identities {
-                    let _ = cache
-                        .set_greeting_name(&channel, &external_id, trimmed)
-                        .await;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn get_voice_signature(
-        &self,
-        user_id: UserId,
-    ) -> Result<Option<VoiceSignature>, sqlx::Error> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(raw)) = cache.get_voice_signature(user_id).await
-            && let Some(sig) = VoiceSignature::from_raw(&raw)
-        {
-            return Ok(Some(sig));
-        }
-
-        let sig = self.voiceprints.get_voiceprint(user_id).await?;
-        if let Some(ref s) = sig
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_voice_signature(user_id, &s.to_json()).await;
-        }
-        Ok(sig)
-    }
-
-    pub async fn set_voice_signature(
-        &self,
-        user_id: UserId,
-        signature: &VoiceSignature,
-    ) -> Result<(), sqlx::Error> {
-        if !signature.usable() {
-            return Ok(());
-        }
-        self.voiceprints
-            .save_voiceprint(
-                user_id,
-                signature,
-                signature.sample_duration_ms.min(i32::MAX as u64) as i32,
-            )
-            .await?;
-
-        if let Some(cache) = &self.cache {
-            let _ = cache
-                .set_voice_signature(user_id, &signature.to_json())
-                .await;
-        }
-
+        let _ = self.write_minimal_user(user_id, Some(trimmed)).await;
         Ok(())
     }
 
@@ -157,71 +98,63 @@ impl MemoryService {
             return Ok(None);
         }
 
-        if let Some(cache) = &self.cache
-            && let Ok(Some(uid)) = cache.get_user_id_by_name(trimmed).await
-        {
-            return Ok(Some(uid));
-        }
+        let user_id = sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT id FROM users \
+             WHERE LOWER(COALESCE(NULLIF(profile_facts->>'name', ''), display_name, '')) = LOWER($1) \
+             LIMIT 1",
+        )
+        .bind(trimmed)
+        .fetch_optional(self.db.pool())
+        .await?;
 
-        let uid = self.voiceprints.find_user_by_name(trimmed).await?;
-        if let Some(uid) = uid
-            && let Some(cache) = &self.cache
-        {
-            let _ = cache.set_user_id_by_name(trimmed, uid).await;
-        }
-        Ok(uid)
+        Ok(user_id.map(UserId))
     }
 
-    pub async fn get_verification_state(&self, conversation_id: uuid::Uuid) -> Option<String> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(state)) = cache.get_verification_state(conversation_id).await
-        {
-            return Some(state);
-        }
-        None
-    }
-
-    pub async fn set_verification_state(&self, conversation_id: uuid::Uuid, state: &str) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.set_verification_state(conversation_id, state).await;
-        }
-    }
-
-    pub async fn clear_verification_state(&self, conversation_id: uuid::Uuid) {
-        if let Some(cache) = &self.cache {
-            let _ = cache.clear_verification_state(conversation_id).await;
-        }
-    }
-
-    pub async fn refresh(&self, user_id: UserId) -> Result<(), sqlx::Error> {
+    pub async fn refresh(&self, user_id: UserId) -> Result<String, sqlx::Error> {
+        // Projection is Postgres-only; refresh also rewrites the minimal Redis user.
         let value = projection::build(&self.db, user_id).await?;
-        if let Some(cache) = &self.cache {
-            let _ = cache.set(user_id, &value).await;
-            if let Ok(Some(Some(name))) = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT facts->>'name' FROM user_profiles WHERE user_id = $1",
+        self.projection_cache
+            .write()
+            .await
+            .insert(user_id, (value.clone(), std::time::Instant::now()));
+        let _ = self.write_minimal_user(user_id, None).await;
+        Ok(value)
+    }
+
+    async fn write_minimal_user(
+        &self,
+        user_id: UserId,
+        name_override: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let Some(cache) = &self.cache else {
+            return Ok(());
+        };
+        let name = if let Some(name) = name_override {
+            Some(name.to_owned())
+        } else {
+            sqlx::query_scalar(
+                "SELECT COALESCE(NULLIF(profile_facts->>'name', ''), display_name) FROM users WHERE id = $1",
             )
             .bind(user_id.0)
             .fetch_optional(self.db.pool())
-            .await
-            {
-                let trimmed = name.trim();
-                let _ = cache.set_user_name(user_id, trimmed).await;
-                let _ = cache.set_user_id_by_name(trimmed, user_id).await;
-                if let Ok(identities) = sqlx::query_as::<_, (String, String)>(
-                    "SELECT channel, external_id FROM user_identities WHERE user_id = $1",
-                )
-                .bind(user_id.0)
-                .fetch_all(self.db.pool())
-                .await
-                {
-                    for (channel, external_id) in identities {
-                        let _ = cache
-                            .set_greeting_name(&channel, &external_id, trimmed)
-                            .await;
-                    }
-                }
-            }
-        }
+            .await?
+            .flatten()
+        };
+        let channels = sqlx::query_as::<_, (String, String)>(
+            "SELECT channel, normalized_external_id FROM channel_identities \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id.0)
+        .fetch_all(self.db.pool())
+        .await?
+        .into_iter()
+        .map(|(channel, external_id)| MinimalChannel {
+            channel,
+            external_id,
+        })
+        .collect();
+        let info = MinimalUserInfo { name, channels };
+        let _ = cache.put_user(user_id, &info).await;
         Ok(())
     }
 }

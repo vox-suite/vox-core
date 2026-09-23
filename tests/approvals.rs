@@ -1,3 +1,6 @@
+/**
+* Integration tests for approval workflows and authorization.
+*/
 use axum::{
     body::Body,
     http::{Request, StatusCode},

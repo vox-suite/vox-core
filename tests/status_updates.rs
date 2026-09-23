@@ -1,7 +1,6 @@
-//! Isolated PostgreSQL acceptance coverage for the status cursor and webhook
-//! subscription lifecycle. Run with `TEST_DATABASE_URL=... cargo test --locked
-//! --test status_updates -- --ignored --test-threads=1`.
-
+/**
+* Integration tests for task status update webhooks.
+*/
 use async_trait::async_trait;
 use chrono::Utc;
 use std::{collections::HashMap, sync::Mutex};
@@ -76,7 +75,6 @@ async fn cursors_are_scoped_replayable_and_subscription_secrets_are_one_time() {
     let secrets = std::sync::Arc::new(TestSecretStore::default());
     let status = StatusService::new(db.clone()).with_secret_store(secrets.clone());
 
-    // Normal durable-task writes atomically create task and run status events.
     let task = DurableTaskService::new(db)
         .start(
             &owner,

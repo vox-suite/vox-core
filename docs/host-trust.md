@@ -17,7 +17,7 @@ number, or matching host-user identifier is not evidence of that control.
 - `resolve_authenticated_context` verifies one signed assertion and maps it to
   the credential's canonical user context.
 
-The module owns credential verification, short assertion lifetime, durable
+The module owns credential verification, short assertion lifetime, in-process
 replay prevention, audience validation, browser-origin policy, organization
 lookup, and context resolution. HTTP handlers do not accept deployment IDs,
 host-app IDs, organization IDs, or user-context IDs from an untrusted payload.
@@ -25,7 +25,7 @@ host-app IDs, organization IDs, or user-context IDs from an untrusted payload.
 ## Operator workflow
 
 The platform operator calls `POST /v1/host-apps` with the platform bootstrap
-credential (`VOX_CORE_SERVICE_TOKEN`). The response includes the host-app ID,
+credential (`VOX_AUTH_TOKEN`). The response includes the host-app ID,
 audience, credential ID, and raw signing secret. The secret is returned only
 in that response; Core stores only its SHA-256 verifier. The operator places
 the secret in the host app's server-side secret manager. Credential-bearing
@@ -68,8 +68,9 @@ The signature covers the protocol version, credential ID, audience, timestamp,
 nonce, host user ID, and organization key using length-prefixed fields. It is
 therefore unambiguous even when identifiers contain punctuation. Assertions
 expire after five minutes (with at most 60 seconds of future clock skew) and a
-nonce can succeed only once. Core persists only credential ID, nonce, and
-expiry for replay prevention; it never stores the assertion payload or secret.
+nonce can succeed only once within a single API process. Core keeps only
+credential ID, nonce, and expiry in memory for that window; it never stores the
+assertion payload or secret.
 
 The authenticated credential decides deployment and host app. If an
 organization key is supplied, it is resolved only inside that authenticated

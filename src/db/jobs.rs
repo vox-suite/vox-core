@@ -1,3 +1,6 @@
+/**
+* PostgreSQL job queue querying and transactional claiming helpers.
+*/
 use super::Db;
 use crate::jobs::{ClaimedJob, JobKind};
 use chrono::{DateTime, Duration, Utc};
@@ -50,9 +53,9 @@ impl JobRepository {
         let rows = sqlx::query(
             "WITH candidates AS (\
                 SELECT id FROM jobs \
-                WHERE (state = 'pending' AND next_attempt_at <= $1) \
+                WHERE (state = 'pending' AND available_at <= $1) \
                    OR (state = 'running' AND lease_expires_at <= $1) \
-                ORDER BY next_attempt_at, created_at \
+                ORDER BY available_at, created_at \
                 FOR UPDATE SKIP LOCKED LIMIT $2\
              ) \
              UPDATE jobs SET state = 'running', attempt_count = attempt_count + 1, \
@@ -110,7 +113,7 @@ impl JobRepository {
         error_code: &str,
     ) -> Result<(), JobError> {
         let result = sqlx::query(
-            "UPDATE jobs SET state = 'pending', next_attempt_at = $3, last_error_code = $4, \
+            "UPDATE jobs SET state = 'pending', available_at = $3, last_error_code = $4, \
              lease_owner = NULL, lease_expires_at = NULL \
              WHERE id = $1 AND state = 'running' AND lease_owner = $2",
         )

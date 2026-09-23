@@ -1,3 +1,6 @@
+/**
+* Conversational state, turn handling, and dialogue domain types.
+*/
 pub mod service;
 pub(crate) mod speculation;
 
@@ -16,13 +19,13 @@ pub struct RespondRequest {
     pub text: String,
     pub initiation_context: Option<String>,
     #[serde(default)]
-    pub voice_signature: Option<String>,
-    #[serde(default)]
     pub turn_id: Option<String>,
     #[serde(default)]
     pub revision: Option<u64>,
     #[serde(default)]
     pub tts_provider: Option<String>,
+    #[serde(default)]
+    pub filler: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

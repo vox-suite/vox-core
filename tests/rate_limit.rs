@@ -1,3 +1,6 @@
+/**
+* Integration tests for HTTP rate limiting and client throttling.
+*/
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -19,7 +22,6 @@ async fn rate_limiting_allows_requests_within_limit_and_attaches_headers() {
     let state = AppState::new(true).with_rate_limiter(limiter);
     let app = router(state);
 
-    // Request 1
     let res = app
         .clone()
         .oneshot(
@@ -49,7 +51,6 @@ async fn rate_limiting_allows_requests_within_limit_and_attaches_headers() {
     );
     assert!(res.headers().contains_key("x-ratelimit-reset"));
 
-    // Request 2
     let res = app
         .clone()
         .oneshot(
@@ -70,7 +71,6 @@ async fn rate_limiting_allows_requests_within_limit_and_attaches_headers() {
         "1"
     );
 
-    // Request 3
     let res = app
         .clone()
         .oneshot(
@@ -91,7 +91,6 @@ async fn rate_limiting_allows_requests_within_limit_and_attaches_headers() {
         "0"
     );
 
-    // Request 4 (Exceeds limit)
     let res = app
         .clone()
         .oneshot(
@@ -139,7 +138,6 @@ async fn rate_limiting_isolates_different_client_ips() {
     let state = AppState::new(true).with_rate_limiter(limiter);
     let app = router(state);
 
-    // Client A makes 2 requests
     for _ in 0..2 {
         let res = app
             .clone()
@@ -154,7 +152,6 @@ async fn rate_limiting_isolates_different_client_ips() {
         assert_eq!(res.status(), StatusCode::OK);
     }
 
-    // Client A request 3 is blocked
     let res_a = app
         .clone()
         .oneshot(
@@ -167,7 +164,6 @@ async fn rate_limiting_isolates_different_client_ips() {
         .unwrap();
     assert_eq!(res_a.status(), StatusCode::TOO_MANY_REQUESTS);
 
-    // Client B can still make requests successfully
     let res_b = app
         .clone()
         .oneshot(
@@ -199,7 +195,6 @@ async fn rate_limiting_applies_to_v1_routes_as_well() {
     let state = AppState::new(true).with_rate_limiter(limiter);
     let app = router(state);
 
-    // First request to admin redis endpoint (unconfigured redis or rejected query)
     let res1 = app
         .clone()
         .oneshot(
@@ -220,7 +215,6 @@ async fn rate_limiting_applies_to_v1_routes_as_well() {
         "0"
     );
 
-    // Second request is rate-limited before reaching the route handler
     let res2 = app
         .clone()
         .oneshot(

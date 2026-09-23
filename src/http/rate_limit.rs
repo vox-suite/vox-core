@@ -1,3 +1,6 @@
+/**
+* Rate limiting middleware and IP tracking for HTTP endpoints.
+*/
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
@@ -36,12 +39,11 @@ impl Default for RateLimitConfig {
 }
 
 pub fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = forwarded.split(',').next().map(|s| s.trim()) {
-            if !first.is_empty() {
-                return first.to_string();
-            }
-        }
+    if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(first) = forwarded.split(',').next().map(|s| s.trim())
+        && !first.is_empty()
+    {
+        return first.to_string();
     }
     if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
         let trimmed = real_ip.trim();
@@ -95,11 +97,10 @@ impl RateLimiter {
 
         let mut clients = self.clients.lock().unwrap();
 
-        // Evict old entries if map grows large
-        if clients.len() > 10_000 {
-            if let Some(cutoff) = now.checked_sub(self.config.window) {
-                clients.retain(|_, state| state.last_seen > cutoff);
-            }
+        if clients.len() > 10_000
+            && let Some(cutoff) = now.checked_sub(self.config.window)
+        {
+            clients.retain(|_, state| state.last_seen > cutoff);
         }
 
         let entry = clients.entry(key.to_string()).or_insert_with(|| ClientState {
@@ -199,58 +200,5 @@ pub async fn rate_limit_middleware(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::http::HeaderValue;
-
-    #[test]
-    fn extracts_client_ip_with_precedence_and_splitting() {
-        let mut headers = HeaderMap::new();
-        assert_eq!(client_ip(&headers), "127.0.0.1");
-
-        headers.insert(
-            "cf-connecting-ip",
-            HeaderValue::from_static("104.28.19.42"),
-        );
-        assert_eq!(client_ip(&headers), "104.28.19.42");
-
-        headers.insert(
-            "x-real-ip",
-            HeaderValue::from_static("192.0.2.1"),
-        );
-        assert_eq!(client_ip(&headers), "192.0.2.1");
-
-        headers.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.195, 70.41.3.18, 150.172.238.178"),
-        );
-        assert_eq!(client_ip(&headers), "203.0.113.195");
-    }
-
-    #[test]
-    fn trims_whitespace_in_extracted_ip() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-real-ip",
-            HeaderValue::from_static("   198.51.100.99  "),
-        );
-        assert_eq!(client_ip(&headers), "198.51.100.99");
-    }
-
-    #[test]
-    fn limiter_reset_and_clear_cleans_stored_keys() {
-        let limiter = RateLimiter::new(RateLimitConfig {
-            max_requests: 1,
-            window: Duration::from_secs(60),
-        });
-        let d1 = limiter.check("1.2.3.4");
-        assert!(d1.allowed);
-
-        let d2 = limiter.check("1.2.3.4");
-        assert!(!d2.allowed);
-
-        limiter.clear();
-        let d3 = limiter.check("1.2.3.4");
-        assert!(d3.allowed);
-    }
-}
+#[path = "../../tests/unit/http_rate_limit.rs"]
+mod tests;

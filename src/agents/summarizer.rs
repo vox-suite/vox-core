@@ -1,3 +1,6 @@
+/**
+* Conversation summarization agent condensing dialogue history.
+*/
 use super::{AgentError, conversation::PromptMessage, structured_json};
 use crate::{config::Config, summaries::StructuredSummary};
 use async_trait::async_trait;

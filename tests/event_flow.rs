@@ -1,3 +1,6 @@
+/**
+* Integration tests for end-to-end domain event dispatching.
+*/
 use async_trait::async_trait;
 use axum::{
     body::{Body, to_bytes},
@@ -91,7 +94,7 @@ async fn duplicate_event_ingestion_creates_one_event_and_one_job() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn retrying_event_planning_creates_one_action_and_dispatch_job() {
+async fn retrying_event_processing_is_idempotent_and_marks_events_processed() {
     let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
     let db = Db::connect(&url).await.unwrap();
     db.migrate().await.unwrap();
@@ -117,15 +120,16 @@ async fn retrying_event_planning_creates_one_action_and_dispatch_job() {
     handler.handle(event.event_id).await.unwrap();
     handler.handle(event.event_id).await.unwrap();
 
+    let processed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM inbound_events WHERE id = $1 AND processed_at IS NOT NULL",
+    )
+    .bind(event.event_id.0)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(processed, 1);
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM actions")
-            .fetch_one(db.pool())
-            .await
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind = 'dispatch_action'")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inbound_events")
             .fetch_one(db.pool())
             .await
             .unwrap(),

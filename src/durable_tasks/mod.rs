@@ -1,4 +1,10 @@
-use crate::{db::Db, identity::ResolvedUserContext};
+use crate::{
+    db::Db,
+    identity::{
+        DeploymentId, HostAppId, HostOrganizationId, ResolvedUserContext, UserContextId,
+        UserContextSubject, UserId,
+    },
+};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,15 +90,22 @@ impl DurableTaskService {
     ) -> Result<DurableTask, DurableTaskError> {
         let title = text(&request.title, 1024)?;
         let instruction = text(&request.instruction, 20_000)?;
-        let mut tx = self.db.pool().begin().await?;
         if let Some(agent) = request.agent_external_key.as_deref() {
-            self.assert_selected(&mut tx, context, agent).await?;
+            text(agent, 255)?;
         }
-        let task_id = sqlx::query_scalar::<_, Uuid>("INSERT INTO tasks (user_context_id,user_id,title,raw_instruction,status,execution_type) VALUES ($1,$2,$3,$4,'pending','interactive') RETURNING id")
-            .bind(context.id.0).bind(context.user_id.0).bind(title.clone()).bind(instruction).fetch_one(&mut *tx).await?;
-        let run_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO task_runs (task_id) VALUES ($1) RETURNING id",
+        let mut tx = self.db.pool().begin().await?;
+        let task_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO tasks (user_id, title, instruction, status, execution_type) VALUES ($1, $2, $3, 'pending', 'interactive') RETURNING id",
         )
+        .bind(context.user_id.0)
+        .bind(title.clone())
+        .bind(instruction)
+        .fetch_one(&mut *tx)
+        .await?;
+        let run_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO jobs (user_id, kind, task_id, state, checkpoint) VALUES ($1, 'execute_task', $2, 'pending', '{}'::jsonb) RETURNING id",
+        )
+        .bind(context.user_id.0)
         .bind(task_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -125,12 +138,19 @@ impl DurableTaskService {
         }
         let mut tx = self.db.pool().begin().await?;
         self.lock_task(&mut tx, context, task_id).await?;
-        let changed = sqlx::query("UPDATE task_runs SET state='waiting',wait_reason=$2,checkpoint=$3,lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE task_id=$1 AND state IN ('queued','running')")
-            .bind(task_id).bind(wait_name(&request.reason)).bind(request.checkpoint).execute(&mut *tx).await?.rows_affected();
+        let changed = sqlx::query(
+            "UPDATE jobs SET state='pending', wait_reason=$2, checkpoint=$3, lease_owner=NULL, lease_expires_at=NULL WHERE task_id=$1 AND kind='execute_task' AND ((state='pending' AND wait_reason IS NULL) OR state='running')",
+        )
+        .bind(task_id)
+        .bind(wait_name(&request.reason))
+        .bind(request.checkpoint)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if changed != 1 {
             return Err(DurableTaskError::Conflict);
         }
-        sqlx::query("UPDATE tasks SET status='waiting_user',updated_at=now() WHERE id=$1")
+        sqlx::query("UPDATE tasks SET status='waiting_user', updated_at=now() WHERE id=$1")
             .bind(task_id)
             .execute(&mut *tx)
             .await?;
@@ -145,11 +165,17 @@ impl DurableTaskService {
     ) -> Result<DurableTask, DurableTaskError> {
         let mut tx = self.db.pool().begin().await?;
         self.lock_task(&mut tx, context, task_id).await?;
-        let changed = sqlx::query("UPDATE task_runs SET state='queued',wait_reason=NULL,updated_at=now() WHERE task_id=$1 AND state='waiting'").bind(task_id).execute(&mut *tx).await?.rows_affected();
+        let changed = sqlx::query(
+            "UPDATE jobs SET state='pending', wait_reason=NULL WHERE task_id=$1 AND kind='execute_task' AND state='pending' AND wait_reason IS NOT NULL",
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if changed != 1 {
             return Err(DurableTaskError::Conflict);
         }
-        sqlx::query("UPDATE tasks SET status='pending',updated_at=now() WHERE id=$1")
+        sqlx::query("UPDATE tasks SET status='pending', updated_at=now() WHERE id=$1")
             .bind(task_id)
             .execute(&mut *tx)
             .await?;
@@ -164,17 +190,34 @@ impl DurableTaskService {
     ) -> Result<DurableTask, DurableTaskError> {
         let mut tx = self.db.pool().begin().await?;
         self.lock_task(&mut tx, context, task_id).await?;
-        let changed = sqlx::query("UPDATE task_runs SET state='cancelled',wait_reason=NULL,lease_owner=NULL,lease_expires_at=NULL,completed_at=now(),updated_at=now() WHERE task_id=$1 AND state IN ('queued','running','waiting')").bind(task_id).execute(&mut *tx).await?.rows_affected();
+        let changed = sqlx::query(
+            "UPDATE jobs SET state='cancelled', wait_reason=NULL, lease_owner=NULL, lease_expires_at=NULL, completed_at=now() WHERE task_id=$1 AND kind='execute_task' AND state IN ('pending', 'running')",
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if changed != 1 {
             return Err(DurableTaskError::Conflict);
         }
-        sqlx::query("UPDATE tasks SET status='cancelled',cancellation_requested_at=now(),completed_at=now(),updated_at=now() WHERE id=$1").bind(task_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE tasks SET status='cancelled', cancellation_requested_at=now(), completed_at=now(), updated_at=now() WHERE id=$1",
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         self.load(context, task_id).await
     }
 
     pub async fn recover_expired(&self, now: DateTime<Utc>) -> Result<u64, DurableTaskError> {
-        Ok(sqlx::query("UPDATE task_runs SET state='queued',lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE state='running' AND lease_expires_at <= $1").bind(now).execute(self.db.pool()).await?.rows_affected())
+        Ok(sqlx::query(
+            "UPDATE jobs SET state='pending', lease_owner=NULL, lease_expires_at=NULL WHERE state='running' AND lease_expires_at <= $1",
+        )
+        .bind(now)
+        .execute(self.db.pool())
+        .await?
+        .rows_affected())
     }
 
     pub async fn claim_next(
@@ -187,8 +230,14 @@ impl DurableTaskService {
             return Err(DurableTaskError::Invalid);
         }
         let mut tx = self.db.pool().begin().await?;
-        let row = sqlx::query("WITH candidate AS (SELECT r.id FROM task_runs r JOIN tasks t ON t.id=r.task_id WHERE (r.state='queued' OR (r.state='running' AND r.lease_expires_at <= $1)) AND t.status <> 'cancelled' ORDER BY r.created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE task_runs r SET state='running',lease_owner=$2,lease_expires_at=$3,started_at=COALESCE(started_at,$1),updated_at=now() FROM candidate WHERE r.id=candidate.id RETURNING r.id,r.task_id,r.checkpoint")
-            .bind(now).bind(worker).bind(now + lease).fetch_optional(&mut *tx).await?;
+        let row = sqlx::query(
+            "WITH candidate AS (SELECT j.id FROM jobs j JOIN tasks t ON t.id=j.task_id WHERE j.kind='execute_task' AND ((j.state='pending' AND j.wait_reason IS NULL) OR (j.state='running' AND j.lease_expires_at <= $1)) AND t.status <> 'cancelled' ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running', lease_owner=$2, lease_expires_at=$3 FROM candidate WHERE j.id=candidate.id RETURNING j.id, j.task_id, j.checkpoint",
+        )
+        .bind(now)
+        .bind(worker)
+        .bind(now + lease)
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some(row) = row else {
             tx.commit().await?;
             return Ok(None);
@@ -196,7 +245,7 @@ impl DurableTaskService {
         let run_id: Uuid = row.get("id");
         let task_id: Uuid = row.get("task_id");
         let checkpoint: Value = row.get("checkpoint");
-        sqlx::query("UPDATE tasks SET status='executing',updated_at=now() WHERE id=$1")
+        sqlx::query("UPDATE tasks SET status='executing', updated_at=now() WHERE id=$1")
             .bind(task_id)
             .execute(&mut *tx)
             .await?;
@@ -208,21 +257,6 @@ impl DurableTaskService {
         Ok(Some(ClaimedRun { task, checkpoint }))
     }
 
-    async fn assert_selected(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        context: &ResolvedUserContext,
-        agent: &str,
-    ) -> Result<(), DurableTaskError> {
-        let agent = text(agent, 255)?;
-        let exists=sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM agent_definitions a JOIN deployment_agent_selections s ON s.agent_definition_id=a.id WHERE a.deployment_id=$1 AND a.external_key=$2 AND a.state='enabled')").bind(context.subject.deployment_id.0).bind(agent).fetch_one(&mut **tx).await?;
-        if exists {
-            Ok(())
-        } else {
-            Err(DurableTaskError::NotFound)
-        }
-    }
-
     async fn lock_task(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -230,10 +264,10 @@ impl DurableTaskService {
         task_id: Uuid,
     ) -> Result<(), DurableTaskError> {
         let exists = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM tasks WHERE id=$1 AND user_context_id=$2 FOR UPDATE",
+            "SELECT id FROM tasks WHERE id=$1 AND user_id=$2 FOR UPDATE",
         )
         .bind(task_id)
-        .bind(context.id.0)
+        .bind(context.user_id.0)
         .fetch_optional(&mut **tx)
         .await?;
         if exists.is_some() {
@@ -247,17 +281,27 @@ impl DurableTaskService {
         &self,
         task_id: Uuid,
     ) -> Result<ResolvedUserContext, DurableTaskError> {
-        let row=sqlx::query("SELECT uc.id,uc.user_id,uc.deployment_id,uc.host_app_id,uc.organization_id,uc.host_user_id FROM tasks t JOIN user_contexts uc ON uc.id=t.user_context_id WHERE t.id=$1").bind(task_id).fetch_optional(self.db.pool()).await?.ok_or(DurableTaskError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT t.user_id, c.id AS context_id, c.deployment_id, c.host_app_id, \
+                    c.organization_id, c.host_user_id \
+             FROM tasks t JOIN user_contexts c \
+               ON c.id = t.user_context_id AND c.user_id = t.user_id \
+             WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(DurableTaskError::NotFound)?;
         Ok(ResolvedUserContext {
-            id: crate::identity::UserContextId(row.get(0)),
-            user_id: crate::identity::UserId(row.get(1)),
-            subject: crate::identity::UserContextSubject {
-                deployment_id: crate::identity::DeploymentId(row.get(2)),
-                host_app_id: crate::identity::HostAppId(row.get(3)),
+            id: UserContextId(row.get("context_id")),
+            user_id: UserId(row.get("user_id")),
+            subject: UserContextSubject {
+                deployment_id: DeploymentId(row.get("deployment_id")),
+                host_app_id: HostAppId(row.get("host_app_id")),
                 organization_id: row
-                    .get::<Option<Uuid>, _>(4)
-                    .map(crate::identity::HostOrganizationId),
-                host_user_id: row.get(5),
+                    .get::<Option<Uuid>, _>("organization_id")
+                    .map(HostOrganizationId),
+                host_user_id: row.get("host_user_id"),
             },
         })
     }
@@ -267,12 +311,22 @@ impl DurableTaskService {
         context: &ResolvedUserContext,
         task_id: Uuid,
     ) -> Result<DurableTask, DurableTaskError> {
-        let row=sqlx::query("SELECT t.title,r.id,r.state,r.wait_reason FROM tasks t JOIN task_runs r ON r.task_id=t.id WHERE t.id=$1 AND t.user_context_id=$2 ORDER BY r.created_at DESC LIMIT 1").bind(task_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(DurableTaskError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT t.title, j.id, j.state, j.wait_reason FROM tasks t JOIN jobs j ON j.task_id=t.id WHERE t.id=$1 AND t.user_id=$2 ORDER BY j.created_at DESC LIMIT 1",
+        )
+        .bind(task_id)
+        .bind(context.user_id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(DurableTaskError::NotFound)?;
         Ok(DurableTask {
             id: task_id,
             title: row.get(0),
             run_id: row.get(1),
-            state: state(&row.get::<String, _>(2))?,
+            state: run_state(
+                &row.get::<String, _>(2),
+                row.get::<Option<String>, _>(3).as_deref(),
+            )?,
             wait_reason: row
                 .get::<Option<String>, _>(3)
                 .map(|v| wait(&v))
@@ -290,14 +344,19 @@ fn text(v: &str, max: usize) -> Result<String, DurableTaskError> {
     }
 }
 
-fn state(v: &str) -> Result<RunState, DurableTaskError> {
-    match v {
-        "queued" => Ok(RunState::Queued),
+fn run_state(job_state: &str, wait_reason: Option<&str>) -> Result<RunState, DurableTaskError> {
+    match job_state {
         "running" => Ok(RunState::Running),
-        "waiting" => Ok(RunState::Waiting),
         "completed" => Ok(RunState::Completed),
         "cancelled" => Ok(RunState::Cancelled),
         "failed" => Ok(RunState::Failed),
+        "pending" => {
+            if wait_reason.is_some() {
+                Ok(RunState::Waiting)
+            } else {
+                Ok(RunState::Queued)
+            }
+        }
         _ => Err(DurableTaskError::Invalid),
     }
 }

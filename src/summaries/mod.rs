@@ -1,3 +1,6 @@
+/**
+* Conversation summary generation and storage.
+*/
 pub mod handler;
 
 use serde::{Deserialize, Serialize};

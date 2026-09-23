@@ -1,3 +1,6 @@
+/**
+* Integration tests for host trust validation and device attestation.
+*/
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -216,6 +219,50 @@ async fn host_trust_rejects_forgery_expiry_replay_wrong_scope_and_revocation() {
             .unwrap();
     assert_eq!(stored_hash.len(), 32);
     assert_ne!(stored_hash, replacement.secret.as_bytes());
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn host_trust_state_survives_a_new_service_instance() {
+    let db = setup().await;
+    let first = vox_core::host_trust::HostTrustService::new(db.clone());
+    let host = first
+        .register_host_app(registration(Uuid::new_v4()))
+        .await
+        .unwrap();
+    let second = vox_core::host_trust::HostTrustService::new(db.clone());
+    let request = context_request();
+    let now = Utc::now();
+    let assertion = host
+        .credential
+        .sign_context_request(&request, now, Uuid::new_v4())
+        .unwrap();
+    let resolved = second
+        .resolve_authenticated_context(&assertion, &request, None, now)
+        .await
+        .unwrap();
+    assert_eq!(resolved.subject.deployment_id, host.deployment_id);
+    assert_eq!(resolved.subject.host_app_id, host.host_app_id);
+    assert!(matches!(
+        first
+            .resolve_authenticated_context(&assertion, &request, None, now)
+            .await,
+        Err(HostTrustError::AssertionReplayed)
+    ));
+    first
+        .revoke_credential(host.credential.credential_id)
+        .await
+        .unwrap();
+    let after_revocation = host
+        .credential
+        .sign_context_request(&request, now, Uuid::new_v4())
+        .unwrap();
+    assert!(matches!(
+        second
+            .resolve_authenticated_context(&after_revocation, &request, None, now)
+            .await,
+        Err(HostTrustError::AuthenticationDenied)
+    ));
 }
 
 #[tokio::test]

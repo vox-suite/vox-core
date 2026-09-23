@@ -1,3 +1,6 @@
+/**
+* Outbound call dispatch and phone channel communication.
+*/
 use crate::{
     bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest},
     db::Db,
@@ -5,7 +8,6 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -68,7 +70,9 @@ impl OutboundCallService {
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone_clean = phone_number.trim();
         if phone_clean.is_empty() {
-            return Err(OutboundError::InvalidInput("Phone number cannot be empty".into()));
+            return Err(OutboundError::InvalidInput(
+                "Phone number cannot be empty".into(),
+            ));
         }
         let reason_clean = reason.trim();
         if reason_clean.is_empty() {
@@ -76,65 +80,63 @@ impl OutboundCallService {
         }
         let opening_clean = opening_instruction.trim();
         if opening_clean.is_empty() {
-            return Err(OutboundError::InvalidInput("Opening instruction cannot be empty".into()));
+            return Err(OutboundError::InvalidInput(
+                "Opening instruction cannot be empty".into(),
+            ));
         }
 
         let call_id = Uuid::new_v4();
         let conversation_id = Uuid::new_v4();
-        let idempotency_key = format!("outbound:{}:{}", owner.user_id.0, call_id);
+        let created_at = Utc::now();
 
-        // Ensure user has this phone identity recorded
         let _ = sqlx::query(
-            "INSERT INTO user_identities (user_id, channel, external_id) \
+            "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
              VALUES ($1, 'phone', $2) \
-             ON CONFLICT DO NOTHING",
+             ON CONFLICT (channel, provider_scope, normalized_external_id) \
+             WHERE revoked_at IS NULL DO NOTHING",
         )
         .bind(owner.user_id.0)
         .bind(phone_clean)
         .execute(self.db.pool())
         .await;
 
-        // Ensure a conversation row exists for tracking the upcoming voice session
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id) \
              VALUES ($1, $2, $3, 'phone', $4) \
-             ON CONFLICT DO NOTHING",
+             ON CONFLICT (user_context_id, channel, external_conversation_id) DO NOTHING",
         )
         .bind(conversation_id)
         .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(conversation_id.to_string())
         .execute(self.db.pool())
-        .await;
+        .await?;
 
-        // Record the outbound call intent
-        let row = sqlx::query(
-            "INSERT INTO outbound_calls ( \
-                 id, user_context_id, user_id, task_id, schedule_id, \
-                 phone_number, reason, opening_instruction, conversation_id, \
-                 state, idempotency_key \
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'initiated', $10) \
-             RETURNING id, user_context_id, user_id, task_id, schedule_id, \
-                       phone_number, reason, opening_instruction, conversation_id, \
-                       provider_call_id, state, created_at",
+        let checkpoint = serde_json::json!({
+            "call_id": call_id,
+            "phone_number": phone_clean,
+            "reason": reason_clean,
+            "opening_instruction": opening_clean,
+            "conversation_id": conversation_id,
+            "schedule_id": schedule_id,
+            "task_id": task_id,
+        });
+        let dedupe_key = format!("outbound:{}:{}", owner.user_id.0, call_id);
+        let job_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO jobs (user_id, kind, payload_reference_id, task_id, schedule_id, \
+                 checkpoint, state, dedupe_key) \
+             VALUES ($1, 'dispatch_action', $2, $3, $4, $5, 'running', $6) \
+             RETURNING id",
         )
-        .bind(call_id)
-        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
+        .bind(conversation_id)
         .bind(task_id)
         .bind(schedule_id)
-        .bind(phone_clean)
-        .bind(reason_clean)
-        .bind(opening_clean)
-        .bind(conversation_id)
-        .bind(&idempotency_key)
+        .bind(&checkpoint)
+        .bind(&dedupe_key)
         .fetch_one(self.db.pool())
         .await?;
 
-        let created_at: DateTime<Utc> = row.get("created_at");
-        let initial_state: String = row.get("state");
-
-        // Dispatch call to bridge if configured
         let provider_call_id = if let Some(bridge) = &self.bridge {
             tracing::info!(
                 call_id = %call_id,
@@ -155,20 +157,28 @@ impl OutboundCallService {
                 })
                 .await?;
 
-            sqlx::query(
-                "UPDATE outbound_calls SET provider_call_id = $1, state = 'in_progress', updated_at = now() \
-                 WHERE id = $2",
-            )
-            .bind(&response.provider_call_id)
-            .bind(call_id)
-            .execute(self.db.pool())
-            .await?;
+            let updated = serde_json::json!({
+                "call_id": call_id,
+                "phone_number": phone_clean,
+                "reason": reason_clean,
+                "opening_instruction": opening_clean,
+                "conversation_id": conversation_id,
+                "schedule_id": schedule_id,
+                "task_id": task_id,
+                "provider_call_id": response.provider_call_id,
+                "state": "in_progress",
+            });
+            sqlx::query("UPDATE jobs SET checkpoint = $1 WHERE id = $2")
+                .bind(&updated)
+                .bind(job_id)
+                .execute(self.db.pool())
+                .await?;
 
             Some(response.provider_call_id)
         } else {
             tracing::warn!(
                 call_id = %call_id,
-                "Bridge client not configured; registered outbound call in database without external telephony dispatch"
+                "Bridge client not configured; registered outbound call without external telephony dispatch"
             );
             None
         };
@@ -176,7 +186,7 @@ impl OutboundCallService {
         let state = if provider_call_id.is_some() {
             "in_progress".to_string()
         } else {
-            initial_state
+            "initiated".to_string()
         };
 
         Ok(OutboundCallRecord {
@@ -204,8 +214,8 @@ impl OutboundCallService {
         task_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone: Option<String> = sqlx::query_scalar(
-            "SELECT external_id FROM user_identities \
-             WHERE user_id = $1 AND channel = 'phone' \
+            "SELECT normalized_external_id FROM channel_identities \
+             WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL \
              ORDER BY created_at DESC LIMIT 1",
         )
         .bind(owner.user_id.0)

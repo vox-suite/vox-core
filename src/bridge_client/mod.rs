@@ -1,3 +1,6 @@
+/**
+* HTTP client for interacting with the Vox voice bridge.
+*/
 use crate::identity::ChannelIdentity;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

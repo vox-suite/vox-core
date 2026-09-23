@@ -1,3 +1,6 @@
+/**
+* Jev client and fast routing engine for intent classification.
+*/
 pub mod client;
 pub mod event_triage;
 pub mod schema_classifier;

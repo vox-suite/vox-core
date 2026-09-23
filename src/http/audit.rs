@@ -1,3 +1,6 @@
+/**
+* HTTP endpoints for querying security audit logs.
+*/
 use super::{AppState, auth};
 use crate::audit::{AuditError, AuditQuery};
 use axum::{
@@ -23,10 +26,10 @@ pub async fn list(
     headers: HeaderMap,
     Query(query): Query<QueryParams>,
 ) -> axum::response::Response {
-    let Some(token) = state.audit_admin_token.as_deref() else {
+    let Some(admin) = state.admin.as_ref() else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    if token.trim().is_empty() || !auth::authorized(&headers, token) {
+    if admin.token().trim().is_empty() || !auth::authorized(&headers, admin.token()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some(audit) = state.audit.as_ref() else {

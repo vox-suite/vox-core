@@ -1,3 +1,6 @@
+/**
+* System prompts, personality preambles, and channel-specific LLM instructions.
+*/
 pub const GENERAL_PREAMBLE: &str = "You are Vox, an intelligent personal AI assistant running across the user's devices (desktop, mobile, voice, and messaging). \
 You assist the user with tasks, projects, data schemas, personal records, device controls, and real-time information. \
 Be direct, helpful, concise, and proactive. Use clean formatting such as Markdown, bullet points, or tables when appropriate. \
@@ -45,6 +48,7 @@ pub fn is_voice_channel(channel: &str) -> bool {
     c.eq_ignore_ascii_case("phone")
         || c.eq_ignore_ascii_case("voice")
         || c.eq_ignore_ascii_case("call")
+        || c.eq_ignore_ascii_case("twilio")
 }
 
 pub fn is_elevenlabs_provider(tts_provider: Option<&str>) -> bool {
@@ -102,74 +106,5 @@ pub fn onboarding_instruction(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prompt_requires_natural_speech_only() {
-        for requirement in [
-            "speaking live",
-            "Never use Markdown",
-            "URLs",
-            "one to three short sentences",
-        ] {
-            assert!(VOICE_CALL_PREAMBLE.contains(requirement));
-            assert!(ELEVENLABS_VOICE_CALL_PREAMBLE.contains(requirement));
-        }
-    }
-
-    #[test]
-    fn general_preamble_recognizes_multi_device_assistant() {
-        assert!(GENERAL_PREAMBLE.contains("desktop, mobile, voice, and messaging"));
-        assert!(!GENERAL_PREAMBLE.contains("phone call"));
-    }
-
-    #[test]
-    fn detects_voice_channels_correctly() {
-        assert!(is_voice_channel("phone"));
-        assert!(is_voice_channel("voice"));
-        assert!(is_voice_channel("call"));
-        assert!(is_voice_channel("Phone"));
-        assert!(!is_voice_channel("whatsapp"));
-        assert!(!is_voice_channel("desktop"));
-        assert!(!is_voice_channel("mobile"));
-        assert!(!is_voice_channel("web"));
-    }
-
-    #[test]
-    fn selects_correct_preamble_by_channel() {
-        assert_eq!(preamble_for_channel("phone"), VOICE_CALL_PREAMBLE);
-        assert_eq!(preamble_for_channel("whatsapp"), WHATSAPP_PREAMBLE);
-        assert_eq!(preamble_for_channel("desktop"), GENERAL_PREAMBLE);
-        assert_eq!(preamble_for_channel("mobile"), GENERAL_PREAMBLE);
-    }
-
-    #[test]
-    fn selects_elevenlabs_preamble_for_voice() {
-        assert_eq!(
-            preamble_for_channel_and_tts("phone", Some("elevenlabs")),
-            ELEVENLABS_VOICE_CALL_PREAMBLE
-        );
-        assert_eq!(
-            preamble_for_channel_and_tts("phone", None),
-            ELEVENLABS_VOICE_CALL_PREAMBLE
-        );
-        assert_eq!(
-            preamble_for_channel_and_tts("phone", Some("sarvam")),
-            VOICE_CALL_PREAMBLE
-        );
-    }
-
-    #[test]
-    fn elevenlabs_preamble_contains_v3_best_practices() {
-        for requirement in [
-            "Audio Tags",
-            "Punctuation and Pauses",
-            "Emphasis and Pronunciation",
-            "ellipses (...)",
-            "International Phonetic Alphabet",
-        ] {
-            assert!(ELEVENLABS_VOICE_CALL_PREAMBLE.contains(requirement));
-        }
-    }
-}
+#[path = "../../tests/unit/agents_prompts.rs"]
+mod tests;

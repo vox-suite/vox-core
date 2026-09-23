@@ -1,10 +1,11 @@
+/**
+* User identity management, channel mapping, and caller lookup.
+*/
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_HOST_USER_ID_BYTES: usize = 512;
-const LEGACY_DEPLOYMENT_KEY: &str = "vox.legacy.deployment";
-const LEGACY_HOST_APP_KEY: &str = "vox.legacy.channel-host";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -104,6 +105,25 @@ impl IdentityService {
     ) -> Result<ResolvedUserContext, IdentityError> {
         let host_user_id = subject.normalized_host_user_id()?;
 
+        let is_internal_scope = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(\
+                SELECT 1 FROM host_apps h \
+                JOIN platform_deployments d ON d.id = h.deployment_id \
+                WHERE h.deployment_id = $1 AND h.id = $2 \
+                  AND (d.external_key, h.external_key) IN (\
+                    ('vox.legacy.deployment', 'vox.legacy.channel-host'), \
+                    ('vox.standalone.deployment', 'vox.standalone.web')\
+                  )\
+            )",
+        )
+        .bind(subject.deployment_id.0)
+        .bind(subject.host_app_id.0)
+        .fetch_one(self.db.pool())
+        .await?;
+        if is_internal_scope {
+            return Err(IdentityError::AccessDenied);
+        }
+
         let scope_exists = if let Some(organization_id) = subject.organization_id {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(\
@@ -159,14 +179,6 @@ impl IdentityService {
         .await?;
 
         let (context_id, user_id) = if let Some(inserted) = inserted_context {
-            sqlx::query(
-                "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-                 VALUES ($1, '{}'::jsonb, 1, now()) \
-                 ON CONFLICT (user_id) DO NOTHING",
-            )
-            .bind(new_user)
-            .execute(&mut *tx)
-            .await?;
             inserted
         } else {
             sqlx::query("DELETE FROM users WHERE id = $1")
@@ -221,61 +233,6 @@ impl IdentityService {
         }
     }
 
-    pub async fn resolve_legacy_owner(
-        &self,
-        identity: &ChannelIdentity,
-    ) -> Result<ResourceOwner, IdentityError> {
-        let user_id = self.resolve(identity).await?;
-        self.owner_for_user(user_id).await
-    }
-
-    pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
-        if let Some(context_id) =
-            sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
-                .bind(user_id.0)
-                .fetch_optional(self.db.pool())
-                .await?
-        {
-            return Ok(ResourceOwner {
-                user_context_id: UserContextId(context_id),
-                user_id,
-            });
-        }
-
-        let mut tx = self.db.pool().begin().await?;
-        let scope = sqlx::query_as::<_, (Uuid, Uuid)>(
-            "SELECT d.id, h.id \
-             FROM platform_deployments d \
-             JOIN host_apps h ON h.deployment_id = d.id \
-             WHERE d.external_key = $1 AND h.external_key = $2",
-        )
-        .bind(LEGACY_DEPLOYMENT_KEY)
-        .bind(LEGACY_HOST_APP_KEY)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(IdentityError::ScopeNotFound)?;
-
-        let context_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO user_contexts (\
-                deployment_id, host_app_id, host_user_id, user_id\
-             ) VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id \
-             RETURNING id",
-        )
-        .bind(scope.0)
-        .bind(scope.1)
-        .bind(user_id.0.to_string())
-        .bind(user_id.0)
-        .fetch_one(&mut *tx)
-        .await?;
-        tx.commit().await?;
-
-        Ok(ResourceOwner {
-            user_context_id: UserContextId(context_id),
-            user_id,
-        })
-    }
-
     async fn find_context(
         &self,
         subject: &UserContextSubject,
@@ -304,13 +261,33 @@ impl IdentityService {
             },
         }))
     }
+    pub async fn resolve_legacy_owner(
+        &self,
+        identity: &ChannelIdentity,
+    ) -> Result<ResourceOwner, IdentityError> {
+        let user_id = self.resolve(identity).await?;
+        self.owner_for_user(user_id).await
+    }
+
+    pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
+        let context_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
+                .bind(user_id.0)
+                .fetch_optional(self.db.pool())
+                .await?
+                .ok_or(IdentityError::AccessDenied)?;
+        Ok(ResourceOwner {
+            user_context_id: UserContextId(context_id),
+            user_id,
+        })
+    }
 
     pub async fn resolve(&self, identity: &ChannelIdentity) -> Result<UserId, sqlx::Error> {
         let channel = identity.channel.trim();
         let external_id = identity.external_id.trim();
 
         if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM user_identities WHERE channel = $1 AND external_id = $2",
+            "SELECT user_id FROM channel_identities WHERE channel = $1 AND normalized_external_id = $2 AND revoked_at IS NULL",
         )
         .bind(channel)
         .bind(external_id)
@@ -331,8 +308,9 @@ impl IdentityService {
                     "whatsapp"
                 };
                 let existing_user = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT user_id FROM user_identities \
-                     WHERE channel = $1 AND regexp_replace(external_id, '[^0-9]', '', 'g') = $2 \
+                    "SELECT user_id FROM channel_identities \
+                     WHERE channel = $1 AND revoked_at IS NULL \
+                       AND regexp_replace(normalized_external_id, '[^0-9]', '', 'g') = $2 \
                      LIMIT 1",
                 )
                 .bind(other_channel)
@@ -342,9 +320,9 @@ impl IdentityService {
 
                 if let Some(user_id) = existing_user {
                     sqlx::query(
-                        "INSERT INTO user_identities (user_id, channel, external_id) \
+                        "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
                          VALUES ($1, $2, $3) \
-                         ON CONFLICT (channel, external_id) DO NOTHING",
+                         ON CONFLICT (channel, provider_scope, normalized_external_id) WHERE revoked_at IS NULL DO NOTHING",
                     )
                     .bind(user_id)
                     .bind(channel)
@@ -363,9 +341,24 @@ impl IdentityService {
                 .fetch_one(&mut *tx)
                 .await?;
 
+        sqlx::query(
+            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+             SELECT d.id, h.id, $1::text, $2::uuid \
+             FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = 'vox.legacy.deployment' \
+               AND h.external_key = 'vox.legacy.channel-host'",
+        )
+        .bind(new_user.to_string())
+        .bind(new_user)
+        .execute(&mut *tx)
+        .await?;
+
         let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO user_identities (user_id, channel, external_id) VALUES ($1, $2, $3) \
-             ON CONFLICT (channel, external_id) DO NOTHING RETURNING user_id",
+            "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (channel, provider_scope, normalized_external_id) WHERE revoked_at IS NULL DO NOTHING \
+             RETURNING user_id",
         )
         .bind(new_user)
         .bind(channel)
@@ -374,14 +367,6 @@ impl IdentityService {
         .await?;
 
         let id = if let Some(id) = inserted {
-            sqlx::query(
-                "INSERT INTO user_profiles (user_id, facts, version, updated_at) \
-                 VALUES ($1, '{}'::jsonb, 1, now()) \
-                 ON CONFLICT (user_id) DO NOTHING",
-            )
-            .bind(new_user)
-            .execute(&mut *tx)
-            .await?;
             id
         } else {
             sqlx::query("DELETE FROM users WHERE id = $1")
@@ -389,7 +374,7 @@ impl IdentityService {
                 .execute(&mut *tx)
                 .await?;
             sqlx::query_scalar::<_, Uuid>(
-                "SELECT user_id FROM user_identities WHERE channel = $1 AND external_id = $2",
+                "SELECT user_id FROM channel_identities WHERE channel = $1 AND normalized_external_id = $2 AND revoked_at IS NULL",
             )
             .bind(channel)
             .bind(external_id)

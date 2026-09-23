@@ -71,8 +71,11 @@ impl CapabilityGrantService {
         if !declared_for_agent {
             return Err(CapabilityGrantError::Unavailable);
         }
-        let connection_is_authorized = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM external_connections x \
+        // Lock the connection and integration while creating the grant. A
+        // concurrent declaration upgrade must either wait and revoke this
+        // grant, or finish first so this check sees the disabled version.
+        let connection_is_authorized = sqlx::query_scalar::<_, Uuid>(
+            "SELECT x.id FROM external_connections x \
              JOIN integration_definitions i ON i.id = x.integration_id \
              JOIN integration_capability_declarations c ON c.integration_id = i.id \
              WHERE x.id = $1 AND x.user_context_id = $2 \
@@ -80,14 +83,16 @@ impl CapabilityGrantService {
              AND (x.expires_at IS NULL OR x.expires_at > now()) \
              AND i.deployment_id = $3 AND i.state = 'enabled' \
              AND concat(i.external_key, '.', c.external_key) = $4 \
-             AND $4 = ANY(x.authorized_capabilities))",
+             AND $4 = ANY(x.authorized_capabilities) \
+             FOR SHARE OF x,i",
         )
         .bind(request.connection_id)
         .bind(context.id.0)
         .bind(context.subject.deployment_id.0)
         .bind(&capability_key)
-        .fetch_one(&mut *tx)
-        .await?;
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
         if !connection_is_authorized {
             return Err(CapabilityGrantError::Unavailable);
         }

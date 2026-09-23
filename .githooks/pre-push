@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# this file code contains git pre-push hook running lint, test, and build
+set -euo pipefail
+
+echo "Running pre-push checks..."
+
+echo "1. Checking formatting and clippy lints..."
+cargo clippy --locked --all-targets --all-features -- -D warnings
+
+echo "2. Running test suite..."
+cargo test --locked
+
+echo "3. Building release binary..."
+cargo build --release --locked
+
+echo "Pre-push verification passed successfully."

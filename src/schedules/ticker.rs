@@ -1,3 +1,6 @@
+/**
+* Background ticker polling and triggering due schedules.
+*/
 use super::service::compute_next_recurring;
 use crate::db::Db;
 use chrono::{DateTime, Utc};
@@ -26,8 +29,8 @@ impl ScheduleTicker {
         let mut tx = self.db.pool().begin().await?;
 
         let due_schedules = sqlx::query(
-            "SELECT id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at \
-             FROM scheduled_tasks \
+            "SELECT id, user_id, instruction, kind, recurrence_expression, timezone, next_run_at \
+             FROM schedules \
              WHERE state = 'active' AND next_run_at <= $1 \
              FOR UPDATE SKIP LOCKED",
         )
@@ -39,24 +42,30 @@ impl ScheduleTicker {
 
         for row in due_schedules {
             let id: Uuid = row.get("id");
-            let schedule_kind: String = row.get("schedule_kind");
+            let user_id: Uuid = row.get("user_id");
+            let schedule_kind: String = row.get("kind");
             let occurrence_at: DateTime<Utc> = row.get("next_run_at");
             let recurrence_expr: Option<String> = row.get("recurrence_expression");
             let timezone_name: String = row.get("timezone");
 
             sqlx::query(
-                "INSERT INTO jobs (kind, payload_reference_id, schedule_id, occurrence_at) \
-                 VALUES ('run_schedule', $1, $1, $2) \
-                 ON CONFLICT (schedule_id, occurrence_at) DO NOTHING",
+                "INSERT INTO jobs (user_id, kind, payload_reference_id, schedule_id, occurrence_at, dedupe_key) \
+                 SELECT $1, 'run_schedule', $2, $2, $3, $4 \
+                 WHERE NOT EXISTS (\
+                     SELECT 1 FROM jobs \
+                     WHERE schedule_id = $2 AND occurrence_at = $3\
+                 )",
             )
+            .bind(user_id)
             .bind(id)
             .bind(occurrence_at)
+            .bind(format!("run_schedule:{id}:{occurrence_at}"))
             .execute(&mut *tx)
             .await?;
 
             if schedule_kind == "once" {
                 sqlx::query(
-                    "UPDATE scheduled_tasks SET state = 'completed', next_run_at = NULL, updated_at = now() \
+                    "UPDATE schedules SET state = 'completed', next_run_at = NULL, updated_at = now() \
                      WHERE id = $1",
                 )
                 .bind(id)
@@ -72,7 +81,7 @@ impl ScheduleTicker {
                     return Err(sqlx::Error::Decode("missing recurrence expression".into()).into());
                 };
                 sqlx::query(
-                    "UPDATE scheduled_tasks SET next_run_at = $1, updated_at = now() WHERE id = $2",
+                    "UPDATE schedules SET next_run_at = $1, updated_at = now() WHERE id = $2",
                 )
                 .bind(next)
                 .bind(id)
@@ -82,7 +91,7 @@ impl ScheduleTicker {
         }
 
         let due_tasks = sqlx::query(
-            "SELECT id FROM tasks \
+            "SELECT id, user_id FROM tasks \
              WHERE status = 'pending' AND execution_type = 'autonomous' AND due_at IS NOT NULL AND due_at <= $1 \
              FOR UPDATE SKIP LOCKED",
         )
@@ -92,11 +101,13 @@ impl ScheduleTicker {
 
         for row in due_tasks {
             let task_id: Uuid = row.get("id");
+            let user_id: Uuid = row.get("user_id");
             sqlx::query(
-                "INSERT INTO jobs (kind, payload_reference_id) \
-                 VALUES ('execute_task', $1) \
+                "INSERT INTO jobs (user_id, kind, payload_reference_id, task_id) \
+                 VALUES ($1, 'execute_task', $2, $2) \
                  ON CONFLICT DO NOTHING",
             )
+            .bind(user_id)
             .bind(task_id)
             .execute(&mut *tx)
             .await?;

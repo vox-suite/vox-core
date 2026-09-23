@@ -1,3 +1,6 @@
+/**
+* Integration tests for transactional background job claiming.
+*/
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 use vox_core::{

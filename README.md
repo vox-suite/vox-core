@@ -5,7 +5,7 @@ Vox Core owns conversations, agents, durable events, schedules, summaries, user 
 - `vox-core-api` handles authenticated Bridge and client requests.
 - `vox-core-worker` leases durable jobs, advances schedules, summarizes completed conversations, and dispatches actions.
 
-PostgreSQL is authoritative. Set `DATABASE_URL` to the Supabase PostgreSQL connection string. Redis stores only rebuildable user-context projections and runs with AOF persistence in Compose. Kafka is not required for this deployment because PostgreSQL provides the durable job queue and leases.
+PostgreSQL is authoritative. Set `DATABASE_URL` to the Supabase PostgreSQL connection string. Redis stores only minimal per-user records (`vox:user:{id}` JSON with name + channels, plus `vox:channel:{channel}:{external_id}` indexes) and runs with AOF persistence in Compose. Kafka is not required for this deployment because PostgreSQL provides the durable job queue and leases.
 
 ## Run the stack
 
@@ -19,25 +19,16 @@ Only Bridge port `3000` is published. Core API, Core Worker, and Redis remain on
 
 ## Phone greeting cache
 
-The streaming inbound opening reads the caller's name directly from the Redis
-`vox:greeting-names` hash, keyed by the JSON pair `[channel, external_id]`.
-It has a 100 ms cache deadline and uses a generic new-caller greeting on a miss,
-blank name, cache error, or timeout. PostgreSQL and the LLM are not consulted
-before returning this greeting. The normal voice verification path still runs
-on subsequent caller speech.
+The streaming inbound opening resolves the caller through Redis
+`vox:channel:{channel}:{external_id}` → `vox:user:{user_id}` (minimal JSON with
+`name` and `channels`). It has a 100 ms cache deadline and uses a generic
+new-caller greeting on a miss, blank name, cache error, or timeout. PostgreSQL
+and the LLM are not consulted before returning this greeting. The full LLM
+context projection is always built from PostgreSQL and is not stored in Redis.
 
-The worker replaces the complete name snapshot from PostgreSQL on startup and
-every 24 hours. It removes deleted entries atomically, expires the snapshot after
-48 hours, and retries failed syncs after one minute. Name changes become visible
-at the next sync. Deploy/restart both Core API and Core Worker for this change.
-
-Identity/conversation setup and atomic persistence of the opening message pair
-run in the API background, independently of the greeting stream. Follow-up turns
-and call completion wait for pending setup in the same API process. This matches
-the current single-API deployment; multiple replicas require call affinity or a
-shared initialization barrier. A process crash during setup can lose that opening;
-initialization failures are logged and the remaining normal request path can retry
-identity/conversation resolution.
+API startup (and the optional worker sync loop) replaces the complete minimal
+user snapshot from PostgreSQL. Name and channel changes become visible after
+the next write/sync. Deploy/restart Core API for this change.
 
 `CORE_CACHED_GREETING_METRICS` measures the greeting path;
 `CORE_OPENING_INITIALIZED` measures the background database work.
@@ -95,7 +86,7 @@ Database integration tests require an isolated PostgreSQL database and `TEST_DAT
 
 ## Redis administration
 
-`GET`, `PUT` and `DELETE /v1/admin/redis` are enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_CORE_SERVICE_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
+`GET`, `PUT` and `DELETE /v1/admin/redis` are enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_AUTH_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
 
 Query parameters:
 

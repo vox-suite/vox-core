@@ -1,3 +1,6 @@
+/**
+* Application configuration and environment variable loading for Vox Core.
+*/
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind_address: String,
@@ -13,7 +16,6 @@ pub struct Config {
     pub jev_base_url: String,
     pub jev_enabled: bool,
     pub tts_provider: String,
-    pub audit_admin_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -42,7 +44,7 @@ impl Config {
             bind_address: "0.0.0.0:3001".to_string(),
             database_url: non_empty(&get, "DATABASE_URL")?,
             redis_url: get("REDIS_URL").filter(|value| !value.trim().is_empty()),
-            service_token: non_empty(&get, "VOX_CORE_SERVICE_TOKEN")?,
+            service_token: non_empty(&get, "VOX_AUTH_TOKEN")?,
             gemini_api_key: non_empty(&get, "GEMINI_API_KEY")?,
             gemini_model: "gemini-3.5-flash-lite".to_string(),
             exa_api_key: non_empty(&get, "EXA_API_KEY")?,
@@ -53,8 +55,6 @@ impl Config {
             jev_base_url,
             jev_enabled,
             tts_provider,
-            audit_admin_token: get("VOX_AUDIT_ADMIN_TOKEN")
-                .filter(|value| !value.trim().is_empty()),
         })
     }
 }

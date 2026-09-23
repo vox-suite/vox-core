@@ -1,3 +1,6 @@
+/**
+* Agent tools for managing user projects, notes, and tasks.
+*/
 use crate::{db::Db, identity::UserId};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -106,8 +109,8 @@ impl Tool for CreateProject {
         let desc = args.description.as_deref().unwrap_or("").trim();
 
         let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO projects (user_id, name, description, status) \
-             VALUES ($1, $2, $3, 'active') \
+            "INSERT INTO collections (user_id, name, description, status, kind) \
+             VALUES ($1, $2, $3, 'active', 'project') \
              RETURNING id",
         )
         .bind(self.user_id.0)
@@ -184,9 +187,9 @@ impl Tool for ListProjects {
             sqlx::query(
                 "SELECT p.id, p.name, p.description, p.status, p.created_at, \
                  COUNT(t.id) as task_count \
-                 FROM projects p \
-                 LEFT JOIN tasks t ON t.project_id = p.id \
-                 WHERE p.user_id = $1 \
+                 FROM collections p \
+                 LEFT JOIN tasks t ON t.collection_id = p.id \
+                 WHERE p.user_id = $1 AND p.kind = 'project' \
                  GROUP BY p.id \
                  ORDER BY p.updated_at DESC",
             )
@@ -197,9 +200,9 @@ impl Tool for ListProjects {
             sqlx::query(
                 "SELECT p.id, p.name, p.description, p.status, p.created_at, \
                  COUNT(t.id) as task_count \
-                 FROM projects p \
-                 LEFT JOIN tasks t ON t.project_id = p.id \
-                 WHERE p.user_id = $1 AND p.status = $2 \
+                 FROM collections p \
+                 LEFT JOIN tasks t ON t.collection_id = p.id \
+                 WHERE p.user_id = $1 AND p.kind = 'project' AND p.status = $2 \
                  GROUP BY p.id \
                  ORDER BY p.updated_at DESC",
             )
@@ -294,7 +297,7 @@ impl Tool for GetProject {
                 .map_err(|_| ProjectToolError::InvalidInput("Invalid UUID format".into()))?;
             sqlx::query(
                 "SELECT id, name, description, status, created_at, updated_at \
-                 FROM projects WHERE id = $1 AND user_id = $2",
+                 FROM collections WHERE id = $1 AND user_id = $2 AND kind = 'project'",
             )
             .bind(pid)
             .bind(self.user_id.0)
@@ -303,7 +306,7 @@ impl Tool for GetProject {
         } else if let Some(name) = args.name {
             sqlx::query(
                 "SELECT id, name, description, status, created_at, updated_at \
-                 FROM projects WHERE user_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1",
+                 FROM collections WHERE user_id = $1 AND kind = 'project' AND LOWER(name) = LOWER($2) LIMIT 1",
             )
             .bind(self.user_id.0)
             .bind(name.trim())
@@ -327,7 +330,7 @@ impl Tool for GetProject {
 
         let task_rows = sqlx::query(
             "SELECT id, title, status, execution_type, due_at \
-             FROM tasks WHERE project_id = $1 ORDER BY created_at ASC",
+             FROM tasks WHERE collection_id = $1 ORDER BY created_at ASC",
         )
         .bind(project_id)
         .fetch_all(db.pool())
@@ -433,12 +436,12 @@ impl Tool for UpdateProject {
             .map_err(|_| ProjectToolError::InvalidInput("Invalid project UUID".into()))?;
 
         let res = sqlx::query(
-            "UPDATE projects SET \
+            "UPDATE collections SET \
              name = COALESCE($1, name), \
              description = COALESCE($2, description), \
              status = COALESCE($3, status), \
              updated_at = now() \
-             WHERE id = $4 AND user_id = $5",
+             WHERE id = $4 AND user_id = $5 AND kind = 'project'",
         )
         .bind(args.name.as_deref().map(str::trim))
         .bind(args.description.as_deref().map(str::trim))

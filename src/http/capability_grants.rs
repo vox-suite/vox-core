@@ -1,3 +1,6 @@
+/**
+* HTTP endpoints for managing integration capability grants.
+*/
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     capability_grants::{CapabilityGrantError, CreateGrantRequest},

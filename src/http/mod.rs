@@ -1,3 +1,6 @@
+/**
+* HTTP server endpoints, routing, and middleware assembly.
+*/
 pub mod admin;
 pub mod agent_registry;
 pub mod approvals;
@@ -39,7 +42,6 @@ pub struct AppState {
     pub(crate) rate_limiter: rate_limit::RateLimiter,
     pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
     pub(crate) audit: Option<Arc<crate::audit::AuditService>>,
-    pub(crate) audit_admin_token: Option<Arc<str>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
     pub(crate) db: Option<Db>,
@@ -65,7 +67,6 @@ impl AppState {
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: None,
-            audit_admin_token: None,
             agent_registry: None,
             approvals: None,
             db: None,
@@ -119,7 +120,6 @@ impl AppState {
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
-            audit_admin_token: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
@@ -169,20 +169,12 @@ impl AppState {
         &self.rate_limiter
     }
 
-    pub fn with_audit_admin_token(mut self, token: String) -> Self {
-        if !token.trim().is_empty() {
-            self.audit_admin_token = Some(Arc::from(token));
-        }
-        self
-    }
-
     pub fn with_host_trust(db: Db, service_token: String) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
             admin: None,
             audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
-            audit_admin_token: None,
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
             ))),
@@ -218,6 +210,14 @@ impl AppState {
         }
     }
 
+    pub fn take_host_trust(&mut self) -> Option<HostTrustService> {
+        self.host_trust.take().map(|trust| HostTrustService::clone(&trust))
+    }
+
+    pub fn set_host_trust(&mut self, trust: HostTrustService) {
+        self.host_trust = Some(Arc::new(trust));
+    }
+
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
     }
@@ -230,9 +230,6 @@ impl AppState {
         self
     }
 
-    /// Enables webhook subscriptions only when the deployment provides durable
-    /// secret custody. The default status service fails closed instead of
-    /// persisting delivery secrets in the database.
     pub fn with_status_secret_store(
         mut self,
         secrets: Arc<dyn crate::status::WebhookSecretStore>,
@@ -294,6 +291,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/conversations/complete", post(conversations::complete))
         .route("/v1/connections/authorize", post(connections::authorize))
+        .route("/v1/connections/list", post(connections::list))
+        .route("/v1/connections/{id}/disconnect", post(connections::disconnect))
         .route(
             "/v1/capability-grants",
             post(capability_grants::create).delete(capability_grants::revoke),
@@ -334,6 +333,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/deployments/{external_key}/capabilities",
             get(integration_registry::discover),
+        )
+        .route(
+            "/v1/deployments/{external_key}/integrations/{integration_key}/versions",
+            get(integration_registry::versions),
+        )
+        .route(
+            "/v1/capabilities/discover",
+            post(integration_registry::discover_for_context),
         )
         .route(
             "/v1/deployments/{external_key}/agents",

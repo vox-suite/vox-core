@@ -1,0 +1,787 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Vox Core API",
+    "version": "1.0.0",
+    "description": "Unified API for Vox Core: consumer identity, conversations, tasks, collections, records, schemas, jobs, events, and provider connections."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local development server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "SessionAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "ServiceToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Vox-Service-Token"
+      },
+      "AdminToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Vox-Admin-Token"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Collection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "project",
+              "trip",
+              "course",
+              "area"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Record": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "schema_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fact",
+              "goal",
+              "insight"
+            ]
+          },
+          "domain": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "Process is ready to serve traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/exchange": {
+      "post": {
+        "summary": "Exchange provider token for Vox consumer session",
+        "responses": {
+          "200": {
+            "description": "Session created"
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "summary": "Get authenticated user profile and identities",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User details"
+          }
+        }
+      }
+    },
+    "/v1/tasks": {
+      "get": {
+        "summary": "List user tasks",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks list"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create user task",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Task created"
+          }
+        }
+      }
+    },
+    "/v1/collections": {
+      "get": {
+        "summary": "List collections",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collections list"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Collection created"
+          }
+        }
+      }
+    },
+    "/v1/records": {
+      "get": {
+        "summary": "List records",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records list"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create record",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Record created"
+          }
+        }
+      }
+    },
+    "/v1/schemas": {
+      "get": {
+        "summary": "List data schemas",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schemas list"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create new schema version",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Schema created"
+          }
+        }
+      }
+    },
+    "/v1/conversations/respond": {
+      "post": {
+        "summary": "Turn response for conversation",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent turn response"
+          }
+        }
+      }
+    },
+    "/v1/conversations/respond/stream": {
+      "post": {
+        "summary": "Streaming turn response for conversation",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Text chunk stream"
+          }
+        }
+      }
+    },
+    "/v1/conversations/complete": {
+      "post": {
+        "summary": "Complete conversation turn sequence",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completion recorded"
+          }
+        }
+      }
+    },
+    "/v1/conversations/speculate": {
+      "post": {
+        "summary": "Speculative opening retrieval",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Speculative response"
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "post": {
+        "summary": "Ingest inbound observation event",
+        "security": [
+          {
+            "ServiceToken": []
+          },
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Event accepted"
+          }
+        }
+      }
+    },
+    "/v1/schedules": {
+      "post": {
+        "summary": "Create schedule",
+        "security": [
+          {
+            "ServiceToken": []
+          },
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Schedule created"
+          }
+        }
+      }
+    },
+    "/v1/action-proposals": {
+      "post": {
+        "summary": "Propose side effect action",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Proposal created"
+          }
+        }
+      }
+    },
+    "/v1/action-proposals/{id}/approve": {
+      "post": {
+        "summary": "Approve action proposal",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval registered"
+          }
+        }
+      }
+    },
+    "/v1/devices": {
+      "post": {
+        "summary": "Enroll client device",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Device enrolled"
+          }
+        }
+      }
+    },
+    "/v1/admin/redis": {
+      "get": {
+        "summary": "Admin inspect Redis keys",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Admin delete Redis key",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Admin update Redis key",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/audit-events": {
+      "get": {
+        "summary": "Admin view audit logs",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ]
+      }
+    },
+    "/v1/tasks/{id}": {
+      "patch": {
+        "summary": "Update task with optimistic concurrency",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_version"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "expected_version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Task updated successfully"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict"
+          }
+        }
+      }
+    },
+    "/v1/records/{id}": {
+      "patch": {
+        "summary": "Update record with optimistic concurrency",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_version"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object"
+                  },
+                  "expected_version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Record updated successfully"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Record not found"
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict"
+          },
+          "422": {
+            "description": "Schema validation failed"
+          }
+        }
+      }
+    },
+    "/v1/events/batch": {
+      "post": {
+        "summary": "Ingest a batch of inbound events",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "events"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "event_type",
+                        "payload"
+                      ],
+                      "properties": {
+                        "event_type": {
+                          "type": "string"
+                        },
+                        "payload": {
+                          "type": "object"
+                        },
+                        "idempotency_key": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch of events ingested successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/devices/{id}/jobs/claim": {
+      "post": {
+        "summary": "Claim pending jobs for a specific device",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "max_jobs": {
+                    "type": "integer",
+                    "default": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of claimed jobs"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - device mismatch"
+          }
+        }
+      }
+    },
+    "/v1/device-jobs/{id}/result": {
+      "post": {
+        "summary": "Submit result of an executed device job",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  },
+                  "result_payload": {
+                    "type": "object"
+                  },
+                  "error_message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Job result acknowledged"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    }
+  }
+}

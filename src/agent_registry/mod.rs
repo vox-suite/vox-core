@@ -1,3 +1,6 @@
+/**
+* Agent registry service managing agent declarations and capability manifests.
+*/
 use crate::{db::Db, identity::DeploymentId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -96,7 +99,7 @@ impl AgentRegistry {
             normalize(&request.purpose, 2048).ok_or(AgentRegistryError::InvalidDefinition)?;
         let categories = normalize_categories(request.requested_capability_categories)?;
         let deployment_id = deployment_id(&self.db, &deployment_key).await?;
-        let id = sqlx::query_scalar::<_, Uuid>(
+        let id = match sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO agent_definitions (deployment_id, external_key, purpose, requested_capability_categories) \
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (deployment_id, external_key) DO UPDATE \
@@ -109,7 +112,12 @@ impl AgentRegistry {
         .bind(&purpose)
         .bind(&categories)
         .fetch_one(self.db.pool())
-        .await?;
+        .await
+        {
+            Ok(id) => id,
+            Err(error) if missing_table(&error) => return Err(AgentRegistryError::NotFound),
+            Err(error) => return Err(error.into()),
+        };
         Ok(AgentDefinition {
             id,
             deployment_id: DeploymentId(deployment_id),
@@ -176,8 +184,11 @@ impl AgentRegistry {
     ) -> Result<Vec<SelectedAgent>, AgentRegistryError> {
         let key =
             normalize(deployment_external_key, 255).ok_or(AgentRegistryError::InvalidDefinition)?;
-        let deployment_id = deployment_id(&self.db, &key).await?;
-        let rows = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Uuid, i32, String, String)>(
+        let deployment_id = match deployment_id(&self.db, &key).await {
+            Err(AgentRegistryError::NotFound) => return Ok(vec![]),
+            other => other?,
+        };
+        let rows = match sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Uuid, i32, String, String)>(
             "SELECT d.id, d.external_key, d.purpose, d.requested_capability_categories, c.id, c.version, c.model_adapter, c.model \
              FROM deployment_agent_selections s \
              JOIN agent_definitions d ON d.id = s.agent_definition_id \
@@ -186,7 +197,12 @@ impl AgentRegistry {
         )
         .bind(deployment_id)
         .fetch_all(self.db.pool())
-        .await?;
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) if missing_table(&error) => return Ok(vec![]),
+            Err(error) => return Err(error.into()),
+        };
         Ok(rows
             .into_iter()
             .map(
@@ -227,7 +243,7 @@ impl AgentRegistry {
         let external_key = normalize(&request.agent_external_key, 255)
             .ok_or(AgentRegistryError::InvalidDefinition)?;
         let deployment_id = deployment_id(&self.db, &deployment_key).await?;
-        let changed = sqlx::query(
+        let changed = match sqlx::query(
             "UPDATE agent_definitions SET state = $3, updated_at = now() \
              WHERE deployment_id = $1 AND external_key = $2",
         )
@@ -239,8 +255,12 @@ impl AgentRegistry {
             "disabled"
         })
         .execute(self.db.pool())
-        .await?
-        .rows_affected();
+        .await
+        {
+            Ok(result) => result.rows_affected(),
+            Err(error) if missing_table(&error) => return Err(AgentRegistryError::NotFound),
+            Err(error) => return Err(error.into()),
+        };
         if changed == 0 {
             Err(AgentRegistryError::NotFound)
         } else {
@@ -249,12 +269,24 @@ impl AgentRegistry {
     }
 }
 
+fn missing_table(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("42P01")
+    )
+}
+
 async fn deployment_id(db: &Db, key: &str) -> Result<Uuid, AgentRegistryError> {
-    sqlx::query_scalar("SELECT id FROM platform_deployments WHERE external_key = $1")
+    match sqlx::query_scalar("SELECT id FROM platform_deployments WHERE external_key = $1")
         .bind(key)
         .fetch_optional(db.pool())
-        .await?
-        .ok_or(AgentRegistryError::NotFound)
+        .await
+    {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(AgentRegistryError::NotFound),
+        Err(error) if missing_table(&error) => Err(AgentRegistryError::NotFound),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn deployment_id_tx(
