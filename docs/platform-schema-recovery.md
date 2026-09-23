@@ -30,6 +30,6 @@ Verification on a fresh isolated PostgreSQL database:
 - `cargo test --locked --test agent_registry -- --ignored --test-threads=1`
   still fails because host registration does not persist its deployment.
 
-These failures keep the E04/E05/E06/E08/E09/E13/E16 producer contracts open
-for revalidation. A compiling binary is not evidence that these contracts
+These failures require revalidation of the E04/E05/E06/E08/E09/E13/E16
+producer contracts. A compiling binary is not evidence that these contracts
 work with the schema it installs.
