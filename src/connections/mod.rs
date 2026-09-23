@@ -240,6 +240,42 @@ impl ConnectionService {
         .fetch_one(&mut *tx)
         .await?;
 
+        let acct_hash = hash(&request.external_account_reference);
+        let acct_hash_hex = hex::encode(&acct_hash);
+        let secret_ref = format!("vault-{}", id);
+        sqlx::query(
+            "DELETE FROM connections WHERE user_id=$1 AND provider_key=$2 AND external_account_hash=$3 AND id<>$4",
+        )
+        .bind(context.user_id.0)
+        .bind(&integration_key)
+        .bind(&acct_hash_hex)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO connections \
+             (id, user_id, provider_key, external_account_hash, secret_reference, allowed_capabilities, authorization_state, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'authorized', $7) \
+             ON CONFLICT (id) DO UPDATE SET \
+                provider_key=EXCLUDED.provider_key, \
+                external_account_hash=EXCLUDED.external_account_hash, \
+                secret_reference=EXCLUDED.secret_reference, \
+                allowed_capabilities=EXCLUDED.allowed_capabilities, \
+                authorization_state='authorized', \
+                expires_at=EXCLUDED.expires_at, \
+                updated_at=now()",
+        )
+        .bind(id)
+        .bind(context.user_id.0)
+        .bind(&integration_key)
+        .bind(&acct_hash_hex)
+        .bind(&secret_ref)
+        .bind(&requested_capabilities)
+        .bind(expires_at_conn)
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
 
         Ok(Connection {
@@ -271,6 +307,9 @@ impl ConnectionService {
         .await?
         .ok_or(ConnectionError::IntegrationUnavailable)?;
 
+        let mut tx = self.db.pool().begin().await?;
+        let acct_hash = hash(&request.external_account_reference);
+
         let id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO external_connections \
              (user_context_id, integration_id, external_account_hash, account_display_id, credential_custody, authorization_state, authorized_capabilities, expires_at, failure_code, revoked_at) \
@@ -288,15 +327,56 @@ impl ConnectionService {
         )
         .bind(context.id.0)
         .bind(integration.0)
-        .bind(hash(&request.external_account_reference))
+        .bind(&acct_hash)
         .bind(&request.account_display_id)
         .bind(custody(&request.credential_custody))
         .bind(state(&request.authorization_state))
         .bind(&request.authorized_capabilities)
         .bind(request.expires_at)
         .bind(&request.failure_code)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await?;
+
+        let acct_hash_hex = hex::encode(&acct_hash);
+        let secret_ref = format!("vault-{}", id);
+        let legacy_st = legacy_state(&request.authorization_state);
+
+        sqlx::query(
+            "DELETE FROM connections WHERE user_id=$1 AND provider_key=$2 AND external_account_hash=$3 AND id<>$4",
+        )
+        .bind(context.user_id.0)
+        .bind(&integration.1)
+        .bind(&acct_hash_hex)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO connections \
+             (id, user_id, provider_key, external_account_hash, secret_reference, allowed_capabilities, authorization_state, expires_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $7='revoked' THEN now() ELSE NULL END) \
+             ON CONFLICT (id) DO UPDATE SET \
+                provider_key=EXCLUDED.provider_key, \
+                external_account_hash=EXCLUDED.external_account_hash, \
+                secret_reference=EXCLUDED.secret_reference, \
+                allowed_capabilities=EXCLUDED.allowed_capabilities, \
+                authorization_state=EXCLUDED.authorization_state, \
+                expires_at=EXCLUDED.expires_at, \
+                revoked_at=EXCLUDED.revoked_at, \
+                updated_at=now()",
+        )
+        .bind(id)
+        .bind(context.user_id.0)
+        .bind(&integration.1)
+        .bind(&acct_hash_hex)
+        .bind(&secret_ref)
+        .bind(&request.authorized_capabilities)
+        .bind(legacy_st)
+        .bind(request.expires_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
 
         Ok(Connection {
             id,
@@ -381,6 +461,16 @@ impl ConnectionService {
         )
         .bind(connection_id)
         .bind(context.id.0)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE connections SET authorization_state='revoked', \
+             allowed_capabilities='{}'::text[], expires_at=NULL, failure_code=NULL, updated_at=now() \
+             WHERE id=$1 AND user_id=$2",
+        )
+        .bind(connection_id)
+        .bind(context.user_id.0)
         .execute(&mut *tx)
         .await?;
 
@@ -479,5 +569,14 @@ fn state(v: &AuthorizationState) -> &'static str {
         AuthorizationState::Revoked => "revoked",
         AuthorizationState::Cancelled => "cancelled",
         AuthorizationState::Failed => "failed",
+    }
+}
+
+fn legacy_state(v: &AuthorizationState) -> &'static str {
+    match v {
+        AuthorizationState::Pending => "pending",
+        AuthorizationState::Authorized => "authorized",
+        AuthorizationState::Expired => "expired",
+        AuthorizationState::Revoked | AuthorizationState::Cancelled | AuthorizationState::Failed => "revoked",
     }
 }
