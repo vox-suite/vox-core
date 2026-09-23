@@ -11,7 +11,7 @@ use uuid::Uuid;
 use vox_core::{
     connections::{
         AuthorizationState, AuthorizeConnectionRequest, ConnectionError, ConnectionService,
-        CredentialCustody,
+        CredentialCustody, InitiateConnectionRequest, VerifyConnectionCallbackRequest,
     },
     db::Db,
     host_trust::{HostContextRequest, HostTrustService, RegisterHostAppRequest},
@@ -56,6 +56,7 @@ async fn host_cannot_claim_provider_authorization_or_platform_credential_custody
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
+
 async fn setup() -> Db {
     let url = std::env::var("TEST_DATABASE_URL").unwrap();
     let db = Db::connect(&url).await.unwrap();
@@ -124,6 +125,7 @@ fn request(state: AuthorizationState) -> AuthorizeConnectionRequest {
     AuthorizeConnectionRequest {
         integration_external_key: "calendar".into(),
         external_account_reference: "account@example.test".into(),
+        account_display_id: Some("account@example.test".into()),
         credential_custody: CredentialCustody::ExternalOperator,
         authorization_state: state,
         authorized_capabilities: vec!["read".into()],
@@ -147,6 +149,7 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
         created.credential_custody,
         CredentialCustody::ExternalOperator
     );
+    assert_eq!(created.account_display_id, Some("account@example.test".into()));
     let mut expired = request(AuthorizationState::Expired);
     expired.authorized_capabilities = vec![];
     let updated = service.record(&context, expired).await.unwrap();
@@ -181,4 +184,110 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
             .authorization_state,
         AuthorizationState::Revoked
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn provider_verified_authorization_flow_binds_context_and_displays_account_identity() {
+    let db = setup().await;
+    let (deployment, context) = create_context(&db).await;
+    enable(&db, &deployment).await;
+    let service = ConnectionService::new(db.clone());
+
+    // 1. Initiate authorization session
+    let init_resp = service
+        .initiate(
+            &context,
+            InitiateConnectionRequest {
+                integration_external_key: "calendar".into(),
+                credential_custody: CredentialCustody::ExternalOperator,
+                requested_capabilities: vec!["read".into()],
+                redirect_uri: Some("https://app.voxagent.in/auth/callback".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(init_resp.integration_external_key, "calendar");
+    assert!(!init_resp.state_token.is_empty());
+    assert!(init_resp.authorization_url.contains(&init_resp.state_token));
+
+    // 2. Cross-context callback fails closed with NotFound
+    let (_, other_context) = create_context(&db).await;
+    let wrong_ctx_result = service
+        .verify_callback(
+            &other_context,
+            VerifyConnectionCallbackRequest {
+                session_id: init_resp.session_id,
+                state_token: init_resp.state_token.clone(),
+                provider_code: "provider-auth-code-123".into(),
+                external_account_reference: "alice-primary-id".into(),
+                account_display_id: "alice@example.com".into(),
+            },
+        )
+        .await;
+    assert!(matches!(wrong_ctx_result, Err(ConnectionError::NotFound)));
+
+    // 3. Callback with wrong state token fails closed
+    let wrong_state_result = service
+        .verify_callback(
+            &context,
+            VerifyConnectionCallbackRequest {
+                session_id: init_resp.session_id,
+                state_token: "forged-or-mismatched-state".into(),
+                provider_code: "provider-auth-code-123".into(),
+                external_account_reference: "alice-primary-id".into(),
+                account_display_id: "alice@example.com".into(),
+            },
+        )
+        .await;
+    assert!(matches!(wrong_state_result, Err(ConnectionError::InvalidState)));
+
+    // 4. Legitimate verified callback succeeds and records connection
+    let authorized = service
+        .verify_callback(
+            &context,
+            VerifyConnectionCallbackRequest {
+                session_id: init_resp.session_id,
+                state_token: init_resp.state_token.clone(),
+                provider_code: "provider-auth-code-123".into(),
+                external_account_reference: "alice-primary-id".into(),
+                account_display_id: "alice@example.com".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(authorized.authorization_state, AuthorizationState::Authorized);
+    assert_eq!(authorized.credential_custody, CredentialCustody::ExternalOperator);
+    assert_eq!(authorized.account_display_id, Some("alice@example.com".into()));
+    assert_eq!(authorized.authorized_capabilities, vec!["read".to_string()]);
+    assert!(authorized.expires_at.is_some());
+
+    // 5. Replay of callback on consumed session fails closed
+    let replay_result = service
+        .verify_callback(
+            &context,
+            VerifyConnectionCallbackRequest {
+                session_id: init_resp.session_id,
+                state_token: init_resp.state_token.clone(),
+                provider_code: "provider-auth-code-123".into(),
+                external_account_reference: "alice-primary-id".into(),
+                account_display_id: "alice@example.com".into(),
+            },
+        )
+        .await;
+    assert!(matches!(replay_result, Err(ConnectionError::SessionAlreadyConsumed)));
+
+    // 6. List returns verified account display ID
+    let listed = service.list(&context).await.unwrap();
+    let conn = listed.iter().find(|c| c.id == authorized.id).expect("found in list");
+    assert_eq!(conn.account_display_id, Some("alice@example.com".into()));
+    assert_eq!(conn.authorization_state, AuthorizationState::Authorized);
+
+    // 7. Disconnect revokes connection cleanly
+    let revoked = service.disconnect(&context, authorized.id).await.unwrap();
+    assert_eq!(revoked.authorization_state, AuthorizationState::Revoked);
+    assert_eq!(revoked.account_display_id, Some("alice@example.com".into()));
+    assert!(revoked.authorized_capabilities.is_empty());
 }

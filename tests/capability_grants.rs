@@ -116,6 +116,7 @@ async fn connection(
             AuthorizeConnectionRequest {
                 integration_external_key: "calendar".into(),
                 external_account_reference: "account@example.test".into(),
+                account_display_id: Some("account@example.test".into()),
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Authorized,
                 authorized_capabilities: vec!["calendar.read".into()],
@@ -176,6 +177,7 @@ async fn disconnect_revokes_grants_that_reconnection_must_not_restore() {
             AuthorizeConnectionRequest {
                 integration_external_key: "calendar".into(),
                 external_account_reference: "account@example.test".into(),
+                account_display_id: Some("account@example.test".into()),
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Authorized,
                 authorized_capabilities: vec!["calendar.read".into()],
@@ -305,6 +307,7 @@ async fn grants_are_explicit_context_bound_and_fail_closed_on_revocation() {
             AuthorizeConnectionRequest {
                 integration_external_key: "calendar".into(),
                 external_account_reference: "account@example.test".into(),
+                account_display_id: Some("account@example.test".into()),
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Revoked,
                 authorized_capabilities: vec![],

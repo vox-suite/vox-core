@@ -418,6 +418,7 @@ async fn new_declaration_revokes_old_connection_authority_and_grants() {
             AuthorizeConnectionRequest {
                 integration_external_key: "weather".into(),
                 external_account_reference: "provider-user-1".into(),
+                account_display_id: None,
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Authorized,
                 authorized_capabilities: vec!["weather.search".into()],

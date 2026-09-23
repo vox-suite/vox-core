@@ -124,6 +124,7 @@ async fn prepare(
             AuthorizeConnectionRequest {
                 integration_external_key: "calendar".into(),
                 external_account_reference: "account-a".into(),
+                account_display_id: None,
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Authorized,
                 authorized_capabilities: vec!["calendar.write".into()],
