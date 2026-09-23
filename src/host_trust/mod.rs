@@ -1,6 +1,3 @@
-/**
-* Host machine trust evaluation and client attestation verification.
-*/
 use crate::{
     db::Db,
     identity::{
@@ -12,12 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
-
-mod gsm;
+use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use url::Url;
 use uuid::Uuid;
@@ -142,58 +134,10 @@ impl HostAppCredential {
     }
 }
 
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-struct ConfiguredCredential {
-    deployment_id: Uuid,
-    host_app_id: Uuid,
-    deployment_external_key: String,
-    host_app_external_key: String,
-    secret: String,
-    secret_hash: Vec<u8>,
-    allowed_origins: Vec<String>,
-    is_active: bool,
-}
-
-impl ConfiguredCredential {
-    fn from_stored(stored: gsm::StoredCredential) -> Self {
-        let secret_hash = Sha256::digest(stored.secret.as_bytes()).to_vec();
-        Self {
-            deployment_id: stored.deployment_id,
-            host_app_id: stored.host_app_id,
-            deployment_external_key: stored.deployment_external_key,
-            host_app_external_key: stored.host_app_external_key,
-            secret: stored.secret,
-            secret_hash,
-            allowed_origins: stored.allowed_origins,
-            is_active: stored.is_active,
-        }
-    }
-}
-
-impl gsm::StoredCredential {
-    fn from_configured(id: Uuid, credential: &ConfiguredCredential) -> Self {
-        Self {
-            credential_id: id,
-            deployment_id: credential.deployment_id,
-            host_app_id: credential.host_app_id,
-            deployment_external_key: credential.deployment_external_key.clone(),
-            host_app_external_key: credential.host_app_external_key.clone(),
-            secret: credential.secret.clone(),
-            allowed_origins: credential.allowed_origins.clone(),
-            is_active: credential.is_active,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct HostTrustService {
-    #[allow(dead_code)]
     db: Db,
     identities: IdentityService,
-    credentials: Arc<RwLock<HashMap<Uuid, ConfiguredCredential>>>,
-    nonces: Arc<RwLock<HashMap<(Uuid, Uuid), DateTime<Utc>>>>,
-    secret_resource: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -216,8 +160,6 @@ pub enum HostTrustError {
     CredentialNotFound,
     #[error("host trust storage is unavailable")]
     Database(#[from] sqlx::Error),
-    #[error("host credential store is unavailable")]
-    CredentialStore,
     #[error("host context resolution failed")]
     Identity(#[from] IdentityError),
 }
@@ -227,48 +169,7 @@ impl HostTrustService {
         Self {
             identities: IdentityService::new(db.clone()),
             db,
-            credentials: Arc::new(RwLock::new(HashMap::new())),
-            nonces: Arc::new(RwLock::new(HashMap::new())),
-            secret_resource: None,
         }
-    }
-
-    pub async fn load_durable_credentials(
-        &mut self,
-        secret_resource: Option<String>,
-    ) -> Result<(), HostTrustError> {
-        let Some(resource) = secret_resource.filter(|value| !value.trim().is_empty()) else {
-            return Ok(());
-        };
-        let loaded = gsm::read_credentials(&resource)
-            .await
-            .map_err(|_| HostTrustError::CredentialStore)?;
-        let mut creds = self.credentials.write().unwrap();
-        creds.clear();
-        for credential in loaded {
-            let id = credential.credential_id;
-            creds.insert(id, ConfiguredCredential::from_stored(credential));
-        }
-        drop(creds);
-        self.secret_resource = Some(resource);
-        Ok(())
-    }
-
-    async fn persist_credentials(&self) -> Result<(), HostTrustError> {
-        let Some(resource) = &self.secret_resource else {
-            return Ok(());
-        };
-        let stored = {
-            let creds = self.credentials.read().unwrap();
-            creds
-                .iter()
-                .map(|(id, credential)| gsm::StoredCredential::from_configured(*id, credential))
-                .collect::<Vec<_>>()
-        };
-        gsm::write_credentials(resource, &stored)
-            .await
-            .map_err(|_| HostTrustError::CredentialStore)?;
-        Ok(())
     }
 
     pub async fn register_host_app(
@@ -281,32 +182,35 @@ impl HostTrustService {
             .ok_or(HostTrustError::InvalidRegistration)?;
         let allowed_origins = normalize_origins(request.allowed_origins)?;
 
-        let deployment_id = Uuid::new_v4();
-        let host_app_id = Uuid::new_v4();
-        let credential_id = Uuid::new_v4();
-        let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-        let secret_hash = Sha256::digest(secret.as_bytes()).to_vec();
-        let aud = audience(&deployment_external_key, &host_app_external_key);
-
-        let credential = ConfiguredCredential {
+        let mut tx = self.db.pool().begin().await?;
+        let deployment_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO platform_deployments (external_key) VALUES ($1) \
+             ON CONFLICT (external_key) DO UPDATE SET external_key = EXCLUDED.external_key \
+             RETURNING id",
+        )
+        .bind(&deployment_external_key)
+        .fetch_one(&mut *tx)
+        .await?;
+        let host_app_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO host_apps (deployment_id, external_key, allowed_origins) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (deployment_id, external_key) \
+             DO UPDATE SET allowed_origins = EXCLUDED.allowed_origins \
+             RETURNING id",
+        )
+        .bind(deployment_id)
+        .bind(&host_app_external_key)
+        .bind(&allowed_origins)
+        .fetch_one(&mut *tx)
+        .await?;
+        let credential = insert_credential(
+            &mut tx,
             deployment_id,
             host_app_id,
-            deployment_external_key: deployment_external_key.clone(),
-            host_app_external_key: host_app_external_key.clone(),
-            secret: secret.clone(),
-            secret_hash,
-            allowed_origins: allowed_origins.clone(),
-            is_active: true,
-        };
-
-        {
-            let mut creds = self.credentials.write().unwrap();
-            creds.insert(credential_id, credential);
-        }
-        if let Err(error) = self.persist_credentials().await {
-            self.credentials.write().unwrap().remove(&credential_id);
-            return Err(error);
-        }
+            audience(&deployment_external_key, &host_app_external_key),
+        )
+        .await?;
+        tx.commit().await?;
 
         Ok(RegisteredHostApp {
             deployment_id: DeploymentId(deployment_id),
@@ -314,11 +218,7 @@ impl HostTrustService {
             deployment_external_key,
             host_app_external_key,
             allowed_origins,
-            credential: HostAppCredential {
-                credential_id,
-                audience: aud,
-                secret,
-            },
+            credential,
         })
     }
 
@@ -326,60 +226,36 @@ impl HostTrustService {
         &self,
         host_app_id: HostAppId,
     ) -> Result<HostAppCredential, HostTrustError> {
-        let (new_cred_id, aud, new_secret) = {
-            let mut creds = self.credentials.write().unwrap();
-            let old = creds
-                .values()
-                .find(|c| c.host_app_id == host_app_id.0 && c.is_active)
-                .cloned()
-                .ok_or(HostTrustError::CredentialNotFound)?;
-
-            for credential in creds.values_mut() {
-                if credential.host_app_id == host_app_id.0 {
-                    credential.is_active = false;
-                }
-            }
-
-            let new_cred_id = Uuid::new_v4();
-            let new_secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-            let secret_hash = Sha256::digest(new_secret.as_bytes()).to_vec();
-            let aud = audience(&old.deployment_external_key, &old.host_app_external_key);
-            creds.insert(
-                new_cred_id,
-                ConfiguredCredential {
-                    deployment_id: old.deployment_id,
-                    host_app_id: old.host_app_id,
-                    deployment_external_key: old.deployment_external_key.clone(),
-                    host_app_external_key: old.host_app_external_key.clone(),
-                    secret: new_secret.clone(),
-                    secret_hash,
-                    allowed_origins: old.allowed_origins.clone(),
-                    is_active: true,
-                },
-            );
-            (new_cred_id, aud, new_secret)
-        };
-        self.persist_credentials().await?;
-
-        Ok(HostAppCredential {
-            credential_id: new_cred_id,
-            audience: aud,
-            secret: new_secret,
-        })
+        let mut tx = self.db.pool().begin().await?;
+        let host = sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT h.deployment_id, d.external_key, h.external_key \
+             FROM host_apps h JOIN platform_deployments d ON d.id = h.deployment_id \
+             WHERE h.id = $1",
+        )
+        .bind(host_app_id.0)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(HostTrustError::CredentialNotFound)?;
+        let credential =
+            insert_credential(&mut tx, host.0, host_app_id.0, audience(&host.1, &host.2)).await?;
+        tx.commit().await?;
+        Ok(credential)
     }
 
     pub async fn revoke_credential(&self, credential_id: Uuid) -> Result<(), HostTrustError> {
-        {
-            let mut creds = self.credentials.write().unwrap();
-            let credential = creds
-                .get_mut(&credential_id)
-                .ok_or(HostTrustError::CredentialNotFound)?;
-            if !credential.is_active {
-                return Err(HostTrustError::CredentialNotFound);
-            }
-            credential.is_active = false;
+        let result = sqlx::query(
+            "UPDATE host_app_credentials \
+             SET state = 'revoked', revoked_at = now() \
+             WHERE id = $1 AND state = 'active'",
+        )
+        .bind(credential_id)
+        .execute(self.db.pool())
+        .await?;
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(HostTrustError::CredentialNotFound)
         }
-        self.persist_credentials().await
     }
 
     pub async fn resolve_authenticated_context(
@@ -390,20 +266,19 @@ impl HostTrustService {
         now: DateTime<Utc>,
     ) -> Result<ResolvedUserContext, HostTrustError> {
         let request = NormalizedHostContextRequest::from_request(request)?;
+        let credential = sqlx::query_as::<_, (Uuid, Uuid, Vec<u8>, String, String, Vec<String>)>(
+            "SELECT c.deployment_id, c.host_app_id, c.secret_hash, d.external_key, h.external_key, h.allowed_origins \
+             FROM host_app_credentials c \
+             JOIN platform_deployments d ON d.id = c.deployment_id \
+             JOIN host_apps h ON h.id = c.host_app_id AND h.deployment_id = c.deployment_id \
+             WHERE c.id = $1 AND c.state = 'active'",
+        )
+        .bind(assertion.credential_id)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(HostTrustError::AuthenticationDenied)?;
 
-        let cred = {
-            let creds = self.credentials.read().unwrap();
-            creds
-                .get(&assertion.credential_id)
-                .cloned()
-                .ok_or(HostTrustError::AuthenticationDenied)?
-        };
-
-        if !cred.is_active {
-            return Err(HostTrustError::AuthenticationDenied);
-        }
-
-        let expected_audience = audience(&cred.deployment_external_key, &cred.host_app_external_key);
+        let expected_audience = audience(&credential.3, &credential.4);
         if !bool::from(
             assertion
                 .audience
@@ -412,25 +287,21 @@ impl HostTrustService {
         ) {
             return Err(HostTrustError::AuthenticationDenied);
         }
-
         if assertion.issued_at > now + Duration::seconds(60)
             || assertion.issued_at + Duration::seconds(HOST_ASSERTION_MAX_AGE_SECONDS) < now
         {
             return Err(HostTrustError::AssertionExpired);
         }
-
         if let Some(origin) = origin {
             let origin = normalize_origin(origin).ok_or(HostTrustError::OriginDenied)?;
-            if !cred.allowed_origins.iter().any(|allowed| allowed == &origin) {
+            if !credential.5.iter().any(|allowed| allowed == &origin) {
                 return Err(HostTrustError::OriginDenied);
             }
         }
-
         let provided_hash = Sha256::digest(assertion.secret.as_bytes());
-        if !bool::from(provided_hash.as_slice().ct_eq(cred.secret_hash.as_slice())) {
+        if !bool::from(provided_hash.as_slice().ct_eq(credential.2.as_slice())) {
             return Err(HostTrustError::AuthenticationDenied);
         }
-
         let signature =
             hex::decode(&assertion.signature).map_err(|_| HostTrustError::InvalidAssertion)?;
         let mut verifier = HmacSha256::new_from_slice(assertion.secret.as_bytes())
@@ -449,28 +320,45 @@ impl HostTrustService {
             .verify_slice(&signature)
             .map_err(|_| HostTrustError::AuthenticationDenied)?;
 
-        {
-            let mut nonces = self.nonces.write().unwrap();
-            nonces.retain(|_, expires_at| *expires_at >= now);
-            let key = (assertion.credential_id, assertion.nonce);
-            if nonces.contains_key(&key) {
-                return Err(HostTrustError::AssertionReplayed);
-            }
-            nonces.insert(
-                key,
-                assertion.issued_at + Duration::seconds(HOST_ASSERTION_MAX_AGE_SECONDS),
-            );
+        sqlx::query("DELETE FROM host_app_assertion_nonces WHERE expires_at < $1")
+            .bind(now)
+            .execute(self.db.pool())
+            .await?;
+        let inserted_nonce = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO host_app_assertion_nonces (credential_id, nonce, expires_at) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING RETURNING nonce",
+        )
+        .bind(assertion.credential_id)
+        .bind(assertion.nonce)
+        .bind(assertion.issued_at + Duration::seconds(HOST_ASSERTION_MAX_AGE_SECONDS))
+        .fetch_optional(self.db.pool())
+        .await?;
+        if inserted_nonce.is_none() {
+            return Err(HostTrustError::AssertionReplayed);
         }
 
-        let organization_id = request
-            .organization_external_key
-            .as_ref()
-            .map(|_| HostOrganizationId(Uuid::new_v4()));
-
+        let organization_id = if let Some(external_key) = request.organization_external_key {
+            Some(
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM host_organizations \
+                 WHERE deployment_id = $1 AND host_app_id = $2 AND external_key = $3",
+                )
+                .bind(credential.0)
+                .bind(credential.1)
+                .bind(external_key)
+                .fetch_optional(self.db.pool())
+                .await?
+                .map(HostOrganizationId)
+                .ok_or(HostTrustError::AuthenticationDenied)?,
+            )
+        } else {
+            None
+        };
         self.identities
             .resolve_context(&UserContextSubject {
-                deployment_id: DeploymentId(cred.deployment_id),
-                host_app_id: HostAppId(cred.host_app_id),
+                deployment_id: DeploymentId(credential.0),
+                host_app_id: HostAppId(credential.1),
                 organization_id,
                 host_user_id: request.host_user_id,
             })
@@ -500,6 +388,30 @@ impl NormalizedHostContextRequest {
             organization_external_key,
         })
     }
+}
+
+async fn insert_credential(
+    tx: &mut Transaction<'_, Postgres>,
+    deployment_id: Uuid,
+    host_app_id: Uuid,
+    audience: String,
+) -> Result<HostAppCredential, HostTrustError> {
+    let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let hash = Sha256::digest(secret.as_bytes()).to_vec();
+    let credential_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO host_app_credentials (deployment_id, host_app_id, secret_hash) \
+         VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(deployment_id)
+    .bind(host_app_id)
+    .bind(hash)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(HostAppCredential {
+        credential_id,
+        audience,
+        secret,
+    })
 }
 
 fn normalize_key(value: &str) -> Option<String> {

@@ -62,14 +62,6 @@ async fn main() {
     {
         legacy_state = legacy_state.with_admin(admin);
     }
-    if let Some(mut trust) = legacy_state.take_host_trust() {
-        trust
-            .load_durable_credentials(std::env::var("VOX_HOST_CREDENTIALS_SECRET").ok())
-            .await
-            .expect("host credentials are unavailable");
-        legacy_state.set_host_trust(trust);
-    }
-
     let api_state = ApiState::new(legacy_state, db);
     let app = build_api_router(api_state);
 

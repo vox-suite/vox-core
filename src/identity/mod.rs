@@ -104,24 +104,38 @@ impl IdentityService {
         subject: &UserContextSubject,
     ) -> Result<ResolvedUserContext, IdentityError> {
         let host_user_id = subject.normalized_host_user_id()?;
-        let issuer = format!("{}:{}", subject.deployment_id.0, subject.host_app_id.0);
 
-        if let Some(user_id) = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM auth_identities WHERE issuer = $1 AND subject = $2",
-        )
-        .bind(&issuer)
-        .bind(host_user_id)
-        .fetch_optional(self.db.pool())
-        .await?
-        {
-            return Ok(ResolvedUserContext {
-                id: UserContextId(user_id),
-                user_id: UserId(user_id),
-                subject: UserContextSubject {
-                    host_user_id: host_user_id.to_owned(),
-                    ..subject.clone()
-                },
-            });
+        let scope_exists = if let Some(organization_id) = subject.organization_id {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(\
+                    SELECT 1 FROM host_organizations \
+                    WHERE deployment_id = $1 AND host_app_id = $2 AND id = $3\
+                )",
+            )
+            .bind(subject.deployment_id.0)
+            .bind(subject.host_app_id.0)
+            .bind(organization_id.0)
+            .fetch_one(self.db.pool())
+            .await?
+        } else {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(\
+                    SELECT 1 FROM host_apps \
+                    WHERE deployment_id = $1 AND id = $2\
+                )",
+            )
+            .bind(subject.deployment_id.0)
+            .bind(subject.host_app_id.0)
+            .fetch_one(self.db.pool())
+            .await?
+        };
+
+        if !scope_exists {
+            return Err(IdentityError::ScopeNotFound);
+        }
+
+        if let Some(context) = self.find_context(subject, host_user_id).await? {
+            return Ok(context);
         }
 
         let mut tx = self.db.pool().begin().await?;
@@ -130,39 +144,47 @@ impl IdentityService {
                 .fetch_one(&mut *tx)
                 .await?;
 
-        let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO auth_identities (user_id, issuer, subject) \
-             VALUES ($1, $2, $3) \
-             ON CONFLICT (issuer, subject) DO NOTHING \
-             RETURNING user_id",
+        let inserted_context = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "INSERT INTO user_contexts (\
+                deployment_id, host_app_id, organization_id, host_user_id, user_id\
+             ) VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT DO NOTHING \
+             RETURNING id, user_id",
         )
-        .bind(new_user)
-        .bind(&issuer)
+        .bind(subject.deployment_id.0)
+        .bind(subject.host_app_id.0)
+        .bind(subject.organization_id.map(|id| id.0))
         .bind(host_user_id)
+        .bind(new_user)
         .fetch_optional(&mut *tx)
         .await?;
 
-        let final_user_id = if let Some(uid) = inserted {
-            uid
+        let (context_id, user_id) = if let Some(inserted) = inserted_context {
+            inserted
         } else {
             sqlx::query("DELETE FROM users WHERE id = $1")
                 .bind(new_user)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT user_id FROM auth_identities WHERE issuer = $1 AND subject = $2",
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT id, user_id FROM user_contexts \
+                 WHERE deployment_id = $1 \
+                   AND host_app_id = $2 \
+                   AND organization_id IS NOT DISTINCT FROM $3 \
+                   AND host_user_id = $4",
             )
-            .bind(&issuer)
+            .bind(subject.deployment_id.0)
+            .bind(subject.host_app_id.0)
+            .bind(subject.organization_id.map(|id| id.0))
             .bind(host_user_id)
             .fetch_one(&mut *tx)
             .await?
         };
 
         tx.commit().await?;
-
         Ok(ResolvedUserContext {
-            id: UserContextId(final_user_id),
-            user_id: UserId(final_user_id),
+            id: UserContextId(context_id),
+            user_id: UserId(user_id),
             subject: UserContextSubject {
                 host_user_id: host_user_id.to_owned(),
                 ..subject.clone()
@@ -175,12 +197,12 @@ impl IdentityService {
         context_id: UserContextId,
         user_id: UserId,
     ) -> Result<(), IdentityError> {
-        if context_id.0 == user_id.0 {
-            return Ok(());
-        }
         let authorized = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
+            "SELECT EXISTS(\
+                SELECT 1 FROM user_contexts WHERE id = $1 AND user_id = $2\
+            )",
         )
+        .bind(context_id.0)
         .bind(user_id.0)
         .fetch_one(self.db.pool())
         .await?;
@@ -192,6 +214,34 @@ impl IdentityService {
         }
     }
 
+    async fn find_context(
+        &self,
+        subject: &UserContextSubject,
+        host_user_id: &str,
+    ) -> Result<Option<ResolvedUserContext>, IdentityError> {
+        let context = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT id, user_id FROM user_contexts \
+             WHERE deployment_id = $1 \
+               AND host_app_id = $2 \
+               AND organization_id IS NOT DISTINCT FROM $3 \
+               AND host_user_id = $4",
+        )
+        .bind(subject.deployment_id.0)
+        .bind(subject.host_app_id.0)
+        .bind(subject.organization_id.map(|id| id.0))
+        .bind(host_user_id)
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        Ok(context.map(|(context_id, user_id)| ResolvedUserContext {
+            id: UserContextId(context_id),
+            user_id: UserId(user_id),
+            subject: UserContextSubject {
+                host_user_id: host_user_id.to_owned(),
+                ..subject.clone()
+            },
+        }))
+    }
     pub async fn resolve_legacy_owner(
         &self,
         identity: &ChannelIdentity,

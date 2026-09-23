@@ -4,6 +4,7 @@
 use uuid::Uuid;
 use vox_core::{
     db::Db,
+    host_trust::{HostTrustService, RegisterHostAppRequest},
     identity::{
         DeploymentId, HostAppId, HostOrganizationId, IdentityError, IdentityService,
         UserContextSubject,
@@ -16,18 +17,44 @@ async fn auth_identities_isolate_deployment_host_pairs_and_host_users() {
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
     let db = Db::connect(&database_url).await.expect("connect database");
     db.migrate().await.expect("migrate database");
-    sqlx::query("TRUNCATE users CASCADE")
-        .execute(db.pool())
+    let trust = HostTrustService::new(db.clone());
+    let deployment_key_a = format!("identity-a-{}", Uuid::new_v4());
+    let deployment_key_b = format!("identity-b-{}", Uuid::new_v4());
+    let registered_a = trust
+        .register_host_app(RegisterHostAppRequest {
+            deployment_external_key: deployment_key_a.clone(),
+            host_app_external_key: "host-a".into(),
+            allowed_origins: vec![],
+        })
         .await
         .unwrap();
-
-    let deployment_a = DeploymentId(Uuid::new_v4());
-    let deployment_b = DeploymentId(Uuid::new_v4());
-    let host_a = HostAppId(Uuid::new_v4());
-    let host_b = HostAppId(Uuid::new_v4());
-    let host_c = HostAppId(Uuid::new_v4());
-    let organization_a = HostOrganizationId(Uuid::new_v4());
-    let organization_b = HostOrganizationId(Uuid::new_v4());
+    let registered_b = trust
+        .register_host_app(RegisterHostAppRequest {
+            deployment_external_key: deployment_key_a,
+            host_app_external_key: "host-b".into(),
+            allowed_origins: vec![],
+        })
+        .await
+        .unwrap();
+    let registered_c = trust
+        .register_host_app(RegisterHostAppRequest {
+            deployment_external_key: deployment_key_b,
+            host_app_external_key: "host-c".into(),
+            allowed_origins: vec![],
+        })
+        .await
+        .unwrap();
+    let deployment_a = registered_a.deployment_id;
+    let deployment_b = registered_c.deployment_id;
+    let host_a = registered_a.host_app_id;
+    let host_b = registered_b.host_app_id;
+    let host_c = registered_c.host_app_id;
+    let organization_a = HostOrganizationId(sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO host_organizations (deployment_id,host_app_id,external_key) VALUES ($1,$2,'org-a') RETURNING id"
+    ).bind(deployment_a.0).bind(host_a.0).fetch_one(db.pool()).await.unwrap());
+    let organization_b = HostOrganizationId(sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO host_organizations (deployment_id,host_app_id,external_key) VALUES ($1,$2,'org-b') RETURNING id"
+    ).bind(deployment_a.0).bind(host_a.0).fetch_one(db.pool()).await.unwrap());
     let identities = IdentityService::new(db.clone());
 
     let concurrent_subject = UserContextSubject {
@@ -95,16 +122,6 @@ async fn auth_identities_isolate_deployment_host_pairs_and_host_users() {
             if left == right {
                 continue;
             }
-            let same_deployment_host = subjects[left].deployment_id
-                == subjects[right].deployment_id
-                && subjects[left].host_app_id == subjects[right].host_app_id;
-            let same_host_user =
-                subjects[left].host_user_id.trim() == subjects[right].host_user_id.trim();
-            if same_deployment_host && same_host_user {
-                assert_eq!(contexts[left].id, contexts[right].id);
-                assert_eq!(contexts[left].user_id, contexts[right].user_id);
-                continue;
-            }
             assert_ne!(contexts[left].id, contexts[right].id);
             assert_ne!(contexts[left].user_id, contexts[right].user_id);
             assert!(matches!(
@@ -133,11 +150,6 @@ async fn context_resolution_rejects_invalid_host_user_ids() {
     let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
     let db = Db::connect(&database_url).await.expect("connect database");
     db.migrate().await.expect("migrate database");
-    sqlx::query("TRUNCATE users CASCADE")
-        .execute(db.pool())
-        .await
-        .unwrap();
-
     let deployment = DeploymentId(Uuid::new_v4());
     let host_a = HostAppId(Uuid::new_v4());
     let identities = IdentityService::new(db.clone());
