@@ -1,6 +1,3 @@
-/**
-* Adapters translating external channel identities into core user identities.
-*/
 use crate::{
     db::Db,
     identity::{DeploymentId, ResolvedUserContext, UserContextId},
@@ -241,8 +238,36 @@ impl IdentityAdapterService {
         let external_key = normalize_key(&request.external_key)
             .ok_or(IdentityAdapterError::InvalidRegistration)?;
         validate_configuration(&request.configuration)?;
-        let _ = (deployment_external_key, external_key);
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let kind = adapter_kind(&request.configuration);
+        let configuration = serde_json::to_value(&request.configuration)
+            .map_err(|_| IdentityAdapterError::InvalidRegistration)?;
+        let deployment_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM platform_deployments WHERE external_key = $1",
+        )
+        .bind(&deployment_external_key)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(IdentityAdapterError::InvalidRegistration)?;
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO identity_adapters (deployment_id, external_key, kind, configuration) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (deployment_id, external_key) \
+             DO UPDATE SET kind = EXCLUDED.kind, configuration = EXCLUDED.configuration, \
+                           state = 'enabled', disabled_at = NULL \
+             RETURNING id",
+        )
+        .bind(deployment_id)
+        .bind(&external_key)
+        .bind(kind)
+        .bind(configuration)
+        .fetch_one(self.db.pool())
+        .await?;
+        Ok(RegisteredIdentityAdapter {
+            id,
+            deployment_id: DeploymentId(deployment_id),
+            external_key,
+            configuration: request.configuration,
+        })
     }
 
     pub async fn start_passwordless_recovery(
@@ -251,10 +276,54 @@ impl IdentityAdapterService {
         request: StartPasswordlessRecoveryRequest,
         now: DateTime<Utc>,
     ) -> Result<PasswordlessRecoveryStarted, IdentityAdapterError> {
-        let _ = normalize_identity(&request.recovery_handle).ok_or(IdentityAdapterError::InvalidProof)?;
-        let _ = normalize_key(&request.adapter_external_key).ok_or(IdentityAdapterError::InvalidProof)?;
-        let _ = (context, now);
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let recovery_handle = normalize_identity(&request.recovery_handle)
+            .ok_or(IdentityAdapterError::InvalidProof)?;
+        let adapter = self
+            .load_adapter(context, &request.adapter_external_key)
+            .await?;
+        let IdentityAdapterConfiguration::PasswordlessRecovery { recovery_channel } =
+            adapter.configuration
+        else {
+            return Err(IdentityAdapterError::InvalidProof);
+        };
+        let challenge_id = Uuid::new_v4();
+        let code = opaque_token();
+        let expires_at = now + Duration::seconds(PASSWORDLESS_CHALLENGE_LIFETIME_SECONDS);
+        sqlx::query(
+            "INSERT INTO passwordless_recovery_challenges \
+             (id, adapter_id, user_context_id, recovery_handle_hash, code_hash, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(challenge_id)
+        .bind(adapter.id)
+        .bind(context.id.0)
+        .bind(hash(&recovery_handle))
+        .bind(hash(&code))
+        .bind(expires_at)
+        .execute(self.db.pool())
+        .await?;
+        if self
+            .recovery_delivery
+            .deliver(RecoveryDispatch {
+                challenge_id,
+                recovery_channel,
+                recovery_handle,
+                code,
+                expires_at,
+            })
+            .await
+            .is_err()
+        {
+            sqlx::query("DELETE FROM passwordless_recovery_challenges WHERE id = $1")
+                .bind(challenge_id)
+                .execute(self.db.pool())
+                .await?;
+            return Err(IdentityAdapterError::RecoveryUnavailable);
+        }
+        Ok(PasswordlessRecoveryStarted {
+            challenge_id,
+            expires_at,
+        })
     }
 
     pub async fn authenticate(
@@ -263,9 +332,59 @@ impl IdentityAdapterService {
         request: AuthenticateIdentityRequest,
         now: DateTime<Utc>,
     ) -> Result<AuthenticationResult, IdentityAdapterError> {
-        let _ = normalize_key(&request.adapter_external_key).ok_or(IdentityAdapterError::InvalidProof)?;
-        let _ = (context, now, request.proof);
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let adapter = self
+            .load_adapter(context, &request.adapter_external_key)
+            .await?;
+        let subject_hash = match (&adapter.configuration, request.proof) {
+            (
+                IdentityAdapterConfiguration::FederatedEd25519 {
+                    issuer,
+                    audience,
+                    public_key,
+                },
+                IdentityProof::Federated(proof),
+            ) => {
+                self.verify_federated(adapter.id, issuer, audience, public_key, proof, now)
+                    .await?
+            }
+            (
+                IdentityAdapterConfiguration::PasswordlessRecovery { .. },
+                IdentityProof::Passwordless(proof),
+            ) => {
+                self.verify_passwordless(adapter.id, context.id, proof, now)
+                    .await?
+            }
+            _ => return Err(IdentityAdapterError::InvalidProof),
+        };
+        let login_identity_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO login_identities (user_context_id, adapter_id, subject_hash) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (user_context_id, adapter_id, subject_hash) \
+             DO UPDATE SET last_authenticated_at = now() \
+             RETURNING id",
+        )
+        .bind(context.id.0)
+        .bind(adapter.id)
+        .bind(subject_hash)
+        .fetch_one(self.db.pool())
+        .await?;
+        let authentication_token = opaque_token();
+        let expires_at = now + Duration::seconds(AUTHENTICATION_SESSION_LIFETIME_SECONDS);
+        sqlx::query(
+            "INSERT INTO identity_authentication_sessions (login_identity_id, token_hash, expires_at) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(login_identity_id)
+        .bind(hash(&authentication_token))
+        .bind(expires_at)
+        .execute(self.db.pool())
+        .await?;
+        Ok(AuthenticationResult {
+            user_context_id: context.id,
+            adapter_external_key: adapter.external_key,
+            expires_at,
+            authentication_token,
+        })
     }
 
     pub async fn link_identities(
@@ -274,12 +393,27 @@ impl IdentityAdapterService {
         target_authentication_token: &str,
         now: DateTime<Utc>,
     ) -> Result<IdentityLinkResult, IdentityAdapterError> {
-        let _ = (
-            normalize_identity(source_authentication_token),
-            normalize_identity(target_authentication_token),
-            now,
-        );
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let mut tx = self.db.pool().begin().await?;
+        let source = consume_authentication(&mut tx, source_authentication_token, now).await?;
+        let target = consume_authentication(&mut tx, target_authentication_token, now).await?;
+        let (left, right) = ordered_pair(source, target)?;
+        let link_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO identity_links (left_login_identity_id, right_login_identity_id, removed_at) \
+             VALUES ($1, $2, NULL) \
+             ON CONFLICT (left_login_identity_id, right_login_identity_id) \
+             DO UPDATE SET removed_at = NULL \
+             RETURNING id",
+        )
+        .bind(left)
+        .bind(right)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("INSERT INTO identity_link_events (link_id, event_kind) VALUES ($1, 'linked')")
+            .bind(link_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(IdentityLinkResult { link_id })
     }
 
     pub async fn unlink_identities(
@@ -288,21 +422,54 @@ impl IdentityAdapterService {
         target_authentication_token: &str,
         now: DateTime<Utc>,
     ) -> Result<(), IdentityAdapterError> {
-        let _ = (
-            normalize_identity(source_authentication_token),
-            normalize_identity(target_authentication_token),
-            now,
-        );
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let mut tx = self.db.pool().begin().await?;
+        let source = consume_authentication(&mut tx, source_authentication_token, now).await?;
+        let target = consume_authentication(&mut tx, target_authentication_token, now).await?;
+        let (left, right) = ordered_pair(source, target)?;
+        let link_id = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE identity_links SET removed_at = $3 \
+             WHERE left_login_identity_id = $1 AND right_login_identity_id = $2 \
+               AND removed_at IS NULL \
+             RETURNING id",
+        )
+        .bind(left)
+        .bind(right)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(IdentityAdapterError::LinkNotFound)?;
+        sqlx::query(
+            "INSERT INTO identity_link_events (link_id, event_kind) VALUES ($1, 'unlinked')",
+        )
+        .bind(link_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn load_adapter(
         &self,
-        _context: &ResolvedUserContext,
+        context: &ResolvedUserContext,
         external_key: &str,
     ) -> Result<LoadedAdapter, IdentityAdapterError> {
-        let _ = normalize_key(external_key).ok_or(IdentityAdapterError::InvalidProof)?;
-        Err(IdentityAdapterError::AdapterUnavailable)
+        let external_key = normalize_key(external_key).ok_or(IdentityAdapterError::InvalidProof)?;
+        let row = sqlx::query_as::<_, (Uuid, serde_json::Value)>(
+            "SELECT id, configuration FROM identity_adapters \
+             WHERE deployment_id = $1 AND external_key = $2 AND state = 'enabled'",
+        )
+        .bind(context.subject.deployment_id.0)
+        .bind(&external_key)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(IdentityAdapterError::AdapterUnavailable)?;
+        let configuration =
+            serde_json::from_value(row.1).map_err(|_| IdentityAdapterError::AdapterUnavailable)?;
+        Ok(LoadedAdapter {
+            id: row.0,
+            external_key,
+            configuration,
+        })
     }
 
     async fn verify_federated(

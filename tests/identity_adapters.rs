@@ -1,6 +1,3 @@
-/**
-* Integration tests for identity mapping and channel adapters.
-*/
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -16,7 +13,7 @@ use vox_core::{
     http::{AppState, router},
     identity_adapters::{
         AuthenticateIdentityRequest, FederatedProof, IdentityAdapterConfiguration,
-        IdentityAdapterError, IdentityAdapterService, IdentityProof,
+        IdentityAdapterError, IdentityAdapterService, IdentityProof, PasswordlessProof,
         RecordingRecoveryDelivery, RegisterIdentityAdapterRequest,
         StartPasswordlessRecoveryRequest,
     },
@@ -82,7 +79,7 @@ fn federated_request(
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn adapter_operations_are_unavailable_until_platform_storage_returns() {
+async fn adapters_authenticate_contexts_and_links_never_merge_them() {
     let db = setup().await;
     let trust = HostTrustService::new(db.clone());
     let host = trust
@@ -96,62 +93,165 @@ async fn adapter_operations_are_unavailable_until_platform_storage_returns() {
     let first_context = context(&trust, &host, "first-host-user").await;
     let second_context = context(&trust, &host, "second-host-user").await;
     let delivery = Arc::new(RecordingRecoveryDelivery::default());
-    let service = IdentityAdapterService::new(db.clone(), delivery);
+    let service = IdentityAdapterService::new(db.clone(), delivery.clone());
     let signing_key = SigningKey::from_bytes(&[17; 32]);
+    service
+        .register_adapter(RegisterIdentityAdapterRequest {
+            deployment_external_key: host.deployment_external_key.clone(),
+            external_key: "federated-primary".into(),
+            configuration: federated_configuration(&signing_key),
+        })
+        .await
+        .unwrap();
+    service
+        .register_adapter(RegisterIdentityAdapterRequest {
+            deployment_external_key: host.deployment_external_key.clone(),
+            external_key: "recovery-email".into(),
+            configuration: IdentityAdapterConfiguration::PasswordlessRecovery {
+                recovery_channel: "email".into(),
+            },
+        })
+        .await
+        .unwrap();
 
-    assert!(matches!(
-        service
-            .register_adapter(RegisterIdentityAdapterRequest {
-                deployment_external_key: host.deployment_external_key.clone(),
-                external_key: "federated-primary".into(),
-                configuration: federated_configuration(&signing_key),
-            })
-            .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
-    ));
+    let first = service
+        .authenticate(
+            &first_context,
+            federated_request(&signing_key, "federated-primary", "same@example.test"),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let second = service
+        .authenticate(
+            &second_context,
+            federated_request(&signing_key, "federated-primary", "same@example.test"),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.user_context_id, first_context.id);
+    assert_eq!(second.user_context_id, second_context.id);
+    assert_ne!(first.user_context_id, second.user_context_id);
 
+    let recovery = service
+        .start_passwordless_recovery(
+            &first_context,
+            StartPasswordlessRecoveryRequest {
+                adapter_external_key: "recovery-email".into(),
+                recovery_handle: "same@example.test".into(),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let recovery_code = delivery
+        .code_for(recovery.challenge_id)
+        .expect("delivered recovery code");
+    let recovery_authentication = service
+        .authenticate(
+            &first_context,
+            AuthenticateIdentityRequest {
+                adapter_external_key: "recovery-email".into(),
+                proof: IdentityProof::Passwordless(PasswordlessProof {
+                    challenge_id: recovery.challenge_id,
+                    code: recovery_code.clone(),
+                }),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovery_authentication.user_context_id, first_context.id);
     assert!(matches!(
         service
             .authenticate(
                 &first_context,
-                federated_request(&signing_key, "federated-primary", "same@example.test"),
-                Utc::now(),
-            )
-            .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
-    ));
-
-    assert!(matches!(
-        service
-            .start_passwordless_recovery(
-                &second_context,
-                StartPasswordlessRecoveryRequest {
+                AuthenticateIdentityRequest {
                     adapter_external_key: "recovery-email".into(),
-                    recovery_handle: "same@example.test".into(),
+                    proof: IdentityProof::Passwordless(PasswordlessProof {
+                        challenge_id: recovery.challenge_id,
+                        code: recovery_code,
+                    }),
                 },
                 Utc::now(),
             )
             .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
+        Err(IdentityAdapterError::AuthenticationDenied)
     ));
 
+    let link = service
+        .link_identities(
+            &first.authentication_token,
+            &second.authentication_token,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(link.link_id, Uuid::nil());
+    let contexts: i64 = sqlx::query_scalar("SELECT count(*) FROM user_contexts WHERE id = ANY($1)")
+        .bind(vec![first_context.id.0, second_context.id.0])
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(contexts, 2, "linking must not merge user contexts");
+    let linked_identities: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM login_identities WHERE user_context_id = ANY($1)")
+            .bind(vec![first_context.id.0, second_context.id.0])
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        linked_identities, 3,
+        "both federated identities and the recovery identity remain scoped"
+    );
     assert!(matches!(
         service
-            .link_identities("token-a", "token-b", Utc::now())
+            .link_identities(
+                &first.authentication_token,
+                &second.authentication_token,
+                Utc::now()
+            )
             .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
+        Err(IdentityAdapterError::AuthenticationDenied)
     ));
-    assert!(matches!(
-        service
-            .unlink_identities("token-a", "token-b", Utc::now())
-            .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
-    ));
+
+    let first_for_unlink = service
+        .authenticate(
+            &first_context,
+            federated_request(&signing_key, "federated-primary", "same@example.test"),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let second_for_unlink = service
+        .authenticate(
+            &second_context,
+            federated_request(&signing_key, "federated-primary", "same@example.test"),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    service
+        .unlink_identities(
+            &first_for_unlink.authentication_token,
+            &second_for_unlink.authentication_token,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM identity_link_events WHERE link_id = $1")
+            .bind(link.link_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(events, 2, "link and unlink must leave an audit trail");
 }
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn unavailable_adapter_service_rejects_all_authentication_paths() {
+async fn federated_proofs_are_replay_protected_and_adapter_replacement_is_additive() {
     let db = setup().await;
     let trust = HostTrustService::new(db.clone());
     let host = trust
@@ -165,29 +265,43 @@ async fn unavailable_adapter_service_rejects_all_authentication_paths() {
     let user_context = context(&trust, &host, "host-user").await;
     let service = IdentityAdapterService::unavailable(db.clone());
     let old_key = SigningKey::from_bytes(&[23; 32]);
-    assert!(matches!(
-        service
-            .register_adapter(RegisterIdentityAdapterRequest {
-                deployment_external_key: host.deployment_external_key.clone(),
-                external_key: "federated-v1".into(),
-                configuration: federated_configuration(&old_key),
-            })
-            .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
-    ));
+    service
+        .register_adapter(RegisterIdentityAdapterRequest {
+            deployment_external_key: host.deployment_external_key.clone(),
+            external_key: "federated-v1".into(),
+            configuration: federated_configuration(&old_key),
+        })
+        .await
+        .unwrap();
     let replayed = federated_request(&old_key, "federated-v1", "person@example.test");
-    assert!(matches!(
-        service
-            .authenticate(&user_context, replayed.clone(), Utc::now())
-            .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
-    ));
+    service
+        .authenticate(&user_context, replayed.clone(), Utc::now())
+        .await
+        .unwrap();
     assert!(matches!(
         service
             .authenticate(&user_context, replayed, Utc::now())
             .await,
-        Err(IdentityAdapterError::AdapterUnavailable)
+        Err(IdentityAdapterError::ProofReplayed)
     ));
+    let replacement_key = SigningKey::from_bytes(&[29; 32]);
+    service
+        .register_adapter(RegisterIdentityAdapterRequest {
+            deployment_external_key: host.deployment_external_key.clone(),
+            external_key: "federated-v2".into(),
+            configuration: federated_configuration(&replacement_key),
+        })
+        .await
+        .unwrap();
+    let replaced = service
+        .authenticate(
+            &user_context,
+            federated_request(&replacement_key, "federated-v2", "person@example.test"),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replaced.user_context_id, user_context.id);
 }
 
 #[tokio::test]
@@ -239,7 +353,7 @@ async fn public_identity_endpoints_require_operator_or_fresh_host_proofs() {
         )
         .await
         .unwrap();
-    assert_eq!(registered.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(registered.status(), StatusCode::CREATED);
 
     let host_context = HostContextRequest {
         host_user_id: "http-user".into(),
@@ -276,9 +390,15 @@ async fn public_identity_endpoints_require_operator_or_fresh_host_proofs() {
         )
         .await
         .unwrap();
-    assert_eq!(authenticated.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(authenticated.status(), StatusCode::OK);
     let body = to_bytes(authenticated.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert!(body.is_empty() || body.starts_with(b"{"));
+    let response: vox_core::identity_adapters::AuthenticationResult =
+        serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        response.user_context_id,
+        context(&trust, &host, "http-user").await.id
+    );
+    assert!(response.authentication_token.len() >= 64);
 }
