@@ -6,8 +6,8 @@ use vox_core::{
     db::Db,
     host_trust::{HostTrustService, RegisterHostAppRequest},
     identity::{
-        DeploymentId, HostAppId, HostOrganizationId, IdentityError, IdentityService,
-        UserContextSubject,
+        ChannelIdentity, DeploymentId, HostAppId, HostOrganizationId, IdentityError,
+        IdentityService, UserContextSubject,
     },
 };
 
@@ -172,5 +172,66 @@ async fn context_resolution_rejects_invalid_host_user_ids() {
     assert!(matches!(
         identities.resolve_context(&oversized_user).await,
         Err(IdentityError::InvalidContext)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn legacy_ownership_uses_persisted_context_but_cannot_be_host_asserted() {
+    let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is required");
+    let db = Db::connect(&database_url).await.expect("connect database");
+    db.migrate().await.expect("migrate database");
+    let identities = IdentityService::new(db.clone());
+    let owner = identities
+        .resolve_legacy_owner(&ChannelIdentity {
+            channel: "test-channel".into(),
+            external_id: format!("legacy-{}", Uuid::new_v4()),
+        })
+        .await
+        .expect("create transitional legacy owner");
+    assert_ne!(owner.user_context_id.0, owner.user_id.0);
+    assert_eq!(
+        identities.owner_for_user(owner.user_id).await.unwrap(),
+        owner
+    );
+
+    let (deployment_id, host_app_id): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT d.id, h.id FROM platform_deployments d
+         JOIN host_apps h ON h.deployment_id = d.id
+         WHERE d.external_key = 'vox.legacy.deployment'
+           AND h.external_key = 'vox.legacy.channel-host'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let legacy_subject = UserContextSubject {
+        deployment_id: DeploymentId(deployment_id),
+        host_app_id: HostAppId(host_app_id),
+        organization_id: None,
+        host_user_id: owner.user_id.0.to_string(),
+    };
+    assert!(matches!(
+        identities.resolve_context(&legacy_subject).await,
+        Err(IdentityError::AccessDenied)
+    ));
+
+    let (deployment_id, host_app_id): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT d.id, h.id FROM platform_deployments d
+         JOIN host_apps h ON h.deployment_id = d.id
+         WHERE d.external_key = 'vox.standalone.deployment'
+           AND h.external_key = 'vox.standalone.web'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let standalone_subject = UserContextSubject {
+        deployment_id: DeploymentId(deployment_id),
+        host_app_id: HostAppId(host_app_id),
+        organization_id: None,
+        host_user_id: "arbitrary-user".into(),
+    };
+    assert!(matches!(
+        identities.resolve_context(&standalone_subject).await,
+        Err(IdentityError::AccessDenied)
     ));
 }

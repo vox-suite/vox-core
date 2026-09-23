@@ -56,6 +56,23 @@ pub async fn exchange_token(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+        let context_inserted = sqlx::query(
+            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+             SELECT d.id, h.id, $1::text, $2::uuid \
+             FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = 'vox.standalone.deployment' \
+               AND h.external_key = 'vox.standalone.web'",
+        )
+        .bind(new_uid.to_string())
+        .bind(new_uid)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if context_inserted.rows_affected() != 1 {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
         let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO auth_identities (user_id, issuer, subject) \
              VALUES ($1, $2, $3) \
@@ -87,6 +104,17 @@ pub async fn exchange_token(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         }
     };
+
+    let has_context = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !has_context {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let device_id = if let Some(device_id) = payload.device_id {
         let owns_device = sqlx::query_scalar::<_, bool>(

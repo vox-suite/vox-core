@@ -16,7 +16,7 @@ use vox_core::{
     },
     bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest, OutboundCallResponse},
     db::Db,
-    identity::{ResourceOwner, UserContextId, UserId},
+    identity::{ChannelIdentity, IdentityService, ResourceOwner},
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
 };
@@ -54,30 +54,16 @@ async fn setup() -> (Db, ResourceOwner, String) {
     let db = Db::connect(&url).await.unwrap();
     db.migrate().await.unwrap();
 
-    let user_id = Uuid::new_v4();
-    let phone = "+15551234567";
-
-    sqlx::query("INSERT INTO users (id) VALUES ($1)")
-        .bind(user_id)
-        .execute(db.pool())
+    let phone = format!("+1555{:08}", Uuid::new_v4().as_u128() % 100_000_000);
+    let owner = IdentityService::new(db.clone())
+        .resolve_legacy_owner(&ChannelIdentity {
+            channel: "phone".into(),
+            external_id: phone.clone(),
+        })
         .await
         .unwrap();
 
-    sqlx::query(
-        "INSERT INTO channel_identities (user_id, channel, normalized_external_id) VALUES ($1, 'phone', $2)",
-    )
-    .bind(user_id)
-    .bind(phone)
-    .execute(db.pool())
-    .await
-    .unwrap();
-
-    let owner = ResourceOwner {
-        user_context_id: UserContextId(user_id),
-        user_id: UserId(user_id),
-    };
-
-    (db, owner, phone.to_string())
+    (db, owner, phone)
 }
 
 #[tokio::test]

@@ -105,6 +105,25 @@ impl IdentityService {
     ) -> Result<ResolvedUserContext, IdentityError> {
         let host_user_id = subject.normalized_host_user_id()?;
 
+        let is_internal_scope = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(\
+                SELECT 1 FROM host_apps h \
+                JOIN platform_deployments d ON d.id = h.deployment_id \
+                WHERE h.deployment_id = $1 AND h.id = $2 \
+                  AND (d.external_key, h.external_key) IN (\
+                    ('vox.legacy.deployment', 'vox.legacy.channel-host'), \
+                    ('vox.standalone.deployment', 'vox.standalone.web')\
+                  )\
+            )",
+        )
+        .bind(subject.deployment_id.0)
+        .bind(subject.host_app_id.0)
+        .fetch_one(self.db.pool())
+        .await?;
+        if is_internal_scope {
+            return Err(IdentityError::AccessDenied);
+        }
+
         let scope_exists = if let Some(organization_id) = subject.organization_id {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(\
@@ -251,8 +270,14 @@ impl IdentityService {
     }
 
     pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
+        let context_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
+                .bind(user_id.0)
+                .fetch_optional(self.db.pool())
+                .await?
+                .ok_or(IdentityError::AccessDenied)?;
         Ok(ResourceOwner {
-            user_context_id: UserContextId(user_id.0),
+            user_context_id: UserContextId(context_id),
             user_id,
         })
     }
@@ -315,6 +340,19 @@ impl IdentityService {
             sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
                 .fetch_one(&mut *tx)
                 .await?;
+
+        sqlx::query(
+            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+             SELECT d.id, h.id, $1::text, $2::uuid \
+             FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = 'vox.legacy.deployment' \
+               AND h.external_key = 'vox.legacy.channel-host'",
+        )
+        .bind(new_user.to_string())
+        .bind(new_user)
+        .execute(&mut *tx)
+        .await?;
 
         let inserted = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \

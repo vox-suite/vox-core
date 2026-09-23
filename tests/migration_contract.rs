@@ -67,6 +67,23 @@ async fn migration_creates_the_complete_core_schema() {
         "integration_capability_declarations",
         "external_connections",
         "agent_capability_grants",
+        "auth_identities",
+        "channel_identities",
+        "auth_sessions",
+        "conversations",
+        "collections",
+        "tasks",
+        "schedules",
+        "jobs",
+        "data_schemas",
+        "records",
+        "devices",
+        "connections",
+        "action_proposals",
+        "action_approvals",
+        "executions",
+        "inbound_events",
+        "audit_events",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
@@ -74,7 +91,10 @@ async fn migration_creates_the_complete_core_schema() {
         );
     }
     assert_eq!(
-        names.iter().filter(|name| *name != "_sqlx_migrations").count(),
+        names
+            .iter()
+            .filter(|name| *name != "_sqlx_migrations")
+            .count(),
         41,
         "expected consumer and platform tables, found: {names:?}"
     );

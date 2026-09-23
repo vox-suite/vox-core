@@ -101,11 +101,12 @@ impl OutboundCallService {
         .await;
 
         sqlx::query(
-            "INSERT INTO conversations (id, user_id, channel, external_conversation_id) \
-             VALUES ($1, $2, 'phone', $3) \
-             ON CONFLICT (channel, external_conversation_id) DO NOTHING",
+            "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id) \
+             VALUES ($1, $2, $3, 'phone', $4) \
+             ON CONFLICT (user_context_id, channel, external_conversation_id) DO NOTHING",
         )
         .bind(conversation_id)
+        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(conversation_id.to_string())
         .execute(self.db.pool())
@@ -167,13 +168,11 @@ impl OutboundCallService {
                 "provider_call_id": response.provider_call_id,
                 "state": "in_progress",
             });
-            sqlx::query(
-                "UPDATE jobs SET checkpoint = $1 WHERE id = $2",
-            )
-            .bind(&updated)
-            .bind(job_id)
-            .execute(self.db.pool())
-            .await?;
+            sqlx::query("UPDATE jobs SET checkpoint = $1 WHERE id = $2")
+                .bind(&updated)
+                .bind(job_id)
+                .execute(self.db.pool())
+                .await?;
 
             Some(response.provider_call_id)
         } else {

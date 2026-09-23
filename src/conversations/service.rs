@@ -830,12 +830,13 @@ impl ConversationService {
 
         let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
-            "INSERT INTO conversations (user_id, channel, external_conversation_id) \
-             VALUES ($1, $2, $3) \
-             ON CONFLICT (channel, external_conversation_id) \
+            "INSERT INTO conversations (user_context_id, user_id, channel, external_conversation_id) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (user_context_id, channel, external_conversation_id) \
              DO UPDATE SET updated_at = now() \
              RETURNING id, user_id",
         )
+        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(channel.trim())
         .bind(external_id.trim())
@@ -997,7 +998,6 @@ pub fn extract_name_from_text(text: &str) -> Option<String> {
 
     None
 }
-
 
 #[allow(dead_code)]
 fn accumulate_phone(previous: &str, incoming: &str) -> String {

@@ -1,7 +1,8 @@
 use crate::{
     db::Db,
     identity::{
-        DeploymentId, HostAppId, ResolvedUserContext, UserContextId, UserContextSubject, UserId,
+        DeploymentId, HostAppId, HostOrganizationId, ResolvedUserContext, UserContextId,
+        UserContextSubject, UserId,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -280,19 +281,27 @@ impl DurableTaskService {
         &self,
         task_id: Uuid,
     ) -> Result<ResolvedUserContext, DurableTaskError> {
-        let user_id = sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM tasks WHERE id=$1")
-            .bind(task_id)
-            .fetch_optional(self.db.pool())
-            .await?
-            .ok_or(DurableTaskError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT t.user_id, c.id AS context_id, c.deployment_id, c.host_app_id, \
+                    c.organization_id, c.host_user_id \
+             FROM tasks t JOIN user_contexts c \
+               ON c.id = t.user_context_id AND c.user_id = t.user_id \
+             WHERE t.id = $1",
+        )
+        .bind(task_id)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(DurableTaskError::NotFound)?;
         Ok(ResolvedUserContext {
-            id: UserContextId(user_id),
-            user_id: UserId(user_id),
+            id: UserContextId(row.get("context_id")),
+            user_id: UserId(row.get("user_id")),
             subject: UserContextSubject {
-                deployment_id: DeploymentId(Uuid::nil()),
-                host_app_id: HostAppId(Uuid::nil()),
-                organization_id: None,
-                host_user_id: String::new(),
+                deployment_id: DeploymentId(row.get("deployment_id")),
+                host_app_id: HostAppId(row.get("host_app_id")),
+                organization_id: row
+                    .get::<Option<Uuid>, _>("organization_id")
+                    .map(HostOrganizationId),
+                host_user_id: row.get("host_user_id"),
             },
         })
     }

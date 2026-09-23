@@ -1,7 +1,10 @@
 use crate::{
     db::Db,
     execution::{AdapterOutcome, Execution, ExecutionCoordinator, ExecutionError},
-    identity::{DeploymentId, HostAppId, ResolvedUserContext, UserContextId, UserId},
+    identity::{
+        DeploymentId, HostAppId, HostOrganizationId, ResolvedUserContext, UserContextId,
+        UserContextSubject, UserId,
+    },
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -184,8 +187,12 @@ impl StatusService {
             trimmed(&incoming.external_account_reference, 512).ok_or(StatusError::Invalid)?,
         ));
         let row = sqlx::query(
-            "SELECT e.user_id, e.provider_reference \
-             FROM executions e JOIN connections c ON c.id = e.connection_id \
+            "SELECT e.user_id, e.provider_reference, uc.id AS context_id, \
+                    uc.deployment_id, uc.host_app_id, uc.organization_id, uc.host_user_id \
+             FROM executions e \
+             JOIN connections c ON c.id = e.connection_id \
+               AND c.user_id = e.user_id AND c.user_context_id = e.user_context_id \
+             JOIN user_contexts uc ON uc.id = e.user_context_id AND uc.user_id = e.user_id \
              WHERE e.id = $1 AND c.provider_key = $2 AND c.external_account_hash = $3",
         )
         .bind(incoming.execution_id)
@@ -199,9 +206,25 @@ impl StatusService {
             return Err(StatusError::NotFound);
         }
         let user_id: Uuid = row.get("user_id");
-        let context = context_from_user_id(user_id);
+        let context = ResolvedUserContext {
+            id: UserContextId(row.get("context_id")),
+            user_id: UserId(user_id),
+            subject: UserContextSubject {
+                deployment_id: DeploymentId(row.get("deployment_id")),
+                host_app_id: HostAppId(row.get("host_app_id")),
+                organization_id: row
+                    .get::<Option<Uuid>, _>("organization_id")
+                    .map(HostOrganizationId),
+                host_user_id: row.get("host_user_id"),
+            },
+        };
         coordinator
-            .record_verified_external_outcome(&context, incoming.execution_id, incoming.outcome, now)
+            .record_verified_external_outcome(
+                &context,
+                incoming.execution_id,
+                incoming.outcome,
+                now,
+            )
             .await
             .map_err(StatusError::from)
     }
@@ -233,19 +256,6 @@ impl WebhookDeliveryWorker {
         _now: DateTime<Utc>,
     ) -> Result<bool, StatusError> {
         Ok(false)
-    }
-}
-
-fn context_from_user_id(user_id: Uuid) -> ResolvedUserContext {
-    ResolvedUserContext {
-        id: UserContextId(user_id),
-        user_id: UserId(user_id),
-        subject: crate::identity::UserContextSubject {
-            deployment_id: DeploymentId(Uuid::nil()),
-            host_app_id: HostAppId(Uuid::nil()),
-            organization_id: None,
-            host_user_id: String::new(),
-        },
     }
 }
 

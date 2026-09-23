@@ -61,7 +61,7 @@ impl TaskExecutorHandler {
 
     pub async fn handle(&self, task_id: Uuid) -> Result<(), TaskExecutorError> {
         let task_row = sqlx::query(
-            "SELECT user_id, title, instruction, execution_type, status \
+            "SELECT user_id, user_context_id, title, instruction, execution_type, status \
              FROM tasks \
              WHERE id = $1",
         )
@@ -77,18 +77,16 @@ impl TaskExecutorHandler {
 
         let user_id = UserId(task_row.get("user_id"));
         let owner = ResourceOwner {
-            user_context_id: UserContextId(user_id.0),
+            user_context_id: UserContextId(task_row.get("user_context_id")),
             user_id,
         };
         let title: String = task_row.get("title");
         let instruction: String = task_row.get("instruction");
 
-        sqlx::query(
-            "UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1",
-        )
-        .bind(task_id)
-        .execute(self.db.pool())
-        .await?;
+        sqlx::query("UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1")
+            .bind(task_id)
+            .execute(self.db.pool())
+            .await?;
 
         let client = gemini::Client::new(&self.api_key)
             .map_err(|e| TaskExecutorError::Agent(e.to_string()))?;

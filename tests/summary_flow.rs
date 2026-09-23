@@ -12,7 +12,7 @@ use vox_core::{
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
     db::Db,
-    identity::{ChannelIdentity, UserId},
+    identity::{ChannelIdentity, IdentityService, UserId},
     memory::{
         MemoryService,
         cache::{CacheError, ContextCache},
@@ -138,10 +138,15 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
 #[ignore = "requires isolated PostgreSQL"]
 async fn projection_drops_old_recaps_before_commitments_and_stays_valid_json() {
     let db = setup().await;
-    let user_id: uuid::Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
-        .fetch_one(db.pool())
+    let user_id = IdentityService::new(db.clone())
+        .resolve_legacy_owner(&ChannelIdentity {
+            channel: "test-channel".into(),
+            external_id: format!("projection-{}", uuid::Uuid::new_v4()),
+        })
         .await
-        .unwrap();
+        .unwrap()
+        .user_id
+        .0;
     for index in 0..20 {
         sqlx::query(
             "INSERT INTO conversations (user_id, channel, external_conversation_id, state, latest_summary, summary_version) \
