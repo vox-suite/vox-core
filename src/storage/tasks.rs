@@ -130,7 +130,12 @@ impl TaskRepository {
         }))
     }
 
-    pub async fn list(&self, user_id: Uuid, limit: i64) -> Result<Vec<Task>, sqlx::Error> {
+    pub async fn list(
+        &self,
+        user_id: Uuid,
+        collection_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<Task>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, user_id, collection_id, title, instruction, status, priority,
@@ -138,12 +143,14 @@ impl TaskRepository {
                    version, cancellation_requested_at, created_at, updated_at, completed_at
             FROM tasks
             WHERE user_id = $1
+              AND ($3::UUID IS NULL OR collection_id = $3)
             ORDER BY created_at DESC
             LIMIT $2
             "#,
         )
         .bind(user_id)
         .bind(limit)
+        .bind(collection_id)
         .fetch_all(&self.pool)
         .await?;
 

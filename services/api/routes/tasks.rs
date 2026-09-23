@@ -17,6 +17,7 @@ use vox_core::{
 #[derive(Deserialize)]
 pub struct ListTasksQuery {
     pub limit: Option<i64>,
+    pub collection_id: Option<Uuid>,
 }
 
 pub async fn list_tasks(
@@ -26,7 +27,7 @@ pub async fn list_tasks(
 ) -> Result<impl IntoResponse, StatusCode> {
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let tasks = service
-        .list_tasks(&actor, limit)
+        .list_tasks(&actor, query.collection_id, limit)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(tasks))

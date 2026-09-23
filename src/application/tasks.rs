@@ -112,8 +112,13 @@ impl TaskService {
         self.repo.get_by_id(actor.user_id, id).await
     }
 
-    pub async fn list_tasks(&self, actor: &Actor, limit: i64) -> Result<Vec<Task>, sqlx::Error> {
-        self.repo.list(actor.user_id, limit).await
+    pub async fn list_tasks(
+        &self,
+        actor: &Actor,
+        collection_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<Task>, sqlx::Error> {
+        self.repo.list(actor.user_id, collection_id, limit).await
     }
 
     pub async fn delete_task(&self, actor: &Actor, id: Uuid) -> Result<bool, sqlx::Error> {
