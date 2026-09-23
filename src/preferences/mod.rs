@@ -15,8 +15,7 @@ pub const SENSITIVE_PREFERENCE_KEYS: &[&str] = &[
     "payment_method_preference",
 ];
 
-pub const AUTHORITY_DISCLAIMER: &str =
-    "User preference is advisory context only. It confers no execution authority. Provider currency, timezone, and inventory facts remain strictly authoritative.";
+pub const AUTHORITY_DISCLAIMER: &str = "User preference is advisory context only. It confers no execution authority. Provider currency, timezone, and inventory facts remain strictly authoritative.";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UserPreference {
@@ -76,11 +75,13 @@ impl PreferenceService {
             return Err(PreferenceError::Invalid("invalid preference key".into()));
         }
         if req.value.is_null() {
-            return Err(PreferenceError::Invalid("preference value cannot be null".into()));
+            return Err(PreferenceError::Invalid(
+                "preference value cannot be null".into(),
+            ));
         }
 
-        let is_sensitive = req.is_sensitive.unwrap_or(false)
-            || SENSITIVE_PREFERENCE_KEYS.contains(&key);
+        let is_sensitive =
+            req.is_sensitive.unwrap_or(false) || SENSITIVE_PREFERENCE_KEYS.contains(&key);
 
         let mut tx = self.db.pool().begin().await?;
 
@@ -99,10 +100,8 @@ impl PreferenceService {
             .unwrap_or(false);
 
         // Sensitive preferences require confirmation before initial save OR replacement
-        if is_sensitive || existing_was_sensitive {
-            if req.confirmed != Some(true) {
-                return Err(PreferenceError::ConfirmationRequired);
-            }
+        if (is_sensitive || existing_was_sensitive) && req.confirmed != Some(true) {
+            return Err(PreferenceError::ConfirmationRequired);
         }
 
         let confirmed_at = if is_sensitive { Some(now) } else { None };
