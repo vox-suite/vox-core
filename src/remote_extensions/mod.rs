@@ -9,6 +9,8 @@ use sqlx::Row;
 use url::Url;
 use uuid::Uuid;
 
+pub mod adapters;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionProtocol {
@@ -209,6 +211,14 @@ pub struct ExtensionCapability {
     pub data_recipients: Vec<String>,
     #[serde(default)]
     pub access_needs: Vec<String>,
+    #[serde(default)]
+    pub optional_guarantees: Value,
+}
+
+impl ExtensionCapability {
+    pub fn optional_guarantees(&self) -> Value {
+        self.optional_guarantees.clone()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
