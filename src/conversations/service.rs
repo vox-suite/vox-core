@@ -59,6 +59,11 @@ pub struct ConversationService {
     pub(super) jev: Option<crate::jev::JevClient>,
     pub(super) speculative: super::speculation::SpeculationCache,
     openings: Arc<tokio::sync::Mutex<std::collections::HashMap<String, OpeningTask>>>,
+    conversation_cache: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<(String, String), (ConversationId, UserId)>,
+        >,
+    >,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +101,7 @@ impl ConversationService {
             jev: None,
             openings: Arc::default(),
             speculative: Default::default(),
+            conversation_cache: Arc::default(),
         }
     }
 
@@ -129,8 +135,6 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
         let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
             return Err(ConversationError::Invalid);
@@ -153,7 +157,12 @@ impl ConversationService {
             )
             .await?;
 
-        let prior_messages = self.load_recent_messages(conversation_id).await?;
+        let (prior_messages_res, known_name_res) = tokio::join!(
+            self.load_recent_messages(conversation_id),
+            self.memory.get_user_name(active_user_id),
+        );
+        let prior_messages = prior_messages_res?;
+        let known_name = known_name_res?;
 
         let outcome = self
             .process_voice_verification(
@@ -161,6 +170,7 @@ impl ConversationService {
                 conversation_id,
                 &mut request,
                 &prior_messages,
+                known_name,
             )
             .await?;
 
@@ -288,8 +298,6 @@ impl ConversationService {
         {
             return self.cached_opening(request).await;
         }
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
         let request_started = std::time::Instant::now();
         let identity_resolved = std::time::Instant::now();
         let user_id = owner.user_id;
@@ -315,16 +323,22 @@ impl ConversationService {
             .await?;
 
         let conversation_resolved = std::time::Instant::now();
-        let prior_messages = self.load_recent_messages(conversation_id).await?;
+        let (prior_messages_res, known_name_res) = tokio::join!(
+            self.load_recent_messages(conversation_id),
+            self.memory.get_user_name(active_user_id),
+        );
+        let prior_messages = prior_messages_res?;
+        let known_name = known_name_res?;
         let history_loaded = std::time::Instant::now();
 
-        let user_message_saved = std::time::Instant::now();
+        let verification_started = std::time::Instant::now();
         let outcome = self
             .process_voice_verification(
                 active_user_id,
                 conversation_id,
                 &mut request,
                 &prior_messages,
+                known_name,
             )
             .await?;
 
@@ -335,7 +349,7 @@ impl ConversationService {
             history_ms = history_loaded
                 .duration_since(conversation_resolved)
                 .as_millis(),
-            verification_ms = user_message_saved.elapsed().as_millis(),
+            verification_ms = verification_started.elapsed().as_millis(),
             intercepted = matches!(&outcome, VoiceVerificationOutcome::Intercept(_)),
             "CORE_TURN_PREPARATION"
         );
@@ -386,8 +400,8 @@ impl ConversationService {
                 identity_ms = identity_resolved.duration_since(request_started).as_millis(),
                 conversation_ms = conversation_resolved.duration_since(identity_resolved).as_millis(),
                 history_ms = history_loaded.duration_since(conversation_resolved).as_millis(),
-                user_message_ms = user_message_saved.duration_since(history_loaded).as_millis(),
-                verification_ms = verification_finished.duration_since(user_message_saved).as_millis(),
+                user_message_ms = verification_started.duration_since(history_loaded).as_millis(),
+                verification_ms = verification_finished.duration_since(verification_started).as_millis(),
                 name_ms = name_loaded.duration_since(verification_finished).as_millis(),
                 assistant_message_ms = name_loaded.elapsed().as_millis(),
                 total_ms = request_started.elapsed().as_millis(),
@@ -667,13 +681,19 @@ impl ConversationService {
         _conversation_id: ConversationId,
         request: &mut RespondRequest,
         prior_messages: &[PromptMessage],
+        known_name: Option<String>,
     ) -> Result<VoiceVerificationOutcome, ConversationError> {
-        let known_name = self.memory.get_user_name(user_id).await?;
         let has_name = known_name
             .as_deref()
             .is_some_and(|name| !name.trim().is_empty());
         if !has_name && let Some(name) = extract_name_from_text(&request.text) {
-            self.memory.set_user_name(user_id, &name).await?;
+            let memory = self.memory.clone();
+            let name_to_save = name.clone();
+            tokio::spawn(async move {
+                if let Err(e) = memory.set_user_name(user_id, &name_to_save).await {
+                    tracing::warn!(%e, "Failed to persist user name in background");
+                }
+            });
             if prior_messages.is_empty() {
                 return Ok(VoiceVerificationOutcome::Intercept(format!(
                     "Nice to meet you {}! How can I help you today?",
@@ -716,8 +736,10 @@ impl ConversationService {
         {
             return Err(ConversationError::Invalid);
         }
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
+        self.conversation_cache.write().await.remove(&(
+            request.identity.channel.trim().to_string(),
+            request.external_conversation_id.trim().to_string(),
+        ));
         let conversation = sqlx::query(
             "SELECT id FROM conversations \
              WHERE channel = $1 AND external_conversation_id = $2 AND user_id = $3",
@@ -781,24 +803,30 @@ impl ConversationService {
         channel: &str,
         external_id: &str,
     ) -> Result<(ConversationId, UserId), ConversationError> {
-        let mut tx = self.db.pool().begin().await?;
+        let cache_key = (channel.trim().to_string(), external_id.trim().to_string());
+        if let Some(cached) = self.conversation_cache.read().await.get(&cache_key) {
+            return Ok(*cached);
+        }
+
         let existing = sqlx::query(
             "SELECT id, user_id FROM conversations \
-             WHERE user_id = $1 AND channel = $2 AND external_conversation_id = $3 \
-             FOR UPDATE",
+             WHERE user_id = $1 AND channel = $2 AND external_conversation_id = $3",
         )
         .bind(owner.user_id.0)
         .bind(channel.trim())
         .bind(external_id.trim())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(self.db.pool())
         .await?;
 
         if let Some(row) = existing {
             let conversation_id: Uuid = row.get("id");
-            tx.commit().await?;
-            return Ok((ConversationId(conversation_id), UserId(row.get("user_id"))));
+            let user_id: Uuid = row.get("user_id");
+            let result = (ConversationId(conversation_id), UserId(user_id));
+            self.conversation_cache.write().await.insert(cache_key, result);
+            return Ok(result);
         }
 
+        let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
             "INSERT INTO conversations (user_id, channel, external_conversation_id) \
              VALUES ($1, $2, $3) \
@@ -813,7 +841,9 @@ impl ConversationService {
         .await?;
         let stored_user: Uuid = row.get("user_id");
         tx.commit().await?;
-        Ok((ConversationId(row.get("id")), UserId(stored_user)))
+        let result = (ConversationId(row.get("id")), UserId(stored_user));
+        self.conversation_cache.write().await.insert(cache_key, result);
+        Ok(result)
     }
 
     pub(super) async fn append_turn(

@@ -18,23 +18,28 @@ struct UserContextProjection {
 }
 
 pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
-    let profile =
-        sqlx::query_scalar::<_, Value>("SELECT profile_facts FROM users WHERE id = $1")
+    let (profile, rows) = tokio::try_join!(
+        async {
+            sqlx::query_scalar::<_, Value>("SELECT profile_facts FROM users WHERE id = $1")
+                .bind(user_id.0)
+                .fetch_optional(db.pool())
+                .await
+        },
+        async {
+            sqlx::query(
+                "SELECT latest_summary->>'recap' AS recap, \
+                        COALESCE(latest_summary->'commitments', '[]'::jsonb) AS commitments, \
+                        COALESCE(latest_summary->'decisions', '[]'::jsonb) AS decisions \
+                 FROM conversations \
+                 WHERE user_id = $1 AND summary_version > 0 \
+                 ORDER BY updated_at DESC LIMIT 50",
+            )
             .bind(user_id.0)
-            .fetch_optional(db.pool())
-            .await?
-            .unwrap_or_else(|| serde_json::json!({}));
-    let rows = sqlx::query(
-        "SELECT latest_summary->>'recap' AS recap, \
-                COALESCE(latest_summary->'commitments', '[]'::jsonb) AS commitments, \
-                COALESCE(latest_summary->'decisions', '[]'::jsonb) AS decisions \
-         FROM conversations \
-         WHERE user_id = $1 AND summary_version > 0 \
-         ORDER BY updated_at DESC LIMIT 50",
-    )
-    .bind(user_id.0)
-    .fetch_all(db.pool())
-    .await?;
+            .fetch_all(db.pool())
+            .await
+        }
+    )?;
+    let profile = profile.unwrap_or_else(|| serde_json::json!({}));
     let mut projection = UserContextProjection {
         current_time_utc: chrono::Utc::now().to_rfc3339(),
         profile,
@@ -59,35 +64,18 @@ fn json_strings(value: Value) -> Vec<String> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+        .filter_map(|entry| entry.as_str().map(ToOwned::to_owned))
         .collect()
 }
 
 fn bounded_json(projection: &mut UserContextProjection) -> Result<String, sqlx::Error> {
-    loop {
+    while !projection.recent_recaps.is_empty() {
         let serialized = serde_json::to_string(projection)
-            .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         if serialized.len() <= MAX_CONTEXT_BYTES {
             return Ok(serialized);
         }
-        if !projection.recent_recaps.is_empty() {
-            projection.recent_recaps.pop();
-        } else if !projection.decisions.is_empty() {
-            projection.decisions.pop();
-        } else if !projection.commitments.is_empty() {
-            projection.commitments.pop();
-        } else if let Some(key) = projection
-            .profile
-            .as_object()
-            .and_then(|facts| facts.keys().next_back().cloned())
-        {
-            projection
-                .profile
-                .as_object_mut()
-                .expect("profile object")
-                .remove(&key);
-        } else {
-            return Ok("{}".into());
-        }
+        projection.recent_recaps.pop();
     }
+    serde_json::to_string(projection).map_err(|error| sqlx::Error::Decode(Box::new(error)))
 }

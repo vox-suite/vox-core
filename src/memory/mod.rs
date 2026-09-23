@@ -13,20 +13,35 @@ use std::sync::Arc;
 pub struct MemoryService {
     db: Db,
     cache: Option<Arc<dyn cache::ContextCache>>,
+    projection_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<UserId, (String, std::time::Instant)>>>,
 }
 
 impl MemoryService {
     pub fn new(db: Db, cache: Option<Arc<dyn cache::ContextCache>>) -> Self {
-        Self { db, cache }
+        Self {
+            db,
+            cache,
+            projection_cache: Arc::default(),
+        }
     }
 
     pub fn cache(&self) -> Option<&Arc<dyn cache::ContextCache>> {
         self.cache.as_ref()
     }
 
-    /// Full LLM context projection — always built from Postgres (not Redis).
+    /// Full LLM context projection — cached in-memory with TTL to avoid repeated DB scans during turns.
     pub async fn load(&self, user_id: UserId) -> Result<String, sqlx::Error> {
-        projection::build(&self.db, user_id).await
+        if let Some((projection, at)) = self.projection_cache.read().await.get(&user_id) {
+            if at.elapsed() < std::time::Duration::from_secs(30) {
+                return Ok(projection.clone());
+            }
+        }
+        let value = projection::build(&self.db, user_id).await?;
+        self.projection_cache
+            .write()
+            .await
+            .insert(user_id, (value.clone(), std::time::Instant::now()));
+        Ok(value)
     }
 
     pub async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, sqlx::Error> {
@@ -58,6 +73,7 @@ impl MemoryService {
     }
 
     pub async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), sqlx::Error> {
+        self.projection_cache.write().await.remove(&user_id);
         let trimmed = name.trim();
         sqlx::query(
             "UPDATE users SET \
@@ -97,6 +113,10 @@ impl MemoryService {
     pub async fn refresh(&self, user_id: UserId) -> Result<String, sqlx::Error> {
         // Projection is Postgres-only; refresh also rewrites the minimal Redis user.
         let value = projection::build(&self.db, user_id).await?;
+        self.projection_cache
+            .write()
+            .await
+            .insert(user_id, (value.clone(), std::time::Instant::now()));
         let _ = self.write_minimal_user(user_id, None).await;
         Ok(value)
     }
