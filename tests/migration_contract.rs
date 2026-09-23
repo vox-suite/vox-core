@@ -47,6 +47,26 @@ async fn migration_creates_the_complete_core_schema() {
         "execution_attempts",
         "inbound_events",
         "audit_events",
+        "platform_deployments",
+        "host_apps",
+        "host_organizations",
+        "user_contexts",
+        "host_app_credentials",
+        "host_app_assertion_nonces",
+        "identity_adapters",
+        "login_identities",
+        "federated_identity_nonces",
+        "passwordless_recovery_challenges",
+        "identity_authentication_sessions",
+        "identity_links",
+        "identity_link_events",
+        "agent_definitions",
+        "agent_model_configurations",
+        "deployment_agent_selections",
+        "integration_definitions",
+        "integration_capability_declarations",
+        "external_connections",
+        "agent_capability_grants",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
@@ -54,9 +74,9 @@ async fn migration_creates_the_complete_core_schema() {
         );
     }
     assert_eq!(
-        names.len(),
-        21,
-        "expected exactly 21 core tables, found: {names:?}"
+        names.iter().filter(|name| *name != "_sqlx_migrations").count(),
+        41,
+        "expected consumer and platform tables, found: {names:?}"
     );
 
     let view_rows = sqlx::query(
@@ -90,8 +110,15 @@ async fn migration_creates_the_complete_core_schema() {
     .fetch_all(&pool)
     .await
     .expect("list tables with user_context_id");
-    assert!(
-        scoped_resources.is_empty(),
-        "core schema must not use user_context_id columns: {scoped_resources:?}"
-    );
+    for expected in [
+        "login_identities",
+        "passwordless_recovery_challenges",
+        "external_connections",
+        "agent_capability_grants",
+    ] {
+        assert!(
+            scoped_resources.iter().any(|table| table == expected),
+            "missing context scope for {expected}: {scoped_resources:?}"
+        );
+    }
 }
