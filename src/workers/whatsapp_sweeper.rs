@@ -17,9 +17,9 @@ impl WhatsAppSweeper {
     pub async fn sweep_inactive_conversations(&self) -> Result<usize, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT c.id FROM conversations c \
-             WHERE c.channel = 'whatsapp' AND c.status = 'active' \
+             WHERE c.channel = 'whatsapp' AND c.state = 'active' \
              AND ( \
-                 SELECT COALESCE(MAX(m.created_at), c.started_at) \
+                 SELECT COALESCE(MAX(m.created_at), c.created_at) \
                  FROM messages m WHERE m.conversation_id = c.id \
              ) < now() - INTERVAL '30 minutes' \
              LIMIT 25",
@@ -33,8 +33,9 @@ impl WhatsAppSweeper {
             let mut tx = self.db.pool().begin().await?;
 
             sqlx::query(
-                "UPDATE conversations SET status = 'completed', completed_at = now() \
-                 WHERE id = $1 AND status = 'active'",
+                "UPDATE conversations SET state = 'completed', completed_at = now(), \
+                 updated_at = now() \
+                 WHERE id = $1 AND state = 'active'",
             )
             .bind(conv_id)
             .execute(&mut *tx)
