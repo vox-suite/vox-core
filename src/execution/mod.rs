@@ -1,6 +1,7 @@
+pub use crate::execution_policy::ExecutionIdentity;
 use crate::{
     db::Db,
-    execution_policy::{ExecutionIdentity, ExecutionPolicyService, ExecutionRequest},
+    execution_policy::{ExecutionPolicyService, ExecutionRequest},
     identity::ResolvedUserContext,
 };
 use chrono::{DateTime, Utc};
@@ -124,7 +125,9 @@ impl ExecutionCoordinator {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ExecutionError::Unavailable)?;
-        if row.get::<Option<Uuid>, _>("consumed_execution_id").is_some()
+        if row
+            .get::<Option<Uuid>, _>("consumed_execution_id")
+            .is_some()
             || row.get::<String, _>("state") != "approved"
             || row.get::<DateTime<Utc>, _>("expires_at") <= now
         {
@@ -186,7 +189,9 @@ impl ExecutionCoordinator {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ExecutionError::Unavailable)?;
-        if row.get::<Option<Uuid>, _>("consumed_execution_id").is_some()
+        if row
+            .get::<Option<Uuid>, _>("consumed_execution_id")
+            .is_some()
             || row.get::<String, _>("state") != "approved"
         {
             return Err(ExecutionError::FreshApproval);
@@ -214,13 +219,11 @@ impl ExecutionCoordinator {
         .bind(request_hash)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE action_approvals SET consumed_execution_id = $2 WHERE id = $1",
-        )
-        .bind(request.approval_id)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE action_approvals SET consumed_execution_id = $2 WHERE id = $1")
+            .bind(request.approval_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(Execution {
             id,
@@ -413,12 +416,9 @@ impl ExecutionCoordinator {
             AdapterOutcome::Succeeded {
                 provider_reference,
                 evidence,
-            } if confirmation_evidence_is_present(&evidence) => (
-                "succeeded",
-                Some(provider_reference),
-                Some(evidence),
-                true,
-            ),
+            } if confirmation_evidence_is_present(&evidence) => {
+                ("succeeded", Some(provider_reference), Some(evidence), true)
+            }
             AdapterOutcome::Succeeded { .. } => return Err(ExecutionError::Invalid),
             AdapterOutcome::Failed { .. } => ("failed", None, None, true),
             AdapterOutcome::Cancelled {
@@ -437,9 +437,7 @@ impl ExecutionCoordinator {
             AdapterOutcome::Unknown {
                 provider_reference,
                 code: _,
-            } if allow_reconciling_transition => {
-                ("reconciling", provider_reference, None, false)
-            }
+            } if allow_reconciling_transition => ("reconciling", provider_reference, None, false),
             AdapterOutcome::Unknown {
                 provider_reference,
                 code: _,

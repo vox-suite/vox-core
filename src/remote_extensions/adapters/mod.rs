@@ -1,0 +1,317 @@
+use super::{AuthorizedEndpoint, ExtensionProtocol};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use uuid::Uuid;
+
+pub mod direct;
+pub mod execution;
+pub mod integrity;
+pub mod mcp;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseStatus {
+    Success,
+    ClientError,
+    ProviderError,
+    Timeout,
+    Uncertain,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AdapterExecutionError {
+    #[error("invalid payload: {0}")]
+    InvalidPayload(String),
+    #[error("network transport error: {0}")]
+    Network(String),
+    #[error("remote call timed out: {0}")]
+    Timeout(String),
+    #[error("provider rejected with code {code}: {message}")]
+    ProviderRejected { code: String, message: String },
+    #[error("protocol error: {0}")]
+    ProtocolError(String),
+    #[error("unsupported provider guarantee: {0}")]
+    UnsupportedGuarantee(String),
+    #[error("protocol adapter {0:?} is disabled")]
+    AdapterDisabled(ExtensionProtocol),
+    #[error("cryptographic integrity check failed: {0}")]
+    IntegrityError(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExtensionInvocation {
+    pub capability_key: String,
+    pub parameters: Value,
+    #[serde(default)]
+    pub access_context: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<Uuid>,
+    #[serde(default)]
+    pub required_guarantees: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NormalizedResponse {
+    pub status: ResponseStatus,
+    pub data: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guarantees_reported: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExtensionReconciliation {
+    pub capability_key: String,
+    pub execution_id: Uuid,
+    pub idempotency_key: String,
+    pub provider_reference: Option<String>,
+}
+
+#[async_trait::async_trait]
+pub trait ExtensionProtocolAdapter: Send + Sync {
+    fn protocol(&self) -> ExtensionProtocol;
+
+    async fn execute(
+        &self,
+        endpoint: &AuthorizedEndpoint,
+        invocation: &ExtensionInvocation,
+        secret: Option<&[u8]>,
+    ) -> Result<NormalizedResponse, AdapterExecutionError>;
+
+    async fn reconcile(
+        &self,
+        endpoint: &AuthorizedEndpoint,
+        reconciliation: &ExtensionReconciliation,
+        secret: Option<&[u8]>,
+    ) -> Result<NormalizedResponse, AdapterExecutionError>;
+}
+
+/// Router and mediator for protocol adapters with dynamic enable/disable and context minimization.
+pub struct ProtocolRouter {
+    mcp_adapter: Arc<dyn ExtensionProtocolAdapter>,
+    direct_adapter: Arc<dyn ExtensionProtocolAdapter>,
+    mcp_enabled: AtomicBool,
+    direct_enabled: AtomicBool,
+    signing_secret: Arc<Vec<u8>>,
+}
+
+impl ProtocolRouter {
+    pub fn new(
+        mcp: Arc<dyn ExtensionProtocolAdapter>,
+        direct: Arc<dyn ExtensionProtocolAdapter>,
+        signing_secret: Vec<u8>,
+    ) -> Self {
+        Self {
+            mcp_adapter: mcp,
+            direct_adapter: direct,
+            mcp_enabled: AtomicBool::new(true),
+            direct_enabled: AtomicBool::new(true),
+            signing_secret: Arc::new(signing_secret),
+        }
+    }
+
+    pub fn set_adapter_enabled(&self, protocol: ExtensionProtocol, enabled: bool) {
+        match protocol {
+            ExtensionProtocol::Mcp => self.mcp_enabled.store(enabled, Ordering::SeqCst),
+            ExtensionProtocol::Direct => self.direct_enabled.store(enabled, Ordering::SeqCst),
+        }
+    }
+
+    pub fn is_adapter_enabled(&self, protocol: ExtensionProtocol) -> bool {
+        match protocol {
+            ExtensionProtocol::Mcp => self.mcp_enabled.load(Ordering::SeqCst),
+            ExtensionProtocol::Direct => self.direct_enabled.load(Ordering::SeqCst),
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        endpoint: &AuthorizedEndpoint,
+        invocation: &ExtensionInvocation,
+    ) -> Result<NormalizedResponse, AdapterExecutionError> {
+        if !self.is_adapter_enabled(endpoint.protocol) {
+            return Err(AdapterExecutionError::AdapterDisabled(endpoint.protocol));
+        }
+
+        // Validate required guarantees against capability's optional guarantees or manifest
+        Self::validate_guarantees(
+            &invocation.required_guarantees,
+            &endpoint.capability.optional_guarantees(),
+        )?;
+
+        // Minimize context: filter parameters to declared access needs
+        let minimized_parameters =
+            Self::minimize_context(&invocation.parameters, &endpoint.capability.access_needs);
+
+        let minimized_invocation = ExtensionInvocation {
+            capability_key: invocation.capability_key.clone(),
+            parameters: minimized_parameters,
+            access_context: Value::Null, // internal context strictly stripped
+            idempotency_key: invocation.idempotency_key.clone(),
+            execution_id: invocation.execution_id,
+            required_guarantees: invocation.required_guarantees.clone(),
+        };
+
+        let secret = self.signing_secret.as_slice();
+        let raw_response = match endpoint.protocol {
+            ExtensionProtocol::Mcp => {
+                self.mcp_adapter
+                    .execute(endpoint, &minimized_invocation, Some(secret))
+                    .await?
+            }
+            ExtensionProtocol::Direct => {
+                self.direct_adapter
+                    .execute(endpoint, &minimized_invocation, Some(secret))
+                    .await?
+            }
+        };
+
+        // Redact any sensitive tokens or secrets from the response
+        let redacted_data = Self::redact_sensitive_payload(&raw_response.data);
+
+        Ok(NormalizedResponse {
+            status: raw_response.status,
+            data: redacted_data,
+            provider_reference: raw_response.provider_reference,
+            guarantees_reported: raw_response.guarantees_reported,
+            error_code: raw_response.error_code,
+            error_message: raw_response.error_message,
+        })
+    }
+
+    pub async fn reconcile(
+        &self,
+        endpoint: &AuthorizedEndpoint,
+        reconciliation: &ExtensionReconciliation,
+    ) -> Result<NormalizedResponse, AdapterExecutionError> {
+        if !self.is_adapter_enabled(endpoint.protocol) {
+            return Err(AdapterExecutionError::AdapterDisabled(endpoint.protocol));
+        }
+
+        let secret = self.signing_secret.as_slice();
+        let raw_response = match endpoint.protocol {
+            ExtensionProtocol::Mcp => {
+                self.mcp_adapter
+                    .reconcile(endpoint, reconciliation, Some(secret))
+                    .await?
+            }
+            ExtensionProtocol::Direct => {
+                self.direct_adapter
+                    .reconcile(endpoint, reconciliation, Some(secret))
+                    .await?
+            }
+        };
+
+        let redacted_data = Self::redact_sensitive_payload(&raw_response.data);
+
+        Ok(NormalizedResponse {
+            status: raw_response.status,
+            data: redacted_data,
+            provider_reference: raw_response.provider_reference,
+            guarantees_reported: raw_response.guarantees_reported,
+            error_code: raw_response.error_code,
+            error_message: raw_response.error_message,
+        })
+    }
+
+    /// Minimizes context sent to remote extensions to strictly adhere to declared access_needs.
+    pub fn minimize_context(parameters: &Value, access_needs: &[String]) -> Value {
+        // Forbidden sensitive keys that must NEVER be passed to external extensions
+        const BLOCKED_INTERNAL_KEYS: &[&str] = &[
+            "system_prompt",
+            "internal_token",
+            "session_token",
+            "vox_auth",
+            "secret_key",
+            "database_url",
+            "host_app_credentials",
+            "raw_user_id",
+        ];
+
+        match parameters {
+            Value::Object(map) => {
+                let allowed_keys: HashSet<&str> = access_needs.iter().map(|s| s.as_str()).collect();
+                let allow_all = allowed_keys.contains("*") || allowed_keys.is_empty();
+
+                let mut filtered = serde_json::Map::new();
+                for (k, v) in map {
+                    let k_lower = k.to_lowercase();
+                    if BLOCKED_INTERNAL_KEYS
+                        .iter()
+                        .any(|blocked| k_lower.contains(blocked))
+                    {
+                        continue;
+                    }
+                    if allow_all || allowed_keys.contains(k.as_str()) {
+                        filtered.insert(k.clone(), v.clone());
+                    }
+                }
+                Value::Object(filtered)
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Redacts sensitive keywords from output payloads before returning to consumers.
+    pub fn redact_sensitive_payload(val: &Value) -> Value {
+        const SENSITIVE_MATCHERS: &[&str] = &[
+            "password",
+            "secret",
+            "token",
+            "bearer",
+            "api_key",
+            "apikey",
+            "private_key",
+            "access_token",
+            "client_secret",
+        ];
+
+        match val {
+            Value::Object(map) => {
+                let mut out = serde_json::Map::new();
+                for (k, v) in map {
+                    let k_lower = k.to_lowercase();
+                    if SENSITIVE_MATCHERS.iter().any(|m| k_lower.contains(m)) {
+                        out.insert(k.clone(), Value::String("[REDACTED]".into()));
+                    } else {
+                        out.insert(k.clone(), Self::redact_sensitive_payload(v));
+                    }
+                }
+                Value::Object(out)
+            }
+            Value::Array(arr) => {
+                Value::Array(arr.iter().map(Self::redact_sensitive_payload).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Verifies that any guarantee required by the caller is explicitly declared and supported.
+    pub fn validate_guarantees(
+        required: &[String],
+        declared_guarantees: &Value,
+    ) -> Result<(), AdapterExecutionError> {
+        for req in required {
+            let is_supported = match declared_guarantees {
+                Value::Object(map) => map.get(req).and_then(Value::as_bool).unwrap_or(false),
+                _ => false,
+            };
+            if !is_supported {
+                return Err(AdapterExecutionError::UnsupportedGuarantee(format!(
+                    "guarantee '{req}' is not supported by this integration"
+                )));
+            }
+        }
+        Ok(())
+    }
+}

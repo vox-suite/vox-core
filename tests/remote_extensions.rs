@@ -90,6 +90,7 @@ async fn installation_grants_no_authority_or_connections() {
             consequential: false,
             data_recipients: vec!["Weather Corp Cloud".into()],
             access_needs: vec!["location".into()],
+            optional_guarantees: json!({}),
         }],
     };
 
@@ -159,6 +160,7 @@ async fn consequential_capabilities_require_conformance_and_operator_enablement(
                 consequential: false,
                 data_recipients: vec![],
                 access_needs: vec![],
+                optional_guarantees: json!({}),
             },
             ExtensionCapability {
                 external_key: "thermostat.set_temperature".into(),
@@ -167,6 +169,7 @@ async fn consequential_capabilities_require_conformance_and_operator_enablement(
                 consequential: true,
                 data_recipients: vec!["Thermostat Cloud API".into()],
                 access_needs: vec!["device_control".into()],
+                optional_guarantees: json!({"idempotent": true}),
             },
         ],
     };
@@ -242,6 +245,7 @@ async fn operator_change_requires_renewed_consent() {
             consequential: true,
             data_recipients: vec!["Doc Cloud".into()],
             access_needs: vec![],
+            optional_guarantees: json!({}),
         }],
     };
 
@@ -326,6 +330,7 @@ async fn expanded_data_recipients_require_renewed_consent() {
             consequential: true,
             data_recipients: vec!["Internal CRM Server".into()],
             access_needs: vec!["contacts".into()],
+            optional_guarantees: json!({}),
         }],
     };
 
@@ -360,6 +365,7 @@ async fn expanded_data_recipients_require_renewed_consent() {
                 "Third-Party Marketing Analytics Broker".into(), // Expanded recipient!
             ],
             access_needs: vec!["contacts".into()],
+            optional_guarantees: json!({}),
         }]),
     };
 
@@ -412,6 +418,7 @@ async fn quarantine_and_removal_preserve_historical_evidence() {
             consequential: false,
             data_recipients: vec![],
             access_needs: vec![],
+            optional_guarantees: json!({}),
         }],
     };
 
