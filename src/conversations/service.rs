@@ -8,7 +8,7 @@ use crate::{
         conversation::{ConversationPrompt, ConversationResponder, PromptMessage},
     },
     db::Db,
-    identity::{IdentityError, IdentityService, ResourceOwner, UserId},
+    identity::{IdentityError, IdentityService, ResourceOwner, UserContextId, UserId},
     memory::MemoryService,
 };
 use futures_util::{FutureExt, Stream, StreamExt, stream};
@@ -61,7 +61,7 @@ pub struct ConversationService {
     openings: Arc<tokio::sync::Mutex<std::collections::HashMap<String, OpeningTask>>>,
     conversation_cache: Arc<
         tokio::sync::RwLock<
-            std::collections::HashMap<(String, String), (ConversationId, UserId)>,
+            std::collections::HashMap<(UserContextId, String, String), (ConversationId, UserId)>,
         >,
     >,
 }
@@ -739,6 +739,7 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         self.conversation_cache.write().await.remove(&(
+            owner.user_context_id,
             request.identity.channel.trim().to_string(),
             request.external_conversation_id.trim().to_string(),
         ));
@@ -805,7 +806,11 @@ impl ConversationService {
         channel: &str,
         external_id: &str,
     ) -> Result<(ConversationId, UserId), ConversationError> {
-        let cache_key = (channel.trim().to_string(), external_id.trim().to_string());
+        let cache_key = (
+            owner.user_context_id,
+            channel.trim().to_string(),
+            external_id.trim().to_string(),
+        );
         if let Some(cached) = self.conversation_cache.read().await.get(&cache_key) {
             return Ok(*cached);
         }
