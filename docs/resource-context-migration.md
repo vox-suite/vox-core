@@ -1,8 +1,8 @@
 # E05 resource context migration
 
-This branch is stacked on the platform schema restoration in PR #54. It is
-an expansion over the consolidated 21-table consumer baseline, not a completed
-deployment migration from the older multi-migration schema.
+This migration follows the platform schema restoration from PR #54. It is
+an expansion over the consolidated 21-table consumer baseline for fresh
+installs, not a deployment migration from the older multi-migration schema.
 The 2026-09-19 E05 rehearsal covered the earlier schema with `actions` and
 `scheduled_tasks` tables. The current baseline replaced those with
 `action_proposals` / `executions` and `schedules`, so its old counts and
@@ -55,9 +55,10 @@ The full non-ignored Core suite passes with local socket access.
 
 ## Remaining acceptance work
 
-1. Build and rehearse a **data-preserving upgrade from the deployed older
-   migration chain**. The current PR #54 baseline is fresh-install only.
-2. Reconcile production-shaped counts for all 17 affected tables, capture
+1. If an existing deployment needs this revision, build and rehearse a
+   **data-preserving upgrade from the older migration chain** first. The
+   current supported merge scope is fresh install only.
+2. Before accepting an upgrade path, reconcile counts for all 17 affected tables, capture
    orphan and cross-owner reports, record migration duration, and sample
    ownership evidence. Stop writes and restore a schema-compatible release if
    validation fails; preserve migration provenance before retrying.
@@ -67,4 +68,5 @@ The full non-ignored Core suite passes with local socket access.
 4. Resolve unrelated ignored integration failures exposed by the consolidated
    consumer baseline before claiming E05 or downstream acceptance.
 
-E05 and PR #54 remain open until that evidence is attached.
+E05 acceptance remains open until the applicable compatibility and integration
+evidence is attached. Merging this fresh-install correction does not close E05.
