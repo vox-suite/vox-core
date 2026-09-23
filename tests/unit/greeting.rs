@@ -79,6 +79,7 @@ let request = RespondRequest {
     turn_id: None,
     revision: None,
     tts_provider: None,
+    filler: None,
 };
 tokio::time::timeout(Duration::from_millis(500), async {
     let mut stream = service.respond_stream(request).await.unwrap();
@@ -147,6 +148,7 @@ let mut request = RespondRequest {
     turn_id: None,
     revision: None,
     tts_provider: None,
+    filler: None,
 };
 let greeting = service.respond_stream(request.clone()).await.unwrap();
 drop(greeting);

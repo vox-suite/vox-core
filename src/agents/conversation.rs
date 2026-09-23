@@ -40,6 +40,8 @@ pub struct ConversationPrompt {
     pub needs_onboarding: bool,
     #[serde(default)]
     pub tts_provider: Option<String>,
+    #[serde(default)]
+    pub filler: Option<String>,
 }
 
 pub struct ConversationAgent {
@@ -346,14 +348,23 @@ impl ConversationAgent {
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
+        let filler_instruction = if let Some(ref filler) = prompt.filler {
+            format!(
+                "\nVoice Assistant Acknowledgment Already Spoken: \"{}\"\nInstruction: You are speaking on a live voice call. The acknowledgment above was ALREADY spoken out loud to the caller by the assistant just now. Do NOT repeat or contradict this acknowledgment, and do not repeat greetings. Seamlessly continue directly into delivering your answer as a natural continuation of this acknowledgment.\n",
+                filler.trim()
+            )
+        } else {
+            String::new()
+        };
         let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}",
+            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
             current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
             prompt.user_text,
+            filler_instruction,
             onboarding_instruction
         );
         Ok((agent, input, is_voice))

@@ -247,6 +247,7 @@ impl ConversationService {
                 initiation_context: request.initiation_context,
                 needs_onboarding,
                 tts_provider: request.tts_provider.clone(),
+                filler: request.filler.clone(),
             })
             .await?;
         if !self.is_current(owner, &saved_request).await {
@@ -465,6 +466,7 @@ impl ConversationService {
                     initiation_context: request.initiation_context,
                     needs_onboarding,
                     tts_provider: request.tts_provider,
+                    filler: request.filler,
                 })
                 .await
                 .map_err(ConversationError::from)

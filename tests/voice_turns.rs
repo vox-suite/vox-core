@@ -38,6 +38,7 @@ fn request(identity: ChannelIdentity, call: &str, text: &str) -> RespondRequest 
         turn_id: Some("turn".into()),
         revision: Some(3),
         tts_provider: None,
+        filler: None,
     }
 }
 

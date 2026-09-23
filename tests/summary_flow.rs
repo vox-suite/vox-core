@@ -93,6 +93,7 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
             turn_id: None,
             revision: None,
             tts_provider: None,
+            filler: None,
         })
         .await
         .unwrap();

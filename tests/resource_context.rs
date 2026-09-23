@@ -69,6 +69,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             turn_id: None,
             revision: None,
             tts_provider: None,
+            filler: None,
         })
         .await
         .unwrap();
@@ -81,6 +82,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             turn_id: None,
             revision: None,
             tts_provider: None,
+            filler: None,
         })
         .await
         .unwrap();
@@ -170,6 +172,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
             turn_id: None,
             revision: None,
             tts_provider: None,
+            filler: None,
         })
         .await
         .unwrap();

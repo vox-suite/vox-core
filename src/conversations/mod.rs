@@ -24,6 +24,8 @@ pub struct RespondRequest {
     pub revision: Option<u64>,
     #[serde(default)]
     pub tts_provider: Option<String>,
+    #[serde(default)]
+    pub filler: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
