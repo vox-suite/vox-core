@@ -8,6 +8,7 @@ pub mod audit;
 pub mod auth;
 pub mod capability_grants;
 pub mod connected_reads;
+pub mod consequential_writes;
 pub mod connections;
 pub mod conversations;
 pub mod durable_tasks;
@@ -63,6 +64,7 @@ pub struct AppState {
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
+    pub(crate) expedia_write: Option<Arc<crate::providers::ExpediaLodgingService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -91,6 +93,7 @@ impl AppState {
             remote_extensions: None,
             status: None,
             uber_read: None,
+            expedia_write: None,
             service_token: Arc::from(""),
         }
     }
@@ -169,9 +172,19 @@ impl AppState {
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
                 db.clone(),
                 crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
                 Arc::new(crate::providers::DefaultUberProviderClient::new(
                     "https://api.uber.com",
+                )),
+            ))),
+            expedia_write: Some(Arc::new(crate::providers::ExpediaLodgingService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                crate::approvals::ApprovalService::new(db.clone()),
+                crate::execution::ExecutionCoordinator::new(db.clone()),
+                Arc::new(crate::providers::DefaultExpediaProviderClient::new(
+                    "https://api.expediagroup.com",
                 )),
             ))),
             service_token: Arc::from(service_token),
@@ -238,9 +251,19 @@ impl AppState {
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
                 db.clone(),
                 crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
                 Arc::new(crate::providers::DefaultUberProviderClient::new(
                     "https://api.uber.com",
+                )),
+            ))),
+            expedia_write: Some(Arc::new(crate::providers::ExpediaLodgingService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                crate::approvals::ApprovalService::new(db.clone()),
+                crate::execution::ExecutionCoordinator::new(db.clone()),
+                Arc::new(crate::providers::DefaultExpediaProviderClient::new(
+                    "https://api.expediagroup.com",
                 )),
             ))),
             service_token: Arc::from(service_token),
@@ -252,6 +275,14 @@ impl AppState {
         service: Arc<crate::providers::UberConnectedReadService>,
     ) -> Self {
         self.uber_read = Some(service);
+        self
+    }
+
+    pub fn with_expedia_write(
+        mut self,
+        service: Arc<crate::providers::ExpediaLodgingService>,
+    ) -> Self {
+        self.expedia_write = Some(service);
         self
     }
 
@@ -458,6 +489,22 @@ pub fn router(state: AppState) -> Router {
             post(host_apps::resolve_context),
         )
         .route("/v1/connected-reads", post(connected_reads::read))
+        .route(
+            "/v1/consequential-writes/propose",
+            post(consequential_writes::propose),
+        )
+        .route(
+            "/v1/consequential-writes/execute",
+            post(consequential_writes::execute),
+        )
+        .route(
+            "/v1/consequential-writes/cancel",
+            post(consequential_writes::cancel),
+        )
+        .route(
+            "/v1/consequential-writes/reconcile",
+            post(consequential_writes::reconcile),
+        )
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
             rate_limit::rate_limit_middleware,
