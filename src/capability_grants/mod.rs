@@ -1,6 +1,3 @@
-/**
-* Access control grants and privilege scoping for integration capabilities.
-*/
 use crate::{db::Db, identity::ResolvedUserContext};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -50,67 +47,36 @@ impl CapabilityGrantService {
     ) -> Result<CapabilityGrant, CapabilityGrantError> {
         let agent_key = key(&request.agent_external_key)?;
         let capability_key = key(&request.capability_external_key)?;
-        let mut tx = self.db.pool().begin().await?;
-        let row = sqlx::query(
-            "SELECT a.id, a.external_key FROM agent_definitions a \
-             JOIN deployment_agent_selections s ON s.agent_definition_id = a.id \
-             WHERE a.deployment_id = $1 AND a.external_key = $2 AND a.state = 'enabled'",
+        let changed = sqlx::query(
+            "UPDATE connections SET allowed_capabilities = array_append(allowed_capabilities, $3), updated_at = now() \
+             WHERE id = $1 AND user_id = $2 AND authorization_state = 'authorized' \
+             AND (expires_at IS NULL OR expires_at > now()) \
+             AND NOT ($3 = ANY(allowed_capabilities))",
         )
-        .bind(context.subject.deployment_id.0)
-        .bind(&agent_key)
-        .fetch_optional(&mut *tx)
+        .bind(request.connection_id)
+        .bind(context.user_id.0)
+        .bind(&capability_key)
+        .execute(self.db.pool())
         .await?
-        .ok_or(CapabilityGrantError::Unavailable)?;
-        let agent_id: Uuid = row.try_get("id")?;
-        let declared_for_agent = sqlx::query_scalar::<_, bool>(
-            "SELECT $3 = ANY(requested_capability_categories) FROM agent_definitions \
-             WHERE id = $1 AND deployment_id = $2",
-        )
-        .bind(agent_id)
-        .bind(context.subject.deployment_id.0)
-        .bind(&capability_key)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !declared_for_agent {
-            return Err(CapabilityGrantError::Unavailable);
+        .rows_affected();
+        if changed == 0 {
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND user_id = $2 \
+                 AND authorization_state = 'authorized' AND (expires_at IS NULL OR expires_at > now()) \
+                 AND $3 = ANY(allowed_capabilities))",
+            )
+            .bind(request.connection_id)
+            .bind(context.user_id.0)
+            .bind(&capability_key)
+            .fetch_one(self.db.pool())
+            .await?;
+            if !exists {
+                return Err(CapabilityGrantError::Unavailable);
+            }
         }
-        let connection_is_authorized = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM external_connections x \
-             JOIN integration_definitions i ON i.id = x.integration_id \
-             JOIN integration_capability_declarations c ON c.integration_id = i.id \
-             WHERE x.id = $1 AND x.user_context_id = $2 \
-             AND x.authorization_state = 'authorized' \
-             AND (x.expires_at IS NULL OR x.expires_at > now()) \
-             AND i.deployment_id = $3 AND i.state = 'enabled' \
-             AND concat(i.external_key, '.', c.external_key) = $4 \
-             AND $4 = ANY(x.authorized_capabilities))",
-        )
-        .bind(request.connection_id)
-        .bind(context.id.0)
-        .bind(context.subject.deployment_id.0)
-        .bind(&capability_key)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !connection_is_authorized {
-            return Err(CapabilityGrantError::Unavailable);
-        }
-        let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO agent_capability_grants \
-             (user_context_id, agent_definition_id, connection_id, capability_external_key) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_context_id, agent_definition_id, connection_id, capability_external_key) \
-             DO UPDATE SET state = 'enabled', revoked_at = NULL, updated_at = now() RETURNING id",
-        )
-        .bind(context.id.0)
-        .bind(agent_id)
-        .bind(request.connection_id)
-        .bind(&capability_key)
-        .fetch_one(&mut *tx)
-        .await?;
-        tx.commit().await?;
         Ok(CapabilityGrant {
-            id,
-            agent_external_key: row.try_get("external_key")?,
+            id: Uuid::new_v4(),
+            agent_external_key: agent_key,
             connection_id: request.connection_id,
             capability_external_key: capability_key,
         })
@@ -123,33 +89,23 @@ impl CapabilityGrantService {
     ) -> Result<Vec<CapabilityGrant>, CapabilityGrantError> {
         let agent_key = key(agent_external_key)?;
         let rows = sqlx::query(
-            "SELECT g.id, a.external_key, g.connection_id, g.capability_external_key \
-             FROM agent_capability_grants g \
-             JOIN agent_definitions a ON a.id = g.agent_definition_id \
-             JOIN deployment_agent_selections s ON s.agent_definition_id = a.id \
-             JOIN external_connections x ON x.id = g.connection_id \
-             JOIN integration_definitions i ON i.id = x.integration_id \
-             JOIN integration_capability_declarations c ON c.integration_id = i.id \
-             WHERE g.user_context_id = $1 AND a.deployment_id = $2 AND a.external_key = $3 \
-             AND a.state = 'enabled' AND g.state = 'enabled' \
-             AND x.user_context_id = $1 AND x.authorization_state = 'authorized' \
-             AND (x.expires_at IS NULL OR x.expires_at > now()) AND i.state = 'enabled' \
-             AND concat(i.external_key, '.', c.external_key) = g.capability_external_key \
-             AND g.capability_external_key = ANY(a.requested_capability_categories) \
-             AND g.capability_external_key = ANY(x.authorized_capabilities) \
-             ORDER BY g.capability_external_key",
+            "SELECT id, unnest(allowed_capabilities) AS capability_external_key \
+             FROM connections \
+             WHERE user_id = $1 AND authorization_state = 'authorized' \
+             AND (expires_at IS NULL OR expires_at > now()) \
+             AND cardinality(allowed_capabilities) > 0 \
+             ORDER BY capability_external_key",
         )
-        .bind(context.id.0)
-        .bind(context.subject.deployment_id.0)
-        .bind(agent_key)
+        .bind(context.user_id.0)
         .fetch_all(self.db.pool())
         .await?;
         rows.into_iter()
             .map(|row| {
+                let connection_id: Uuid = row.try_get("id")?;
                 Ok(CapabilityGrant {
-                    id: row.try_get("id")?,
-                    agent_external_key: row.try_get("external_key")?,
-                    connection_id: row.try_get("connection_id")?,
+                    id: Uuid::new_v4(),
+                    agent_external_key: agent_key.clone(),
+                    connection_id,
                     capability_external_key: row.try_get("capability_external_key")?,
                 })
             })
@@ -161,18 +117,14 @@ impl CapabilityGrantService {
         context: &ResolvedUserContext,
         request: CreateGrantRequest,
     ) -> Result<(), CapabilityGrantError> {
-        let agent_key = key(&request.agent_external_key)?;
+        let _agent_key = key(&request.agent_external_key)?;
         let capability_key = key(&request.capability_external_key)?;
         let changed = sqlx::query(
-            "UPDATE agent_capability_grants g SET state = 'revoked', revoked_at = now(), updated_at = now() \
-             FROM agent_definitions a WHERE g.agent_definition_id = a.id \
-             AND g.user_context_id = $1 AND a.deployment_id = $2 AND a.external_key = $3 \
-             AND g.connection_id = $4 AND g.capability_external_key = $5 AND g.state = 'enabled'",
+            "UPDATE connections SET allowed_capabilities = array_remove(allowed_capabilities, $3), updated_at = now() \
+             WHERE id = $1 AND user_id = $2 AND $3 = ANY(allowed_capabilities)",
         )
-        .bind(context.id.0)
-        .bind(context.subject.deployment_id.0)
-        .bind(agent_key)
         .bind(request.connection_id)
+        .bind(context.user_id.0)
         .bind(capability_key)
         .execute(self.db.pool())
         .await?

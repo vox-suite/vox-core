@@ -25,8 +25,12 @@ pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
             .await?
             .unwrap_or_else(|| serde_json::json!({}));
     let rows = sqlx::query(
-        "SELECT recap, commitments, decisions FROM conversation_summaries \
-         WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50",
+        "SELECT latest_summary->>'recap' AS recap, \
+                COALESCE(latest_summary->'commitments', '[]'::jsonb) AS commitments, \
+                COALESCE(latest_summary->'decisions', '[]'::jsonb) AS decisions \
+         FROM conversations \
+         WHERE user_id = $1 AND summary_version > 0 \
+         ORDER BY updated_at DESC LIMIT 50",
     )
     .bind(user_id.0)
     .fetch_all(db.pool())
@@ -42,7 +46,10 @@ pub async fn build(db: &Db, user_id: UserId) -> Result<String, sqlx::Error> {
             .iter()
             .flat_map(|row| json_strings(row.get("decisions")))
             .collect(),
-        recent_recaps: rows.iter().map(|row| row.get("recap")).collect(),
+        recent_recaps: rows
+            .iter()
+            .filter_map(|row| row.get::<Option<String>, _>("recap"))
+            .collect(),
     };
     bounded_json(&mut projection)
 }

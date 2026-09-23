@@ -104,12 +104,12 @@ impl IdentityService {
         subject: &UserContextSubject,
     ) -> Result<ResolvedUserContext, IdentityError> {
         let host_user_id = subject.normalized_host_user_id()?;
-        let provider = format!("{}:{}", subject.deployment_id.0, subject.host_app_id.0);
+        let issuer = format!("{}:{}", subject.deployment_id.0, subject.host_app_id.0);
 
         if let Some(user_id) = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2",
+            "SELECT user_id FROM auth_identities WHERE issuer = $1 AND subject = $2",
         )
-        .bind(&provider)
+        .bind(&issuer)
         .bind(host_user_id)
         .fetch_optional(self.db.pool())
         .await?
@@ -131,13 +131,13 @@ impl IdentityService {
                 .await?;
 
         let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO auth_identities (user_id, provider, subject) \
+            "INSERT INTO auth_identities (user_id, issuer, subject) \
              VALUES ($1, $2, $3) \
-             ON CONFLICT (provider, subject) DO NOTHING \
+             ON CONFLICT (issuer, subject) DO NOTHING \
              RETURNING user_id",
         )
         .bind(new_user)
-        .bind(&provider)
+        .bind(&issuer)
         .bind(host_user_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -150,9 +150,9 @@ impl IdentityService {
                 .execute(&mut *tx)
                 .await?;
             sqlx::query_scalar::<_, Uuid>(
-                "SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2",
+                "SELECT user_id FROM auth_identities WHERE issuer = $1 AND subject = $2",
             )
-            .bind(&provider)
+            .bind(&issuer)
             .bind(host_user_id)
             .fetch_one(&mut *tx)
             .await?

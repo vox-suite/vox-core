@@ -5,18 +5,36 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 use vox_core::{
     agents::{
         AgentError,
         event_planner::{EventPlanning, EventPlanningPrompt, PlannedAction},
     },
+    bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest, OutboundCallResponse},
     db::Db,
     identity::ChannelIdentity,
+    outbound::OutboundCallService,
     schedules::{
         CreateScheduleRequest, ScheduleKind, UpdateScheduleRequest, handler::ScheduleHandler,
         service::ScheduleService, ticker::ScheduleTicker,
     },
 };
+
+#[derive(Clone, Default)]
+struct MockBridge;
+
+#[async_trait]
+impl OutboundBridge for MockBridge {
+    async fn initiate_outbound_call(
+        &self,
+        _: OutboundCallRequest,
+    ) -> Result<OutboundCallResponse, BridgeError> {
+        Ok(OutboundCallResponse {
+            provider_call_id: format!("CA_{}", Uuid::new_v4().simple()),
+        })
+    }
+}
 
 struct CallPlanner;
 
@@ -53,7 +71,12 @@ async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_on
     let db = setup().await;
     let service = ScheduleService::new(db.clone());
     let ticker = ScheduleTicker::new(db.clone());
-    let handler = ScheduleHandler::new(db.clone(), Arc::new(CallPlanner));
+    let outbound = Arc::new(OutboundCallService::new(
+        db.clone(),
+        Some(Arc::new(MockBridge)),
+    ));
+    let handler = ScheduleHandler::new(db.clone(), Arc::new(CallPlanner))
+        .with_outbound(outbound);
     let now = at("2026-09-13T03:00:00Z");
 
     let schedule = service
@@ -102,12 +125,14 @@ async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_on
         .fetch_one(db.pool())
         .await
         .unwrap();
-    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM actions")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+    let dispatch_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE kind = 'dispatch_action'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     assert_eq!(run_jobs, 2);
-    assert_eq!(actions, 2);
+    assert_eq!(dispatch_jobs, 2);
 }
 
 #[tokio::test]

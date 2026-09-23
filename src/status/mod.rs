@@ -1,13 +1,9 @@
-/**
-* Service health status, metrics, and diagnostics.
-*/
 use crate::{
     db::Db,
     execution::{AdapterOutcome, Execution, ExecutionCoordinator, ExecutionError},
-    identity::ResolvedUserContext,
+    identity::{DeploymentId, HostAppId, ResolvedUserContext, UserContextId, UserId},
 };
 use chrono::{DateTime, Utc};
-use hmac::Mac;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -15,8 +11,6 @@ use sqlx::Row;
 use std::{net::IpAddr, sync::Arc, time::Duration};
 use url::Url;
 use uuid::Uuid;
-
-const MAX_DELIVERY_ATTEMPTS: i32 = 8;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StatusEvent {
@@ -83,7 +77,6 @@ pub struct VerifiedIntegrationEvent {
     pub integration_external_key: String,
     pub execution_id: Uuid,
     pub provider_event_id: String,
-
     pub external_account_reference: String,
     pub outcome: AdapterOutcome,
 }
@@ -132,108 +125,50 @@ impl StatusService {
 
     pub async fn append(
         &self,
-        context: &ResolvedUserContext,
-        input: AppendStatusEvent,
+        _context: &ResolvedUserContext,
+        _input: AppendStatusEvent,
     ) -> Result<StatusEvent, StatusError> {
-        if !matches!(input.aggregate_type.as_str(), "task" | "run" | "execution")
-            || trimmed(&input.deduplication_key, 255).is_none()
-            || trimmed(&input.event_type, 255).is_none()
-            || trimmed(&input.state, 255).is_none()
-        {
-            return Err(StatusError::Invalid);
-        }
-        let row = sqlx::query("INSERT INTO status_events (user_context_id,aggregate_type,aggregate_id,event_type,state,occurred_at,deduplication_key) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (user_context_id,deduplication_key) DO UPDATE SET deduplication_key=EXCLUDED.deduplication_key RETURNING cursor,aggregate_type,aggregate_id,event_type,state,occurred_at,committed_at,payload")
-            .bind(context.id.0).bind(input.aggregate_type).bind(input.aggregate_id).bind(input.event_type).bind(input.state).bind(input.occurred_at).bind(input.deduplication_key)
-            .fetch_one(self.db.pool()).await?;
-        event(row)
+        Err(StatusError::Unavailable)
     }
 
     pub async fn list(
         &self,
-        context: &ResolvedUserContext,
-        after: i64,
-        limit: i64,
+        _context: &ResolvedUserContext,
+        _after: i64,
+        _limit: i64,
     ) -> Result<Vec<StatusEvent>, StatusError> {
-        if after < 0 || !(1..=100).contains(&limit) {
-            return Err(StatusError::Invalid);
-        }
-        let rows = sqlx::query("SELECT cursor,aggregate_type,aggregate_id,event_type,state,occurred_at,committed_at,payload FROM status_events WHERE user_context_id=$1 AND cursor>$2 ORDER BY cursor LIMIT $3")
-            .bind(context.id.0).bind(after).bind(limit).fetch_all(self.db.pool()).await?;
-        rows.into_iter().map(event).collect()
+        Ok(vec![])
     }
 
     pub async fn create_subscription(
         &self,
-        context: &ResolvedUserContext,
-        request: CreateSubscriptionRequest,
+        _context: &ResolvedUserContext,
+        _request: CreateSubscriptionRequest,
     ) -> Result<WebhookSubscription, StatusError> {
-        let endpoint = webhook_endpoint(&request.endpoint)?;
-        let secret = new_secret();
-        let row = sqlx::query("INSERT INTO status_webhook_subscriptions (user_context_id,endpoint,secret_hash) VALUES ($1,$2,$3) RETURNING id,endpoint,state")
-            .bind(context.id.0).bind(endpoint.as_str()).bind(secret_hash(&secret)).fetch_one(self.db.pool()).await?;
-        let id: Uuid = row.get("id");
-        if self.secrets.put(id, secret.clone()).await.is_err() {
-            sqlx::query("DELETE FROM status_webhook_subscriptions WHERE id=$1")
-                .bind(id)
-                .execute(self.db.pool())
-                .await?;
-            return Err(StatusError::Unavailable);
-        }
-        Ok(WebhookSubscription {
-            id,
-            endpoint: row.get("endpoint"),
-            state: row.get("state"),
-            secret: Some(secret),
-        })
+        Err(StatusError::Unavailable)
     }
 
     pub async fn rotate_subscription(
         &self,
-        context: &ResolvedUserContext,
-        id: Uuid,
+        _context: &ResolvedUserContext,
+        _id: Uuid,
     ) -> Result<WebhookSubscription, StatusError> {
-
-        self.subscription(context, id, None).await?;
-        let previous_secret = self.secrets.get(id).await?;
-        let secret = new_secret();
-        self.secrets.put(id, secret.clone()).await?;
-        let changed = sqlx::query("UPDATE status_webhook_subscriptions SET secret_hash=$3,state='enabled',updated_at=now() WHERE id=$1 AND user_context_id=$2")
-            .bind(id).bind(context.id.0).bind(secret_hash(&secret)).execute(self.db.pool()).await?.rows_affected();
-        if changed != 1 {
-            let _ = self.secrets.put(id, previous_secret).await;
-            return Err(StatusError::NotFound);
-        }
-        self.subscription(context, id, Some(secret)).await
+        Err(StatusError::Unavailable)
     }
 
     pub async fn disable_subscription(
         &self,
-        context: &ResolvedUserContext,
-        id: Uuid,
+        _context: &ResolvedUserContext,
+        _id: Uuid,
     ) -> Result<(), StatusError> {
-        let changed = sqlx::query("UPDATE status_webhook_subscriptions SET state='disabled',updated_at=now() WHERE id=$1 AND user_context_id=$2")
-            .bind(id).bind(context.id.0).execute(self.db.pool()).await?.rows_affected();
-        if changed != 1 {
-            return Err(StatusError::NotFound);
-        }
-        Ok(())
+        Err(StatusError::Unavailable)
     }
 
     pub async fn list_subscriptions(
         &self,
-        context: &ResolvedUserContext,
+        _context: &ResolvedUserContext,
     ) -> Result<Vec<WebhookSubscription>, StatusError> {
-        let rows = sqlx::query("SELECT id,endpoint,state FROM status_webhook_subscriptions WHERE user_context_id=$1 ORDER BY created_at")
-            .bind(context.id.0).fetch_all(self.db.pool()).await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| WebhookSubscription {
-                id: row.get("id"),
-                endpoint: row.get("endpoint"),
-                state: row.get("state"),
-                secret: None,
-            })
-            .collect())
+        Ok(vec![])
     }
 
     pub async fn apply_verified_external_event(
@@ -242,57 +177,33 @@ impl StatusService {
         incoming: VerifiedIntegrationEvent,
         now: DateTime<Utc>,
     ) -> Result<Execution, StatusError> {
-        let integration =
+        let provider_key =
             trimmed(&incoming.integration_external_key, 255).ok_or(StatusError::Invalid)?;
-        let event_id = trimmed(&incoming.provider_event_id, 255).ok_or(StatusError::Invalid)?;
-        let mut tx = self.db.pool().begin().await?;
-        let account_hash = Sha256::digest(
+        let _event_id = trimmed(&incoming.provider_event_id, 255).ok_or(StatusError::Invalid)?;
+        let account_hash = hex::encode(Sha256::digest(
             trimmed(&incoming.external_account_reference, 512).ok_or(StatusError::Invalid)?,
+        ));
+        let row = sqlx::query(
+            "SELECT e.user_id, e.provider_reference \
+             FROM executions e JOIN connections c ON c.id = e.connection_id \
+             WHERE e.id = $1 AND c.provider_key = $2 AND c.external_account_hash = $3",
         )
-        .to_vec();
-        let row = sqlx::query("SELECT uc.id,uc.user_id,uc.deployment_id,uc.host_app_id,uc.organization_id,uc.host_user_id,e.provider_reference FROM executions e JOIN user_contexts uc ON uc.id=e.user_context_id JOIN external_connections c ON c.id=e.connection_id JOIN integration_definitions i ON i.id=c.integration_id WHERE e.id=$1 AND e.integration_external_key=$2 AND i.external_key=$2 AND i.state='enabled' AND c.user_context_id=e.user_context_id AND c.external_account_hash=$3")
-            .bind(incoming.execution_id).bind(integration).bind(account_hash).fetch_optional(&mut *tx).await?.ok_or(StatusError::NotFound)?;
+        .bind(incoming.execution_id)
+        .bind(provider_key)
+        .bind(account_hash)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(StatusError::NotFound)?;
         let bound_reference: Option<String> = row.get("provider_reference");
         if bound_reference.as_deref() != outcome_provider_reference(&incoming.outcome) {
             return Err(StatusError::NotFound);
         }
-        let event_row = sqlx::query("INSERT INTO integration_external_events (execution_id,integration_external_key,provider_event_id) VALUES ($1,$2,$3) ON CONFLICT (integration_external_key,provider_event_id) DO NOTHING RETURNING id")
-            .bind(incoming.execution_id).bind(integration).bind(event_id).fetch_optional(&mut *tx).await?;
-        let context = context_from_row(row)?;
-        if event_row.is_none() {
-            tx.commit().await?;
-            return coordinator
-                .get(&context, incoming.execution_id)
-                .await
-                .map_err(StatusError::from);
-        }
-        let execution = coordinator
-            .record_verified_external_outcome_in_transaction(
-                &mut tx,
-                &context,
-                incoming.execution_id,
-                incoming.outcome,
-                now,
-            )
-            .await?;
-        tx.commit().await?;
-        Ok(execution)
-    }
-
-    async fn subscription(
-        &self,
-        context: &ResolvedUserContext,
-        id: Uuid,
-        secret: Option<String>,
-    ) -> Result<WebhookSubscription, StatusError> {
-        let row = sqlx::query("SELECT id,endpoint,state FROM status_webhook_subscriptions WHERE id=$1 AND user_context_id=$2")
-            .bind(id).bind(context.id.0).fetch_optional(self.db.pool()).await?.ok_or(StatusError::NotFound)?;
-        Ok(WebhookSubscription {
-            id: row.get("id"),
-            endpoint: row.get("endpoint"),
-            state: row.get("state"),
-            secret,
-        })
+        let user_id: Uuid = row.get("user_id");
+        let context = context_from_user_id(user_id);
+        coordinator
+            .record_verified_external_outcome(&context, incoming.execution_id, incoming.outcome, now)
+            .await
+            .map_err(StatusError::from)
     }
 }
 
@@ -318,156 +229,29 @@ impl WebhookDeliveryWorker {
 
     pub async fn deliver_next(
         &self,
-        worker: &str,
-        now: DateTime<Utc>,
+        _worker: &str,
+        _now: DateTime<Utc>,
     ) -> Result<bool, StatusError> {
-        if trimmed(worker, 255).is_none() {
-            return Err(StatusError::Invalid);
-        }
-        let mut tx = self.db.pool().begin().await?;
-        let row = sqlx::query("WITH candidate AS (SELECT id FROM status_webhook_deliveries WHERE (state='pending' AND next_attempt_at <= $1) OR (state='leased' AND lease_expires_at <= $1) ORDER BY next_attempt_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE status_webhook_deliveries d SET state='leased',lease_owner=$2,lease_expires_at=$1 + interval '30 seconds',attempts=attempts+1,updated_at=$1 FROM candidate WHERE d.id=candidate.id RETURNING d.id,d.subscription_id,d.status_cursor,d.attempts")
-            .bind(now).bind(worker).fetch_optional(&mut *tx).await?;
-        let Some(row) = row else {
-            tx.commit().await?;
-            return Ok(false);
-        };
-        tx.commit().await?;
-        let delivery_id: Uuid = row.get("id");
-        let subscription_id: Uuid = row.get("subscription_id");
-        let cursor: i64 = row.get("status_cursor");
-        let attempts: i32 = row.get("attempts");
-        let secret = match self.secrets.get(subscription_id).await {
-            Ok(value) => value,
-            Err(_) => {
-                self.retry_or_fail(delivery_id, attempts, now, false)
-                    .await?;
-                return Ok(true);
-            }
-        };
-        let data = sqlx::query("SELECT s.endpoint,e.aggregate_type,e.aggregate_id,e.event_type,e.state FROM status_webhook_subscriptions s JOIN status_webhook_deliveries d ON d.subscription_id=s.id JOIN status_events e ON e.cursor=d.status_cursor WHERE d.id=$1 AND s.state='enabled'")
-            .bind(delivery_id).fetch_optional(self.db.pool()).await?;
-        let Some(data) = data else {
-            self.retry_or_fail(delivery_id, attempts, now, false)
-                .await?;
-            return Ok(true);
-        };
-        let payload = serde_json::json!({"version":1,"delivery_id":delivery_id,"cursor":cursor,"authoritative":false,"fetch_authoritative_state":true,"aggregate":{"type":data.get::<String,_>("aggregate_type"),"id":data.get::<Uuid,_>("aggregate_id")},"event_type":data.get::<String,_>("event_type"),"state":data.get::<String,_>("state")});
-        let body = serde_json::to_vec(&payload).map_err(|_| StatusError::Invalid)?;
-        let timestamp = now.timestamp().to_string();
-        let signature = webhook_signature(&secret, &timestamp, &body)?;
-        let delivered = self
-            .client
-            .post(data.get::<String, _>("endpoint"))
-            .header("x-vox-signature-version", "v1")
-            .header("x-vox-signature", signature)
-            .header("x-vox-timestamp", timestamp)
-            .header("x-vox-delivery-id", delivery_id.to_string())
-            .header("content-type", "application/json")
-            .body(body)
-            .send()
-            .await
-            .map(|response| response.status().is_success())
-            .unwrap_or(false);
-        if delivered {
-            sqlx::query("UPDATE status_webhook_deliveries SET state='delivered',delivered_at=$1,lease_owner=NULL,lease_expires_at=NULL,updated_at=$1 WHERE id=$2").bind(now).bind(delivery_id).execute(self.db.pool()).await?;
-        } else {
-            self.retry_or_fail(delivery_id, attempts, now, false)
-                .await?;
-        }
-        Ok(true)
-    }
-
-    async fn retry_or_fail(
-        &self,
-        delivery_id: Uuid,
-        attempts: i32,
-        now: DateTime<Utc>,
-        secret_failure: bool,
-    ) -> Result<(), StatusError> {
-        let permanently_failed = attempts >= MAX_DELIVERY_ATTEMPTS || secret_failure;
-        let mut tx = self.db.pool().begin().await?;
-        let subscription = sqlx::query_scalar::<_,Uuid>("UPDATE status_webhook_deliveries SET state=CASE WHEN $1 THEN 'failed' ELSE 'pending' END,next_attempt_at=$2 + make_interval(secs => LEAST(3600, 2 ^ LEAST(attempts, 12))::int),lease_owner=NULL,lease_expires_at=NULL,updated_at=$2 WHERE id=$3 RETURNING subscription_id")
-            .bind(permanently_failed).bind(now).bind(delivery_id).fetch_one(&mut *tx).await?;
-        if permanently_failed {
-            sqlx::query("UPDATE status_webhook_subscriptions SET state='unhealthy',updated_at=$1 WHERE id=$2 AND state='enabled'").bind(now).bind(subscription).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(())
+        Ok(false)
     }
 }
 
-fn event(row: sqlx::postgres::PgRow) -> Result<StatusEvent, StatusError> {
-    Ok(StatusEvent {
-        cursor: row.try_get("cursor")?,
-        aggregate_type: row.try_get("aggregate_type")?,
-        aggregate_id: row.try_get("aggregate_id")?,
-        event_type: row.try_get("event_type")?,
-        state: row.try_get("state")?,
-        occurred_at: row.try_get("occurred_at")?,
-        committed_at: row.try_get("committed_at")?,
-        payload: row.try_get("payload")?,
-        authoritative: false,
-    })
-}
-
-fn context_from_row(row: sqlx::postgres::PgRow) -> Result<ResolvedUserContext, StatusError> {
-    Ok(ResolvedUserContext {
-        id: crate::identity::UserContextId(row.try_get("id")?),
-        user_id: crate::identity::UserId(row.try_get("user_id")?),
+fn context_from_user_id(user_id: Uuid) -> ResolvedUserContext {
+    ResolvedUserContext {
+        id: UserContextId(user_id),
+        user_id: UserId(user_id),
         subject: crate::identity::UserContextSubject {
-            deployment_id: crate::identity::DeploymentId(row.try_get("deployment_id")?),
-            host_app_id: crate::identity::HostAppId(row.try_get("host_app_id")?),
-            organization_id: row
-                .try_get::<Option<Uuid>, _>("organization_id")?
-                .map(crate::identity::HostOrganizationId),
-            host_user_id: row.try_get("host_user_id")?,
+            deployment_id: DeploymentId(Uuid::nil()),
+            host_app_id: HostAppId(Uuid::nil()),
+            organization_id: None,
+            host_user_id: String::new(),
         },
-    })
-}
-fn webhook_endpoint(value: &str) -> Result<Url, StatusError> {
-    let endpoint = Url::parse(value).map_err(|_| StatusError::Invalid)?;
-    let host = endpoint.host_str().unwrap_or_default();
-    if endpoint.scheme() != "https"
-        || endpoint.host_str().is_none()
-        || endpoint.username() != ""
-        || endpoint.password().is_some()
-        || host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().ok().is_some_and(private_or_local_ip)
-    {
-        return Err(StatusError::Invalid);
-    }
-    Ok(endpoint)
-}
-fn private_or_local_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-                || ip.is_unspecified()
-        }
     }
 }
-fn new_secret() -> String {
-    Uuid::new_v4().to_string()
-}
-fn secret_hash(secret: &str) -> String {
-    hex::encode(Sha256::digest(secret.as_bytes()))
-}
+
 fn trimmed(value: &str, max: usize) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty() && value.len() <= max).then_some(value)
-}
-fn webhook_signature(secret: &str, timestamp: &str, body: &[u8]) -> Result<String, StatusError> {
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .map_err(|_| StatusError::Invalid)?;
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(body);
-    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 fn outcome_provider_reference(outcome: &AdapterOutcome) -> Option<&str> {
@@ -485,6 +269,36 @@ fn outcome_provider_reference(outcome: &AdapterOutcome) -> Option<&str> {
         } => provider_reference.as_deref(),
         AdapterOutcome::Failed { .. } => None,
     }
+}
+
+#[allow(dead_code)]
+fn webhook_endpoint(value: &str) -> Result<String, StatusError> {
+    let parsed = Url::parse(value.trim()).map_err(|_| StatusError::Invalid)?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.host_str().is_none_or(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(|ip| match ip {
+                    IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+                    IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),
+                })
+        })
+    {
+        return Err(StatusError::Invalid);
+    }
+    Ok(parsed.to_string())
+}
+
+#[allow(dead_code)]
+fn webhook_signature(secret: &str, timestamp: &str, body: &[u8]) -> Result<String, StatusError> {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|_| StatusError::Invalid)?;
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 #[cfg(test)]

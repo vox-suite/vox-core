@@ -18,7 +18,7 @@ async fn migration_creates_the_complete_core_schema() {
         .expect("inspect test database");
     let rows = sqlx::query(
         "SELECT table_name FROM information_schema.tables \
-         WHERE table_schema = 'public' ORDER BY table_name",
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name",
     )
     .fetch_all(&pool)
     .await
@@ -29,28 +29,56 @@ async fn migration_creates_the_complete_core_schema() {
         "users",
         "auth_identities",
         "channel_identities",
+        "auth_sessions",
+        "conversations",
+        "messages",
         "collections",
-        "schemas",
-        "records",
-        "search_chunks",
         "tasks",
         "schedules",
-        "inbound_events",
-        "outbound_events",
+        "jobs",
+        "job_attempts",
+        "data_schemas",
+        "records",
         "devices",
-        "device_sessions",
-        "host_apps",
-        "host_credentials",
-        "agents",
-        "agent_bindings",
-        "capabilities",
         "connections",
-        "action_log",
-        "audit_log",
+        "action_proposals",
+        "action_approvals",
+        "executions",
+        "execution_attempts",
+        "inbound_events",
+        "audit_events",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
-            "missing {expected}"
+            "missing base table {expected}"
+        );
+    }
+    assert_eq!(
+        names.len(),
+        21,
+        "expected exactly 21 core tables, found: {names:?}"
+    );
+
+    let view_rows = sqlx::query(
+        "SELECT table_name FROM information_schema.views \
+         WHERE table_schema = 'public' ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list public views");
+    let view_names: Vec<String> = view_rows.iter().map(|row| row.get("table_name")).collect();
+    for expected in [
+        "scheduled_tasks",
+        "projects",
+        "events",
+        "user_records",
+        "user_goals",
+        "user_insights",
+        "client_devices",
+    ] {
+        assert!(
+            view_names.iter().any(|name| name == expected),
+            "missing compatibility view {expected}"
         );
     }
 
@@ -61,11 +89,9 @@ async fn migration_creates_the_complete_core_schema() {
     )
     .fetch_all(&pool)
     .await
-    .expect("list context-owned resources");
-    for expected in ["executions", "conversations", "scheduled_tasks", "tasks", "outbound_calls"] {
-        assert!(
-            scoped_resources.iter().any(|table| table == expected),
-            "{expected} is missing canonical user-context ownership"
-        );
-    }
+    .expect("list tables with user_context_id");
+    assert!(
+        scoped_resources.is_empty(),
+        "core schema must not use user_context_id columns: {scoped_resources:?}"
+    );
 }

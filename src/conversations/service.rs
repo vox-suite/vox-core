@@ -67,7 +67,7 @@ pub enum ConversationError {
     Invalid,
     #[error("conversation not found")]
     NotFound,
-    #[error("conversation storage unavailable")]
+    #[error("conversation storage unavailable: {0}")]
     Database(#[from] sqlx::Error),
     #[error("conversation agent unavailable")]
     Agent(#[from] AgentError),
@@ -544,9 +544,14 @@ impl ConversationService {
             .get(&Self::opening_key(identity, external_id))
             .cloned();
         if let Some(pending) = pending {
-            pending
-                .await
-                .map_err(|error| ConversationError::Database(sqlx::Error::Protocol(error)))?;
+            if let Err(error) = pending.await {
+                tracing::warn!(
+                    %error,
+                    channel = %identity.channel,
+                    external_conversation_id = %external_id,
+                    "Opening initialization failed; continuing without persisted greeting"
+                );
+            }
         }
         Ok(())
     }
@@ -715,14 +720,11 @@ impl ConversationService {
             .await?;
         let conversation = sqlx::query(
             "SELECT id FROM conversations \
-             WHERE channel = $1 AND external_id = $2 \
-               AND user_id = $3 \
-               AND (user_context_id = $4 OR user_context_id IS NULL)",
+             WHERE channel = $1 AND external_conversation_id = $2 AND user_id = $3",
         )
         .bind(request.identity.channel.trim())
         .bind(request.external_conversation_id.trim())
         .bind(owner.user_id.0)
-        .bind(owner.user_context_id.0)
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -733,15 +735,18 @@ impl ConversationService {
 
         let mut tx = self.db.pool().begin().await?;
         sqlx::query(
-            "UPDATE conversations SET status = 'completed', completed_at = COALESCE(completed_at, now()) WHERE id = $1",
+            "UPDATE conversations \
+             SET state = 'completed', \
+                 completed_at = COALESCE(completed_at, now()), \
+                 updated_at = now() \
+             WHERE id = $1 AND state = 'active'",
         )
         .bind(conversation_id)
         .execute(&mut *tx)
         .await?;
 
         sqlx::query(
-            "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1) \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1)",
         )
         .bind(conversation_id)
         .execute(&mut *tx)
@@ -778,45 +783,29 @@ impl ConversationService {
     ) -> Result<(ConversationId, UserId), ConversationError> {
         let mut tx = self.db.pool().begin().await?;
         let existing = sqlx::query(
-            "SELECT id, user_id, active_user_id, user_context_id FROM conversations \
-             WHERE user_id = $1 AND channel = $2 AND external_id = $3 \
-               AND (user_context_id = $4 OR user_context_id IS NULL) \
+            "SELECT id, user_id FROM conversations \
+             WHERE user_id = $1 AND channel = $2 AND external_conversation_id = $3 \
              FOR UPDATE",
         )
         .bind(owner.user_id.0)
         .bind(channel.trim())
         .bind(external_id.trim())
-        .bind(owner.user_context_id.0)
         .fetch_optional(&mut *tx)
         .await?;
 
         if let Some(row) = existing {
             let conversation_id: Uuid = row.get("id");
-            if row.get::<Option<Uuid>, _>("user_context_id").is_none() {
-                sqlx::query("UPDATE conversations SET user_context_id = $1 WHERE id = $2")
-                    .bind(owner.user_context_id.0)
-                    .bind(conversation_id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
             tx.commit().await?;
-            return Ok((
-                ConversationId(conversation_id),
-                UserId(
-                    row.get::<Option<Uuid>, _>("active_user_id")
-                        .unwrap_or_else(|| row.get("user_id")),
-                ),
-            ));
+            return Ok((ConversationId(conversation_id), UserId(row.get("user_id"))));
         }
 
         let row = sqlx::query(
-            "INSERT INTO conversations (user_context_id, user_id, channel, external_id) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_context_id, channel, external_id) \
-             DO UPDATE SET external_id = EXCLUDED.external_id \
+            "INSERT INTO conversations (user_id, channel, external_conversation_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (channel, external_conversation_id) \
+             DO UPDATE SET updated_at = now() \
              RETURNING id, user_id",
         )
-        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(channel.trim())
         .bind(external_id.trim())

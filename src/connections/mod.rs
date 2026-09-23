@@ -1,6 +1,3 @@
-/**
-* Third-party service connection credentials and token management.
-*/
 use crate::{
     db::Db,
     identity::{ResolvedUserContext, UserContextId},
@@ -78,12 +75,37 @@ impl ConnectionService {
         request: AuthorizeConnectionRequest,
     ) -> Result<Connection, ConnectionError> {
         validate(&request)?;
-        let integration=sqlx::query_as::<_,(Uuid,String)>("SELECT id,external_key FROM integration_definitions WHERE deployment_id=$1 AND external_key=$2 AND state='enabled'").bind(context.subject.deployment_id.0).bind(request.integration_external_key.trim()).fetch_optional(self.db.pool()).await?.ok_or(ConnectionError::IntegrationUnavailable)?;
-        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO external_connections (user_context_id,integration_id,external_account_hash,credential_custody,authorization_state,authorized_capabilities,expires_at,failure_code,revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $5='revoked' THEN now() ELSE NULL END) ON CONFLICT (user_context_id,integration_id,external_account_hash) DO UPDATE SET credential_custody=EXCLUDED.credential_custody,authorization_state=EXCLUDED.authorization_state,authorized_capabilities=EXCLUDED.authorized_capabilities,expires_at=EXCLUDED.expires_at,failure_code=EXCLUDED.failure_code,revoked_at=EXCLUDED.revoked_at,updated_at=now() RETURNING id").bind(context.id.0).bind(integration.0).bind(hash(&request.external_account_reference)).bind(custody(&request.credential_custody)).bind(state(&request.authorization_state)).bind(&request.authorized_capabilities).bind(request.expires_at).bind(&request.failure_code).fetch_one(self.db.pool()).await?;
+        let provider_key = request.integration_external_key.trim();
+        if provider_key.is_empty() {
+            return Err(ConnectionError::Invalid);
+        }
+        let account_hash = hash(&request.external_account_reference);
+        let secret_reference = format!("platform:{account_hash}");
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO connections (user_id, provider_key, external_account_hash, secret_reference, allowed_capabilities, authorization_state, expires_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6 = 'revoked' THEN now() ELSE NULL END) \
+             ON CONFLICT (user_id, provider_key, external_account_hash) DO UPDATE \
+             SET secret_reference = EXCLUDED.secret_reference, \
+                 allowed_capabilities = EXCLUDED.allowed_capabilities, \
+                 authorization_state = EXCLUDED.authorization_state, \
+                 expires_at = EXCLUDED.expires_at, \
+                 revoked_at = EXCLUDED.revoked_at, \
+                 updated_at = now() \
+             RETURNING id",
+        )
+        .bind(context.user_id.0)
+        .bind(provider_key)
+        .bind(&account_hash)
+        .bind(&secret_reference)
+        .bind(&request.authorized_capabilities)
+        .bind(state(&request.authorization_state))
+        .bind(request.expires_at)
+        .fetch_one(self.db.pool())
+        .await?;
         Ok(Connection {
             id,
             user_context_id: context.id,
-            integration_external_key: integration.1,
+            integration_external_key: provider_key.to_owned(),
             credential_custody: request.credential_custody,
             authorization_state: request.authorization_state,
             authorized_capabilities: request.authorized_capabilities,
@@ -104,21 +126,15 @@ fn validate(r: &AuthorizeConnectionRequest) -> Result<(), ConnectionError> {
     if matches!(r.authorization_state, AuthorizationState::Failed) != r.failure_code.is_some() {
         return Err(ConnectionError::Invalid);
     }
-    if !matches!(r.authorization_state, AuthorizationState::Authorized) && r.expires_at.is_some() {
+    if !matches!(r.authorization_state, AuthorizationState::Authorized) && r.expires_at.is_some()
+    {
         return Err(ConnectionError::Invalid);
     }
     Ok(())
 }
 
-fn hash(v: &str) -> Vec<u8> {
-    Sha256::digest(v.trim().as_bytes()).to_vec()
-}
-
-fn custody(v: &CredentialCustody) -> &'static str {
-    match v {
-        CredentialCustody::PlatformHeld => "platform_held",
-        CredentialCustody::ExternalOperator => "external_operator",
-    }
+fn hash(v: &str) -> String {
+    hex::encode(Sha256::digest(v.trim().as_bytes()))
 }
 
 fn state(v: &AuthorizationState) -> &'static str {
@@ -127,7 +143,6 @@ fn state(v: &AuthorizationState) -> &'static str {
         AuthorizationState::Authorized => "authorized",
         AuthorizationState::Expired => "expired",
         AuthorizationState::Revoked => "revoked",
-        AuthorizationState::Cancelled => "cancelled",
-        AuthorizationState::Failed => "failed",
+        AuthorizationState::Cancelled | AuthorizationState::Failed => "revoked",
     }
 }

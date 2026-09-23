@@ -65,24 +65,19 @@ impl SummaryHandler {
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
-        let already_summarized: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM conversation_summaries WHERE conversation_id = $1)",
+        let row = sqlx::query(
+            "SELECT user_id, summary_version FROM conversations WHERE id = $1",
         )
         .bind(conversation_id.0)
-        .fetch_one(self.db.pool())
-        .await?;
-        if already_summarized {
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(SummaryHandlerError::NotFound)?;
+
+        let user_id: Uuid = row.get("user_id");
+        let summary_version: i32 = row.get("summary_version");
+        if summary_version > 0 {
             return Ok(());
         }
-        let conversation = sqlx::query("SELECT user_id FROM conversations WHERE id = $1")
-            .bind(conversation_id.0)
-            .fetch_optional(self.db.pool())
-            .await?;
-
-        let user_id: Uuid = match conversation {
-            Some(row) => row.get("user_id"),
-            None => return Err(SummaryHandlerError::NotFound),
-        };
 
         let message_rows = sqlx::query(
             "SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY sequence_number ASC",
@@ -119,15 +114,14 @@ impl SummaryHandler {
                         prob,
                         "Jev System 1: skipped trivial conversation summarization"
                     );
-                    sqlx::query(
-                        "INSERT INTO conversation_summaries (conversation_id, user_id, recap, profile_updates, commitments, decisions) \
-                         VALUES ($1, $2, 'Brief interaction with no actionable updates.', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb) \
-                         ON CONFLICT (conversation_id) DO NOTHING",
-                    )
-                    .bind(conversation_id.0)
-                    .bind(user_id)
-                    .execute(self.db.pool())
-                    .await?;
+                    let stub = serde_json::json!({
+                        "recap": "Brief interaction with no actionable updates.",
+                        "profile_updates": {},
+                        "commitments": [],
+                        "decisions": [],
+                    });
+                    self.persist_summary(conversation_id.0, user_id, &stub, false)
+                        .await?;
                     return Ok(());
                 }
         }
@@ -137,29 +131,59 @@ impl SummaryHandler {
             .summarize(SummaryPrompt { messages })
             .await?;
 
-        let mut tx = self.db.pool().begin().await?;
-
         let profile_updates_val = serde_json::to_value(&summary.profile_updates)
             .unwrap_or_else(|_| serde_json::json!({}));
         let commitments_val =
             serde_json::to_value(&summary.commitments).unwrap_or_else(|_| serde_json::json!([]));
         let decisions_val =
             serde_json::to_value(&summary.decisions).unwrap_or_else(|_| serde_json::json!([]));
+        let latest_summary = serde_json::json!({
+            "recap": summary.recap,
+            "profile_updates": profile_updates_val,
+            "commitments": commitments_val,
+            "decisions": decisions_val,
+        });
 
-        let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO conversation_summaries (conversation_id, user_id, recap, profile_updates, commitments, decisions) \
-             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (conversation_id) DO NOTHING RETURNING id",
+        self.persist_summary(
+            conversation_id.0,
+            user_id,
+            &latest_summary,
+            !summary.profile_updates.is_empty(),
         )
-        .bind(conversation_id.0)
-        .bind(user_id)
-        .bind(&summary.recap)
-        .bind(&profile_updates_val)
-        .bind(&commitments_val)
-        .bind(&decisions_val)
-        .fetch_optional(&mut *tx)
         .await?;
+        self.memory.refresh(UserId(user_id)).await?;
+        Ok(())
+    }
 
-        if inserted.is_some() && !summary.profile_updates.is_empty() {
+    async fn persist_summary(
+        &self,
+        conversation_id: Uuid,
+        user_id: Uuid,
+        latest_summary: &serde_json::Value,
+        apply_profile: bool,
+    ) -> Result<(), SummaryHandlerError> {
+        let mut tx = self.db.pool().begin().await?;
+        let updated = sqlx::query(
+            "UPDATE conversations SET \
+                 latest_summary = $2, \
+                 summary_version = summary_version + 1, \
+                 summary_through_sequence = COALESCE((\
+                     SELECT MAX(sequence_number) FROM messages WHERE conversation_id = $1\
+                 ), 0), \
+                 updated_at = now() \
+             WHERE id = $1 AND summary_version = 0",
+        )
+        .bind(conversation_id)
+        .bind(latest_summary)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if updated == 1
+            && apply_profile
+            && let Some(profile_updates) = latest_summary.get("profile_updates")
+            && profile_updates.as_object().is_some_and(|o| !o.is_empty())
+        {
             sqlx::query(
                 "UPDATE users SET \
                  profile_facts = profile_facts || $2, \
@@ -168,13 +192,12 @@ impl SummaryHandler {
                  WHERE id = $1",
             )
             .bind(user_id)
-            .bind(&profile_updates_val)
+            .bind(profile_updates)
             .execute(&mut *tx)
             .await?;
         }
 
         tx.commit().await?;
-        self.memory.refresh(UserId(user_id)).await?;
         Ok(())
     }
 }

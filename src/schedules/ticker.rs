@@ -49,13 +49,17 @@ impl ScheduleTicker {
             let timezone_name: String = row.get("timezone");
 
             sqlx::query(
-                "INSERT INTO jobs (user_id, kind, payload_reference_id, schedule_id, occurrence_at) \
-                 VALUES ($1, 'run_schedule', $2, $2, $3) \
-                 ON CONFLICT (schedule_id, occurrence_at) DO NOTHING",
+                "INSERT INTO jobs (user_id, kind, payload_reference_id, schedule_id, occurrence_at, dedupe_key) \
+                 SELECT $1, 'run_schedule', $2, $2, $3, $4 \
+                 WHERE NOT EXISTS (\
+                     SELECT 1 FROM jobs \
+                     WHERE schedule_id = $2 AND occurrence_at = $3\
+                 )",
             )
             .bind(user_id)
             .bind(id)
             .bind(occurrence_at)
+            .bind(format!("run_schedule:{id}:{occurrence_at}"))
             .execute(&mut *tx)
             .await?;
 

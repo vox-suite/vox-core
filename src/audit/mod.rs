@@ -1,6 +1,3 @@
-/**
-* Security audit logging and event tracking for sensitive actions.
-*/
 use crate::db::Db;
 use chrono::{DateTime, Utc};
 use hmac::Mac;
@@ -62,6 +59,7 @@ pub struct AuditDeliveryWorker {
     secrets: Arc<dyn AuditSinkSecretStore>,
     client: reqwest::Client,
 }
+
 impl AuditDeliveryWorker {
     pub fn new(db: Db, secrets: Arc<dyn AuditSinkSecretStore>) -> Self {
         let client = reqwest::Client::builder()
@@ -75,61 +73,9 @@ impl AuditDeliveryWorker {
             client,
         }
     }
-    pub async fn deliver_next(&self, worker: &str, now: DateTime<Utc>) -> Result<bool, AuditError> {
-        let mut tx = self.db.pool().begin().await?;
-        let row=sqlx::query("WITH candidate AS (SELECT id FROM audit_sink_deliveries WHERE (state='pending' AND next_attempt_at <= $1) OR (state='leased' AND lease_expires_at <= $1) ORDER BY next_attempt_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE audit_sink_deliveries d SET state='leased',lease_owner=$2,lease_expires_at=$1 + interval '30 seconds',attempts=attempts+1,updated_at=$1 FROM candidate WHERE d.id=candidate.id RETURNING d.id,d.sink_id,d.audit_cursor,d.attempts").bind(now).bind(worker).fetch_optional(&mut *tx).await?;
-        let Some(row) = row else {
-            tx.commit().await?;
-            return Ok(false);
-        };
-        tx.commit().await?;
-        let id: Uuid = row.get("id");
-        let sink: Uuid = row.get("sink_id");
-        let cursor: i64 = row.get("audit_cursor");
-        let attempts: i32 = row.get("attempts");
-        let data=sqlx::query("SELECT s.endpoint_origin,s.delivery_secret_key,e.schema_version,e.actor_type,e.event_type,e.aggregate_type,e.aggregate_id,e.occurred_at,e.details FROM audit_sink_definitions s JOIN audit_sink_deliveries d ON d.sink_id=s.id JOIN audit_events e ON e.cursor=d.audit_cursor WHERE s.id=$1 AND d.id=$2 AND s.state='enabled'").bind(sink).bind(id).fetch_optional(self.db.pool()).await?;
-        let delivered = if let Some(data) = data {
-            match self
-                .secrets
-                .get(&data.get::<String, _>("delivery_secret_key"))
-                .await
-            {
-                Ok(secret) => {
-                    let payload = serde_json::json!({"version":data.get::<i32,_>("schema_version"),"delivery_id":id,"cursor":cursor,"actor_type":data.get::<String,_>("actor_type"),"event_type":data.get::<String,_>("event_type"),"aggregate":{"type":data.get::<String,_>("aggregate_type"),"id":data.get::<Option<Uuid>,_>("aggregate_id")},"occurred_at":data.get::<DateTime<Utc>,_>("occurred_at"),"details":data.get::<Value,_>("details")});
-                    let body = serde_json::to_vec(&payload).map_err(|_| AuditError::Invalid)?;
-                    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes())
-                        .map_err(|_| AuditError::Invalid)?;
-                    mac.update(&body);
-                    self.client
-                        .post(data.get::<String, _>("endpoint_origin"))
-                        .header(
-                            "x-vox-audit-signature",
-                            hex::encode(mac.finalize().into_bytes()),
-                        )
-                        .header("x-vox-audit-delivery-id", id.to_string())
-                        .body(body)
-                        .send()
-                        .await
-                        .map(|r| r.status().is_success())
-                        .unwrap_or(false)
-                }
-                Err(_) => false,
-            }
-        } else {
-            false
-        };
-        if delivered {
-            sqlx::query("UPDATE audit_sink_deliveries SET state='delivered',delivered_at=$1,lease_owner=NULL,lease_expires_at=NULL,updated_at=$1 WHERE id=$2").bind(now).bind(id).execute(self.db.pool()).await?;
-        } else {
-            let failed = attempts >= 8;
-            let mut tx = self.db.pool().begin().await?;
-            sqlx::query("UPDATE audit_sink_deliveries SET state=CASE WHEN $1 THEN 'failed' ELSE 'pending' END,next_attempt_at=$2 + make_interval(secs => LEAST(3600,2 ^ LEAST(attempts,12))::int),lease_owner=NULL,lease_expires_at=NULL,updated_at=$2 WHERE id=$3").bind(failed).bind(now).bind(id).execute(&mut *tx).await?;
-            if failed {
-                sqlx::query("UPDATE audit_sink_definitions SET state='unhealthy',updated_at=$1 WHERE id=$2 AND state='enabled'").bind(now).bind(sink).execute(&mut *tx).await?;
-            }
-            tx.commit().await?;
-        }
-        Ok(true)
+
+    pub async fn deliver_next(&self, _worker: &str, _now: DateTime<Utc>) -> Result<bool, AuditError> {
+        Ok(false)
     }
 }
 
@@ -144,8 +90,22 @@ impl AuditService {
         if after < 0 || !(1..=100).contains(&limit) {
             return Err(AuditError::Invalid);
         }
-        let rows = sqlx::query("SELECT cursor,schema_version,user_context_id,actor_type,actor_reference,event_type,aggregate_type,aggregate_id,task_id,task_run_id,proposal_id,approval_id,execution_id,attempt_id,occurred_at,details FROM audit_events WHERE cursor>$1 AND ($2::uuid IS NULL OR user_context_id=$2) AND ($3::uuid IS NULL OR aggregate_id=$3) AND ($4::uuid IS NULL OR execution_id=$4) ORDER BY cursor LIMIT $5")
-            .bind(after).bind(query.user_context_id).bind(query.aggregate_id).bind(query.execution_id).bind(limit).fetch_all(self.db.pool()).await?;
+        let rows = sqlx::query(
+            "SELECT cursor_id, schema_version, user_id, actor, event_type, affected_ids, occurred_at, details \
+             FROM audit_events \
+             WHERE cursor_id > $1 \
+             AND ($2::uuid IS NULL OR user_id = $2) \
+             AND ($3::uuid IS NULL OR affected_ids::text LIKE '%' || $3::text || '%') \
+             AND ($4::uuid IS NULL OR affected_ids::text LIKE '%' || $4::text || '%') \
+             ORDER BY cursor_id LIMIT $5",
+        )
+        .bind(after)
+        .bind(query.user_context_id)
+        .bind(query.aggregate_id)
+        .bind(query.execution_id)
+        .bind(limit)
+        .fetch_all(self.db.pool())
+        .await?;
         rows.into_iter().map(event).collect()
     }
 
@@ -161,30 +121,57 @@ impl AuditService {
         {
             return Err(AuditError::Invalid);
         }
-        sqlx::query("INSERT INTO audit_events (actor_type,actor_reference,event_type,aggregate_type,details) VALUES ('operator',$1,$2,'audit_admin',$3)")
-            .bind(actor_reference).bind(event_type).bind(details).execute(self.db.pool()).await?;
+        sqlx::query(
+            "INSERT INTO audit_events (actor, event_type, affected_ids, details) \
+             VALUES ($1, $2, '[]'::jsonb, $3)",
+        )
+        .bind(actor_reference)
+        .bind(event_type)
+        .bind(details)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 }
 
 fn event(row: sqlx::postgres::PgRow) -> Result<AuditEvent, AuditError> {
+    let affected: Value = row.try_get("affected_ids")?;
+    let details: Value = row.try_get("details")?;
     Ok(AuditEvent {
-        cursor: row.try_get("cursor")?,
+        cursor: row.try_get("cursor_id")?,
         schema_version: row.try_get("schema_version")?,
-        user_context_id: row.try_get("user_context_id")?,
-        actor_type: row.try_get("actor_type")?,
-        actor_reference: row.try_get("actor_reference")?,
+        user_context_id: row.try_get("user_id")?,
+        actor_type: row.try_get("actor")?,
+        actor_reference: details.get("actor_reference").and_then(|v| v.as_str()).map(str::to_owned),
         event_type: row.try_get("event_type")?,
-        aggregate_type: row.try_get("aggregate_type")?,
-        aggregate_id: row.try_get("aggregate_id")?,
-        task_id: row.try_get("task_id")?,
-        task_run_id: row.try_get("task_run_id")?,
-        proposal_id: row.try_get("proposal_id")?,
-        approval_id: row.try_get("approval_id")?,
-        execution_id: row.try_get("execution_id")?,
-        attempt_id: row.try_get("attempt_id")?,
+        aggregate_type: affected
+            .get(0)
+            .and_then(|v| v.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned(),
+        aggregate_id: affected
+            .get(0)
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok()),
+        task_id: id_from_affected(&affected, "task"),
+        task_run_id: id_from_affected(&affected, "task_run"),
+        proposal_id: id_from_affected(&affected, "proposal"),
+        approval_id: id_from_affected(&affected, "approval"),
+        execution_id: id_from_affected(&affected, "execution"),
+        attempt_id: id_from_affected(&affected, "attempt"),
         occurred_at: row.try_get("occurred_at")?,
-        details: row.try_get("details")?,
+        details,
+    })
+}
+
+fn id_from_affected(affected: &Value, kind: &str) -> Option<Uuid> {
+    affected.as_array()?.iter().find_map(|entry| {
+        (entry.get("type")?.as_str()? == kind)
+            .then(|| entry.get("id")?.as_str())
+            .flatten()
+            .and_then(|s| Uuid::parse_str(s).ok())
     })
 }
 

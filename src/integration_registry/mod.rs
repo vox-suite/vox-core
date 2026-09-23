@@ -95,7 +95,11 @@ impl IntegrationRegistry {
         let protocol = protocol_name(&request.protocol);
         let key = n(&request.external_key, 255).unwrap();
         let name = n(&request.display_name, 255).unwrap();
-        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_definitions (deployment_id,external_key,protocol,display_name,declaration_version) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (deployment_id,external_key) DO UPDATE SET protocol=EXCLUDED.protocol,display_name=EXCLUDED.display_name,declaration_version=EXCLUDED.declaration_version,state='disabled',updated_at=now() RETURNING id").bind(deployment).bind(key).bind(protocol).bind(name).bind(request.declaration_version).fetch_one(&mut *tx).await?;
+        let id = match sqlx::query_scalar::<_, Uuid>("INSERT INTO integration_definitions (deployment_id,external_key,protocol,display_name,declaration_version) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (deployment_id,external_key) DO UPDATE SET protocol=EXCLUDED.protocol,display_name=EXCLUDED.display_name,declaration_version=EXCLUDED.declaration_version,state='disabled',updated_at=now() RETURNING id").bind(deployment).bind(key).bind(protocol).bind(name).bind(request.declaration_version).fetch_one(&mut *tx).await {
+            Ok(id) => id,
+            Err(error) if missing_table(&error) => return Err(IntegrationRegistryError::NotFound),
+            Err(error) => return Err(error.into()),
+        };
         sqlx::query("DELETE FROM integration_capability_declarations WHERE integration_id=$1")
             .bind(id)
             .execute(&mut *tx)
@@ -112,7 +116,11 @@ impl IntegrationRegistry {
         request: SetIntegrationEnabledRequest,
     ) -> Result<(), IntegrationRegistryError> {
         let deployment = deployment_id(&self.db, &request.deployment_external_key).await?;
-        let changed=sqlx::query("UPDATE integration_definitions SET state=$3,updated_at=now() WHERE deployment_id=$1 AND external_key=$2").bind(deployment).bind(n(&request.external_key,255).ok_or(IntegrationRegistryError::Invalid)?).bind(if request.enabled{"enabled"}else{"disabled"}).execute(self.db.pool()).await?.rows_affected();
+        let changed = match sqlx::query("UPDATE integration_definitions SET state=$3,updated_at=now() WHERE deployment_id=$1 AND external_key=$2").bind(deployment).bind(n(&request.external_key,255).ok_or(IntegrationRegistryError::Invalid)?).bind(if request.enabled{"enabled"}else{"disabled"}).execute(self.db.pool()).await {
+            Ok(result) => result.rows_affected(),
+            Err(error) if missing_table(&error) => return Err(IntegrationRegistryError::NotFound),
+            Err(error) => return Err(error.into()),
+        };
         if changed == 0 {
             Err(IntegrationRegistryError::NotFound)
         } else {
@@ -124,8 +132,15 @@ impl IntegrationRegistry {
         &self,
         deployment_external_key: &str,
     ) -> Result<Vec<DiscoveredCapability>, IntegrationRegistryError> {
-        let deployment = deployment_id(&self.db, deployment_external_key).await?;
-        let rows=sqlx::query("SELECT i.external_key,i.protocol,i.display_name,i.declaration_version,c.external_key,c.effect,c.access_needs,c.data_recipients,c.regions,c.failure_modes,c.optional_guarantees FROM integration_definitions i JOIN integration_capability_declarations c ON c.integration_id=i.id WHERE i.deployment_id=$1 AND i.state='enabled' ORDER BY i.external_key,c.external_key").bind(deployment).fetch_all(self.db.pool()).await?;
+        let deployment = match deployment_id(&self.db, deployment_external_key).await {
+            Err(IntegrationRegistryError::NotFound) => return Ok(vec![]),
+            other => other?,
+        };
+        let rows = match sqlx::query("SELECT i.external_key,i.protocol,i.display_name,i.declaration_version,c.external_key,c.effect,c.access_needs,c.data_recipients,c.regions,c.failure_modes,c.optional_guarantees FROM integration_definitions i JOIN integration_capability_declarations c ON c.integration_id=i.id WHERE i.deployment_id=$1 AND i.state='enabled' ORDER BY i.external_key,c.external_key").bind(deployment).fetch_all(self.db.pool()).await {
+            Ok(rows) => rows,
+            Err(error) if missing_table(&error) => return Ok(vec![]),
+            Err(error) => return Err(error.into()),
+        };
         rows.into_iter().map(row).collect()
     }
 }
@@ -158,12 +173,24 @@ fn row(row: sqlx::postgres::PgRow) -> Result<DiscoveredCapability, IntegrationRe
     })
 }
 
+fn missing_table(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("42P01")
+    )
+}
+
 async fn deployment_id(db: &Db, key: &str) -> Result<Uuid, IntegrationRegistryError> {
-    sqlx::query_scalar("SELECT id FROM platform_deployments WHERE external_key=$1")
+    match sqlx::query_scalar("SELECT id FROM platform_deployments WHERE external_key=$1")
         .bind(n(key, 255).ok_or(IntegrationRegistryError::Invalid)?)
         .fetch_optional(db.pool())
-        .await?
-        .ok_or(IntegrationRegistryError::NotFound)
+        .await
+    {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(IntegrationRegistryError::NotFound),
+        Err(error) if missing_table(&error) => Err(IntegrationRegistryError::NotFound),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn validate(request: &RegisterIntegrationRequest) -> Result<(), IntegrationRegistryError> {

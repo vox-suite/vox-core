@@ -90,11 +90,10 @@ impl ScheduleService {
             }
         };
         let row = sqlx::query(
-            "INSERT INTO scheduled_tasks (user_context_id, user_id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active') \
-             RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
+            "INSERT INTO schedules (user_id, instruction, kind, recurrence_expression, timezone, next_run_at, state) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'active') \
+             RETURNING id, instruction, kind AS schedule_kind, recurrence_expression, timezone, next_run_at, state",
         )
-        .bind(owner.user_context_id.0)
         .bind(owner.user_id.0)
         .bind(request.instruction.trim())
         .bind(request.schedule_kind.as_str())
@@ -136,14 +135,12 @@ impl ScheduleService {
             .resolve_legacy_owner(&request.identity)
             .await?;
         let row = sqlx::query(
-            "SELECT schedule_kind, recurrence_expression, timezone, next_run_at, state \
-             FROM scheduled_tasks \
-             WHERE id = $1 AND user_id = $2 \
-               AND (user_context_id = $3 OR user_context_id IS NULL)",
+            "SELECT kind AS schedule_kind, recurrence_expression, timezone, next_run_at, state \
+             FROM schedules \
+             WHERE id = $1 AND user_id = $2",
         )
         .bind(id.0)
         .bind(owner.user_id.0)
-        .bind(owner.user_context_id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ScheduleError::NotFound)?;
@@ -179,18 +176,16 @@ impl ScheduleService {
             recurrence_expression = Some(expression);
         }
         let row = sqlx::query(
-            "UPDATE scheduled_tasks SET state = $1, next_run_at = $2, recurrence_expression = $3, \
-                    user_context_id = COALESCE(user_context_id, $6), updated_at = now() \
+            "UPDATE schedules SET state = $1, next_run_at = $2, recurrence_expression = $3, \
+                    updated_at = now() \
              WHERE id = $4 AND user_id = $5 \
-               AND (user_context_id = $6 OR user_context_id IS NULL) \
-             RETURNING id, instruction, schedule_kind, recurrence_expression, timezone, next_run_at, state",
+             RETURNING id, instruction, kind AS schedule_kind, recurrence_expression, timezone, next_run_at, state",
         )
         .bind(state)
         .bind(next_run_at)
         .bind(recurrence_expression)
         .bind(id.0)
         .bind(owner.user_id.0)
-        .bind(owner.user_context_id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ScheduleError::NotFound)?;

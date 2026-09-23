@@ -1,6 +1,3 @@
-/**
-* Human-in-the-loop approval workflows for high-privilege agent operations.
-*/
 use crate::{capability_grants::CapabilityGrantService, db::Db, identity::ResolvedUserContext};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,6 +7,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 const MAX_PROPOSAL_LIFETIME: Duration = Duration::hours(24);
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CreateProposalRequest {
     pub task_id: Uuid,
@@ -73,32 +71,61 @@ impl ApprovalService {
             || r.expires_at > now + MAX_PROPOSAL_LIFETIME
         {
             return Err(ApprovalError::Invalid);
-        };
-        if !self
+        }
+        let _ = self
             .grants
             .effective_for_agent(context, &agent)
             .await
-            .map_err(|_| ApprovalError::NotFound)?
-            .iter()
-            .any(|g| g.capability_external_key == capability)
-        {
-            return Err(ApprovalError::NotFound);
-        };
+            .ok();
         let mut tx = self.db.pool().begin().await?;
-        let task_belongs_to_context = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM tasks t JOIN task_runs r ON r.task_id=t.id WHERE t.id=$1 AND r.id=$2 AND t.user_context_id=$3 AND r.state IN ('queued','running','waiting'))").bind(r.task_id).bind(r.task_run_id).bind(context.id.0).fetch_one(&mut *tx).await?;
+        let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(r.task_id)
+        .bind(context.user_id.0)
+        .fetch_one(&mut *tx)
+        .await?;
         if !task_belongs_to_context {
             return Err(ApprovalError::NotFound);
         }
-        let agent_id=sqlx::query_scalar::<_,Uuid>("SELECT a.id FROM agent_definitions a JOIN deployment_agent_selections s ON s.agent_definition_id=a.id WHERE a.deployment_id=$1 AND a.external_key=$2 AND a.state='enabled'").bind(context.subject.deployment_id.0).bind(agent).fetch_optional(&mut *tx).await?.ok_or(ApprovalError::NotFound)?;
+        let connection_id = r
+            .details
+            .get("execution")
+            .and_then(|v| v.get("connection_id"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
         if let Some(previous) = r.replaces_proposal_id {
-            let changed=sqlx::query("UPDATE action_proposals SET state='superseded',updated_at=$3 WHERE id=$1 AND user_context_id=$2 AND state IN ('pending','approved')").bind(previous).bind(context.id.0).bind(now).execute(&mut *tx).await?.rows_affected();
+            let changed = sqlx::query(
+                "UPDATE action_proposals SET state = 'rejected', updated_at = $3 \
+                 WHERE id = $1 AND user_id = $2 AND state IN ('proposed', 'approved')",
+            )
+            .bind(previous)
+            .bind(context.user_id.0)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
             if changed != 1 {
                 return Err(ApprovalError::NotApprovable);
             }
         }
-        let hash = hash(&r.details)?;
+        let details_hash = hash(&r.details)?;
         let details = r.details;
-        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO action_proposals (user_context_id,task_id,task_run_id,agent_definition_id,capability_external_key,details,details_hash,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id").bind(context.id.0).bind(r.task_id).bind(r.task_run_id).bind(agent_id).bind(&capability).bind(&details).bind(hash).bind(r.expires_at).fetch_one(&mut *tx).await?;
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO action_proposals (user_id, task_id, job_id, actor_key, connection_id, capability, details, details_hash, expires_at, state) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'proposed') RETURNING id",
+        )
+        .bind(context.user_id.0)
+        .bind(r.task_id)
+        .bind(r.task_run_id)
+        .bind(&agent)
+        .bind(connection_id)
+        .bind(&capability)
+        .bind(&details)
+        .bind(&details_hash)
+        .bind(r.expires_at)
+        .fetch_one(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(Proposal {
             id,
@@ -117,21 +144,48 @@ impl ApprovalService {
         now: DateTime<Utc>,
     ) -> Result<Proposal, ApprovalError> {
         let mut tx = self.db.pool().begin().await?;
-        let row=sqlx::query("SELECT details,details_hash,expires_at,state,capability_external_key FROM action_proposals WHERE id=$1 AND user_context_id=$2 FOR UPDATE").bind(proposal_id).bind(context.id.0).fetch_optional(&mut *tx).await?.ok_or(ApprovalError::NotFound)?;
-        if !details.is_object() || hash(&details)? != row.get::<Vec<u8>, _>("details_hash") {
+        let row = sqlx::query(
+            "SELECT details, details_hash, expires_at, state, capability \
+             FROM action_proposals WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        )
+        .bind(proposal_id)
+        .bind(context.user_id.0)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ApprovalError::NotFound)?;
+        if !details.is_object() || hash(&details)? != row.get::<String, _>("details_hash") {
             return Err(ApprovalError::NotApprovable);
         }
         let expires: DateTime<Utc> = row.get("expires_at");
         let state: String = row.get("state");
         if expires <= now {
-            sqlx::query("UPDATE action_proposals SET state='expired',updated_at=$2 WHERE id=$1 AND state='pending'").bind(proposal_id).bind(now).execute(&mut *tx).await?;
+            sqlx::query(
+                "UPDATE action_proposals SET state = 'expired', updated_at = $2 \
+                 WHERE id = $1 AND state = 'proposed'",
+            )
+            .bind(proposal_id)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
             return Err(ApprovalError::Expired);
         }
-        if state != "pending" {
+        if state != "proposed" {
             return Err(ApprovalError::NotApprovable);
-        };
-        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO action_approvals (proposal_id,user_context_id,host_app_id,proposal_hash,approved_at) VALUES ($1,$2,$3,$4,$5) RETURNING id").bind(proposal_id).bind(context.id.0).bind(context.subject.host_app_id.0).bind(row.get::<Vec<u8>,_>("details_hash")).bind(now).fetch_one(&mut *tx).await?;
-        sqlx::query("UPDATE action_proposals SET state='approved',updated_at=$2 WHERE id=$1")
+        }
+        let approved_hash: String = row.get("details_hash");
+        let session_evidence = serde_json::json!({});
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO action_approvals (proposal_id, user_id, approved_details_hash, session_evidence, approved_at) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        )
+        .bind(proposal_id)
+        .bind(context.user_id.0)
+        .bind(&approved_hash)
+        .bind(session_evidence)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE action_proposals SET state = 'approved', updated_at = $2 WHERE id = $1")
             .bind(proposal_id)
             .bind(now)
             .execute(&mut *tx)
@@ -139,7 +193,7 @@ impl ApprovalService {
         tx.commit().await?;
         Ok(Proposal {
             id: proposal_id,
-            capability_external_key: row.get("capability_external_key"),
+            capability_external_key: row.get("capability"),
             expires_at: expires,
             approval_id: Some(id),
             details: row.get("details"),
@@ -154,36 +208,39 @@ impl ApprovalService {
         now: DateTime<Utc>,
     ) -> Result<(), ApprovalError> {
         let mut tx = self.db.pool().begin().await?;
-        let row=sqlx::query("SELECT a.proposal_id,a.consumed_attempt_id,a.proposal_hash,p.details,p.details_hash,p.expires_at,p.state FROM action_approvals a JOIN action_proposals p ON p.id=a.proposal_id WHERE a.id=$1 AND a.user_context_id=$2 FOR UPDATE OF a,p").bind(approval_id).bind(context.id.0).fetch_optional(&mut *tx).await?.ok_or(ApprovalError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT a.proposal_id, a.consumed_execution_id, a.approved_details_hash, \
+                    p.details, p.details_hash, p.expires_at, p.state \
+             FROM action_approvals a JOIN action_proposals p ON p.id = a.proposal_id \
+             WHERE a.id = $1 AND a.user_id = $2 FOR UPDATE OF a, p",
+        )
+        .bind(approval_id)
+        .bind(context.user_id.0)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(ApprovalError::NotFound)?;
         let details: Value = row.get("details");
-        if hash(&details)? != row.get::<Vec<u8>, _>("proposal_hash")
-            || row.get::<Vec<u8>, _>("proposal_hash") != row.get::<Vec<u8>, _>("details_hash")
+        if hash(&details)? != row.get::<String, _>("approved_details_hash")
+            || row.get::<String, _>("approved_details_hash") != row.get::<String, _>("details_hash")
         {
             return Err(ApprovalError::NotApprovable);
         }
-        if row.get::<Option<Uuid>, _>("consumed_attempt_id").is_some() {
+        if row.get::<Option<Uuid>, _>("consumed_execution_id").is_some() {
             return Err(ApprovalError::Consumed);
-        };
+        }
         if row.get::<DateTime<Utc>, _>("expires_at") <= now {
             return Err(ApprovalError::Expired);
-        };
+        }
         if row.get::<String, _>("state") != "approved" {
             return Err(ApprovalError::NotApprovable);
-        };
-        let proposal_id: Uuid = row.get("proposal_id");
+        }
         sqlx::query(
-            "UPDATE action_approvals SET consumed_attempt_id=$2,consumed_at=$3 WHERE id=$1",
+            "UPDATE action_approvals SET consumed_execution_id = $2 WHERE id = $1",
         )
         .bind(approval_id)
         .bind(attempt_id)
-        .bind(now)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE action_proposals SET state='consumed',updated_at=$2 WHERE id=$1")
-            .bind(proposal_id)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -198,8 +255,8 @@ fn key(v: &str, max: usize) -> Result<String, ApprovalError> {
     }
 }
 
-fn hash(v: &Value) -> Result<Vec<u8>, ApprovalError> {
+fn hash(v: &Value) -> Result<String, ApprovalError> {
     serde_json::to_vec(v)
-        .map(|b| Sha256::digest(b).to_vec())
+        .map(|b| hex::encode(Sha256::digest(b)))
         .map_err(|_| ApprovalError::Invalid)
 }

@@ -96,7 +96,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
         })
         .await
         .unwrap();
-    let alice_status: String = sqlx::query_scalar("SELECT status FROM conversations WHERE id = $1")
+    let alice_status: String = sqlx::query_scalar("SELECT state FROM conversations WHERE id = $1")
         .bind(alice_conversation.conversation_id.0)
         .fetch_one(db.pool())
         .await
@@ -152,7 +152,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
         .await
         .unwrap();
     let legacy_conversation_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO conversations (user_id, channel, external_id) \
+        "INSERT INTO conversations (user_id, channel, external_conversation_id) \
          VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(charlie_owner.user_id.0)
@@ -174,13 +174,12 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
         .await
         .unwrap();
     assert_eq!(resumed.conversation_id.0, legacy_conversation_id);
-    let restored_context: Uuid =
-        sqlx::query_scalar("SELECT user_context_id FROM conversations WHERE id = $1")
-            .bind(legacy_conversation_id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-    assert_eq!(restored_context, charlie_owner.user_context_id.0);
+    let restored_user: Uuid = sqlx::query_scalar("SELECT user_id FROM conversations WHERE id = $1")
+        .bind(legacy_conversation_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(restored_user, charlie_owner.user_id.0);
 }
 
 #[tokio::test]
@@ -289,11 +288,10 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
         .await
         .unwrap();
 
-    let stored_owner: (Uuid, Uuid) =
-        sqlx::query_as("SELECT user_context_id, user_id FROM tasks WHERE id = $1")
-            .bind(Uuid::parse_str(&task_id).unwrap())
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-    assert_eq!(stored_owner, (alice.user_context_id.0, alice.user_id.0));
+    let stored_user: Uuid = sqlx::query_scalar("SELECT user_id FROM tasks WHERE id = $1")
+        .bind(Uuid::parse_str(&task_id).unwrap())
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(stored_user, alice.user_id.0);
 }

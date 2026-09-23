@@ -111,11 +111,11 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
     assert_eq!(updated.id, created.id);
     assert_eq!(updated.authorization_state, AuthorizationState::Expired);
     let hash_length: i32 = sqlx::query_scalar(
-        "SELECT octet_length(external_account_hash) FROM external_connections WHERE id=$1",
+        "SELECT length(external_account_hash) FROM connections WHERE id=$1",
     )
     .bind(created.id)
     .fetch_one(db.pool())
     .await
     .unwrap();
-    assert_eq!(hash_length, 32, "only the account hash is persisted");
+    assert_eq!(hash_length, 64, "account hash is persisted as hex-encoded SHA-256");
 }

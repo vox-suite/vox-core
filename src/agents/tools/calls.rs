@@ -184,9 +184,10 @@ impl Tool for ScheduleOutboundCall {
             let p_clean = p.trim().to_string();
             if !p_clean.is_empty() {
                 let _ = sqlx::query(
-                    "INSERT INTO user_identities (user_id, channel, external_id) \
+                    "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
                      VALUES ($1, 'phone', $2) \
-                     ON CONFLICT DO NOTHING",
+                     ON CONFLICT (channel, provider_scope, normalized_external_id) \
+                     WHERE revoked_at IS NULL DO NOTHING",
                 )
                 .bind(self.owner.user_id.0)
                 .bind(&p_clean)
@@ -198,8 +199,8 @@ impl Tool for ScheduleOutboundCall {
             }
         } else {
             sqlx::query_scalar(
-                "SELECT external_id FROM user_identities \
-                 WHERE user_id = $1 AND channel = 'phone' \
+                "SELECT normalized_external_id FROM channel_identities \
+                 WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL \
                  ORDER BY created_at DESC LIMIT 1",
             )
             .bind(self.owner.user_id.0)
@@ -209,26 +210,25 @@ impl Tool for ScheduleOutboundCall {
 
         let phone_number = phone.ok_or(CallToolError::NoPhoneNumber)?;
 
-        let schedule_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO scheduled_tasks (user_context_id, user_id, instruction, schedule_kind, timezone, next_run_at, state) \
-             VALUES ($1, $2, $3, 'once', 'UTC', $4, 'active') \
+        let task_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO tasks (user_id, title, instruction, status, execution_type, due_at) \
+             VALUES ($1, $2, $3, 'pending', 'autonomous', $4) \
              RETURNING id",
         )
-        .bind(self.owner.user_context_id.0)
         .bind(self.owner.user_id.0)
+        .bind(reason)
         .bind(opening)
         .bind(target_time)
         .fetch_one(db.pool())
         .await?;
 
-        let task_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO tasks (user_context_id, user_id, title, raw_instruction, status, execution_type, due_at) \
-             VALUES ($1, $2, $3, $4, 'pending', 'autonomous', $5) \
+        let schedule_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO schedules (user_id, task_id, instruction, kind, timezone, next_run_at, state) \
+             VALUES ($1, $2, $3, 'once', 'UTC', $4, 'active') \
              RETURNING id",
         )
-        .bind(self.owner.user_context_id.0)
         .bind(self.owner.user_id.0)
-        .bind(reason)
+        .bind(task_id)
         .bind(opening)
         .bind(target_time)
         .fetch_one(db.pool())
@@ -337,9 +337,10 @@ impl Tool for TriggerOutboundCall {
             let p_clean = phone.trim();
             if !p_clean.is_empty() {
                 let _ = sqlx::query(
-                    "INSERT INTO user_identities (user_id, channel, external_id) \
+                    "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
                      VALUES ($1, 'phone', $2) \
-                     ON CONFLICT DO NOTHING",
+                     ON CONFLICT (channel, provider_scope, normalized_external_id) \
+                     WHERE revoked_at IS NULL DO NOTHING",
                 )
                 .bind(self.owner.user_id.0)
                 .bind(p_clean)

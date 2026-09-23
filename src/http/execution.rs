@@ -59,7 +59,7 @@ pub async fn get(
     let Some(db) = state.db.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match sqlx::query("SELECT id,state,provider_reference,confirmation_evidence FROM executions WHERE id=$1 AND user_context_id=$2").bind(id).bind(context.id.0).fetch_optional(db.pool()).await { Ok(Some(row))=>(StatusCode::OK,Json(crate::execution::Execution{id:row.get("id"),state:row.get("state"),provider_reference:row.get("provider_reference"),confirmation_evidence:row.get("confirmation_evidence")})).into_response(),Ok(None)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>StatusCode::SERVICE_UNAVAILABLE.into_response()}
+    match sqlx::query("SELECT id,state,provider_reference,confirmation_evidence FROM executions WHERE id=$1 AND user_id=$2").bind(id).bind(context.user_id.0).fetch_optional(db.pool()).await { Ok(Some(row))=>(StatusCode::OK,Json(crate::execution::Execution{id:row.get("id"),state:row.get("state"),provider_reference:row.get("provider_reference"),confirmation_evidence:row.get("confirmation_evidence")})).into_response(),Ok(None)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>StatusCode::SERVICE_UNAVAILABLE.into_response()}
 }
 
 fn reply(result: Result<crate::execution::Execution, ExecutionError>, ok: StatusCode) -> Response {

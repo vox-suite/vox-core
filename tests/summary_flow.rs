@@ -119,11 +119,13 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
     let handler = SummaryHandler::with_memory(db.clone(), Arc::new(Summarizer), memory);
     handler.handle(response.conversation_id).await.unwrap();
     handler.handle(response.conversation_id).await.unwrap();
-    let summaries: i64 = sqlx::query_scalar("SELECT count(*) FROM conversation_summaries")
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
-    let facts: Value = sqlx::query_scalar("SELECT facts FROM user_profiles LIMIT 1")
+    let summaries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversations WHERE summary_version > 0",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let facts: Value = sqlx::query_scalar("SELECT profile_facts FROM users LIMIT 1")
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -140,21 +142,17 @@ async fn projection_drops_old_recaps_before_commitments_and_stays_valid_json() {
         .await
         .unwrap();
     for index in 0..20 {
-        let conversation_id: uuid::Uuid = sqlx::query_scalar(
-            "INSERT INTO conversations (user_id, channel, external_id, status) VALUES ($1, 'phone', $2, 'completed') RETURNING id",
+        sqlx::query(
+            "INSERT INTO conversations (user_id, channel, external_conversation_id, state, latest_summary, summary_version) \
+             VALUES ($1, 'phone', $2, 'completed', $3, 1)",
         )
         .bind(user_id)
         .bind(format!("context-{index}"))
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO conversation_summaries (conversation_id, user_id, recap, commitments, decisions) VALUES ($1, $2, $3, $4, '[]')",
-        )
-        .bind(conversation_id)
-        .bind(user_id)
-        .bind("x".repeat(2_000))
-        .bind(serde_json::json!(["Keep this commitment"]))
+        .bind(serde_json::json!({
+            "recap": "x".repeat(2_000),
+            "commitments": ["Keep this commitment"],
+            "decisions": [],
+        }))
         .execute(db.pool())
         .await
         .unwrap();

@@ -55,7 +55,6 @@ async fn setup() -> (Db, ResourceOwner, String) {
     db.migrate().await.unwrap();
 
     let user_id = Uuid::new_v4();
-    let context_id = Uuid::new_v4();
     let phone = "+15551234567";
 
     sqlx::query("INSERT INTO users (id) VALUES ($1)")
@@ -64,22 +63,17 @@ async fn setup() -> (Db, ResourceOwner, String) {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO user_contexts (id, user_id) VALUES ($1, $2)")
-        .bind(context_id)
-        .bind(user_id)
-        .execute(db.pool())
-        .await
-        .unwrap();
-
-    sqlx::query("INSERT INTO user_identities (user_id, channel, external_id) VALUES ($1, 'phone', $2)")
-        .bind(user_id)
-        .bind(phone)
-        .execute(db.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO channel_identities (user_id, channel, normalized_external_id) VALUES ($1, 'phone', $2)",
+    )
+    .bind(user_id)
+    .bind(phone)
+    .execute(db.pool())
+    .await
+    .unwrap();
 
     let owner = ResourceOwner {
-        user_context_id: UserContextId(context_id),
+        user_context_id: UserContextId(user_id),
         user_id: UserId(user_id),
     };
 
@@ -110,9 +104,13 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
     assert!(record.provider_call_id.is_some());
 
     let row = sqlx::query(
-        "SELECT id, phone_number, reason, state, provider_call_id FROM outbound_calls WHERE id = $1",
+        "SELECT checkpoint->>'phone_number' AS phone_number, \
+         checkpoint->>'reason' AS reason, \
+         checkpoint->>'state' AS state, \
+         checkpoint->>'provider_call_id' AS provider_call_id \
+         FROM jobs WHERE kind = 'dispatch_action' AND checkpoint->>'call_id' = $1",
     )
-    .bind(record.id)
+    .bind(record.id.to_string())
     .fetch_one(db.pool())
     .await
     .unwrap();
