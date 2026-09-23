@@ -333,6 +333,14 @@ pub fn router(state: AppState) -> Router {
             get(integration_registry::discover),
         )
         .route(
+            "/v1/deployments/{external_key}/integrations/{integration_key}/versions",
+            get(integration_registry::versions),
+        )
+        .route(
+            "/v1/capabilities/discover",
+            post(integration_registry::discover_for_context),
+        )
+        .route(
             "/v1/deployments/{external_key}/agents",
             get(agent_registry::list_selected),
         )

@@ -65,6 +65,7 @@ async fn migration_creates_the_complete_core_schema() {
         "deployment_agent_selections",
         "integration_definitions",
         "integration_capability_declarations",
+        "integration_declaration_versions",
         "external_connections",
         "agent_capability_grants",
         "auth_identities",
