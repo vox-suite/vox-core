@@ -18,6 +18,7 @@ pub mod identity_adapters;
 pub mod integration_registry;
 pub mod preferences;
 pub mod rate_limit;
+pub mod remote_extensions;
 pub mod schedules;
 pub mod status;
 
@@ -58,6 +59,7 @@ pub struct AppState {
     pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
+    pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) service_token: Arc<str>,
 }
@@ -84,6 +86,7 @@ impl AppState {
             integration_registry: None,
             schedules: None,
             preferences: None,
+            remote_extensions: None,
             status: None,
             service_token: Arc::from(""),
         }
@@ -153,7 +156,12 @@ impl AppState {
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: Some(Arc::new(ScheduleService::new(db.clone()))),
-            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(db.clone()))),
+            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
+                db.clone(),
+            ))),
+            remote_extensions: Some(Arc::new(
+                crate::remote_extensions::RemoteExtensionService::new(db.clone()),
+            )),
             status: Some(Arc::new(crate::status::StatusService::new(db))),
             service_token: Arc::from(service_token),
         }
@@ -209,14 +217,21 @@ impl AppState {
                 crate::integration_registry::IntegrationRegistry::new(db.clone()),
             )),
             schedules: None,
-            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(db.clone()))),
+            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
+                db.clone(),
+            ))),
+            remote_extensions: Some(Arc::new(
+                crate::remote_extensions::RemoteExtensionService::new(db.clone()),
+            )),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             service_token: Arc::from(service_token),
         }
     }
 
     pub fn take_host_trust(&mut self) -> Option<HostTrustService> {
-        self.host_trust.take().map(|trust| HostTrustService::clone(&trust))
+        self.host_trust
+            .take()
+            .map(|trust| HostTrustService::clone(&trust))
     }
 
     pub fn set_host_trust(&mut self, trust: HostTrustService) {
@@ -299,7 +314,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/connections/callback", post(connections::callback))
         .route("/v1/connections/authorize", post(connections::authorize))
         .route("/v1/connections/list", post(connections::list))
-        .route("/v1/connections/{id}/disconnect", post(connections::disconnect))
+        .route(
+            "/v1/connections/{id}/disconnect",
+            post(connections::disconnect),
+        )
         .route(
             "/v1/capability-grants",
             post(capability_grants::create).delete(capability_grants::revoke),
@@ -363,9 +381,15 @@ pub fn router(state: AppState) -> Router {
             "/v1/identity/authentications",
             post(identity_adapters::authenticate),
         )
-        .route("/v1/preferences", post(preferences::set).get(preferences::list))
+        .route(
+            "/v1/preferences",
+            post(preferences::set).get(preferences::list),
+        )
         .route("/v1/preferences/{key}", delete(preferences::delete_key))
-        .route("/v1/agents/{agent_key}/effective-preferences", post(preferences::effective))
+        .route(
+            "/v1/agents/{agent_key}/effective-preferences",
+            post(preferences::effective),
+        )
         .route(
             "/v1/identity/links",
             post(identity_adapters::link).delete(identity_adapters::unlink),
@@ -377,6 +401,30 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/host-app-credentials/{id}",
             delete(host_apps::revoke_credential),
+        )
+        .route("/v1/remote-extensions", post(remote_extensions::install))
+        .route("/v1/remote-extensions/list", post(remote_extensions::list))
+        .route(
+            "/v1/remote-extensions/{id}",
+            post(remote_extensions::get)
+                .put(remote_extensions::update)
+                .delete(remote_extensions::remove),
+        )
+        .route(
+            "/v1/remote-extensions/{id}/enable",
+            post(remote_extensions::set_enabled),
+        )
+        .route(
+            "/v1/remote-extensions/{id}/conformance",
+            post(remote_extensions::record_conformance),
+        )
+        .route(
+            "/v1/remote-extensions/{id}/renew-consent",
+            post(remote_extensions::renew_consent),
+        )
+        .route(
+            "/v1/remote-extensions/{id}/quarantine",
+            post(remote_extensions::quarantine),
         )
         .route(
             crate::host_trust::HOST_CONTEXT_PATH,
