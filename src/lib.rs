@@ -33,6 +33,7 @@ pub mod preferences;
 pub mod providers;
 pub mod redis_keys;
 pub mod remote_extensions;
+pub mod reminders;
 pub mod schedules;
 pub mod status;
 pub mod storage;

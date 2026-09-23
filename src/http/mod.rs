@@ -21,6 +21,7 @@ pub mod identity_adapters;
 pub mod integration_registry;
 pub mod preferences;
 pub mod rate_limit;
+pub mod reminders;
 pub mod remote_extensions;
 pub mod schedules;
 pub mod status;
@@ -62,6 +63,7 @@ pub struct AppState {
     pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
+    pub(crate) reminders: Option<Arc<crate::reminders::ReminderService>>,
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
@@ -93,6 +95,7 @@ impl AppState {
             integration_registry: None,
             schedules: None,
             preferences: None,
+            reminders: None,
             remote_extensions: None,
             status: None,
             uber_read: None,
@@ -170,6 +173,7 @@ impl AppState {
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
                 db.clone(),
             ))),
+            reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
@@ -265,6 +269,7 @@ impl AppState {
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
                 db.clone(),
             ))),
+            reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
@@ -336,6 +341,14 @@ impl AppState {
         service: Arc<crate::providers::ZomatoService>,
     ) -> Self {
         self.zomato = Some(service);
+        self
+    }
+
+    pub fn with_reminders(
+        mut self,
+        service: Arc<crate::reminders::ReminderService>,
+    ) -> Self {
+        self.reminders = Some(service);
         self
     }
 
@@ -440,6 +453,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}", patch(schedules::update))
+        .route("/v1/reminders", post(reminders::create_reminder))
+        .route("/v1/reminders/list", post(reminders::list_reminders))
+        .route("/v1/reminders/{id}", post(reminders::get_reminder))
+        .route("/v1/reminders/{id}/cancel", post(reminders::cancel_reminder))
+        .route(
+            "/v1/reminders/{id}/deliveries",
+            post(reminders::get_reminder_deliveries),
+        )
         .route("/v1/executions", post(execution::start))
         .route("/v1/executions/{id}", post(execution::get))
         .route("/v1/status-events", post(status::list))
