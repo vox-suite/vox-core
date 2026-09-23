@@ -29,8 +29,7 @@ pub async fn extract_actor(
     };
 
     if token.split('.').count() == 3 {
-        let secret = std::env::var("SUPABASE_JWT_SECRET").ok();
-        let claims = crate::identity_token::verify_hs256_jwt(token, secret.as_deref())?;
+        let claims = crate::identity_token::verify_id_token(token).await?;
         let user_id = Uuid::parse_str(&claims.subject).map_err(|_| StatusCode::UNAUTHORIZED)?;
         let display_name = claims.email.as_deref().unwrap_or("Vox User");
         let _ = sqlx::query(

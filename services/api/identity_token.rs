@@ -5,8 +5,11 @@ use axum::http::StatusCode;
 use base64::Engine;
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use sha2::Sha256;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -27,6 +30,17 @@ struct TokenClaims {
     exp: Option<u64>,
     #[serde(default)]
     email: Option<String>,
+}
+
+#[derive(Clone)]
+struct CachedJwks {
+    fetched_at: Instant,
+    keys: Vec<serde_json::Value>,
+}
+
+fn jwks_cache() -> &'static Mutex<Option<CachedJwks>> {
+    static CACHE: OnceLock<Mutex<Option<CachedJwks>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
 }
 
 pub fn verify_hs256_jwt(token: &str, secret: Option<&str>) -> Result<VerifiedIdentity, StatusCode> {
@@ -67,7 +81,19 @@ pub async fn verify_id_token(token: &str) -> Result<VerifiedIdentity, StatusCode
             let secret = std::env::var("SUPABASE_JWT_SECRET").ok();
             verify_hs256_jwt(token, secret.as_deref())
         }
-        Some("RS256") => verify_google_token(token).await,
+        // New Supabase projects sign access tokens with asymmetric JWT signing keys (ES256).
+        Some("ES256") => verify_supabase_asymmetric(token, Algorithm::ES256).await,
+        Some("RS256") => {
+            // Prefer Supabase JWKS when configured; otherwise treat as Google ID token.
+            if supabase_base_url().is_some() {
+                match verify_supabase_asymmetric(token, Algorithm::RS256).await {
+                    Ok(identity) => Ok(identity),
+                    Err(_) => verify_google_token(token).await,
+                }
+            } else {
+                verify_google_token(token).await
+            }
+        }
         _ => Err(StatusCode::UNAUTHORIZED),
     }
 }
@@ -119,6 +145,129 @@ fn decode_part(value: &str) -> Result<Vec<u8>, StatusCode> {
         .decode(value)
         .or_else(|_| URL_SAFE.decode(value))
         .map_err(|_| StatusCode::UNAUTHORIZED)
+}
+
+fn supabase_base_url() -> Option<String> {
+    ["SUPABASE_URL", "VOX_SUPABASE_URL"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn verify_es256_components(
+    token: &str,
+    x: &str,
+    y: &str,
+    expected_issuer: &str,
+) -> Result<VerifiedIdentity, StatusCode> {
+    verify_asymmetric_components(token, Algorithm::ES256, x, y, None, None, expected_issuer)
+}
+
+fn verify_asymmetric_components(
+    token: &str,
+    alg: Algorithm,
+    x: &str,
+    y: &str,
+    n: Option<&str>,
+    e: Option<&str>,
+    expected_issuer: &str,
+) -> Result<VerifiedIdentity, StatusCode> {
+    let key = match alg {
+        Algorithm::ES256 => {
+            DecodingKey::from_ec_components(x, y).map_err(|_| StatusCode::UNAUTHORIZED)?
+        }
+        Algorithm::RS256 => {
+            let (n, e) = (n.ok_or(StatusCode::UNAUTHORIZED)?, e.ok_or(StatusCode::UNAUTHORIZED)?);
+            DecodingKey::from_rsa_components(n, e).map_err(|_| StatusCode::UNAUTHORIZED)?
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    };
+    let mut validation = Validation::new(alg);
+    validation.validate_aud = false;
+    validation.set_issuer(&[expected_issuer]);
+    let data = decode::<TokenClaims>(token, &key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let subject = data.claims.sub.trim();
+    if subject.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(VerifiedIdentity {
+        issuer: data
+            .claims
+            .iss
+            .unwrap_or_else(|| expected_issuer.to_string()),
+        subject: subject.to_string(),
+        email: data.claims.email.filter(|value| !value.trim().is_empty()),
+    })
+}
+
+async fn verify_supabase_asymmetric(
+    token: &str,
+    alg: Algorithm,
+) -> Result<VerifiedIdentity, StatusCode> {
+    let base = supabase_base_url().ok_or(StatusCode::UNAUTHORIZED)?;
+    let expected_issuer = format!("{base}/auth/v1");
+    let (header, _, _) = split_jwt(token)?;
+    let header_json: serde_json::Value =
+        serde_json::from_slice(&decode_part(header)?).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let kid = header_json
+        .get("kid")
+        .and_then(|value| value.as_str())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let jwk = supabase_jwk(&base, kid).await?;
+    match alg {
+        Algorithm::ES256 => {
+            let x = jwk.get("x").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            let y = jwk.get("y").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            verify_asymmetric_components(token, alg, x, y, None, None, &expected_issuer)
+        }
+        Algorithm::RS256 => {
+            let n = jwk.get("n").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            let e = jwk.get("e").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            verify_asymmetric_components(token, alg, "", "", Some(n), Some(e), &expected_issuer)
+        }
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+async fn supabase_jwk(base_url: &str, kid: &str) -> Result<serde_json::Value, StatusCode> {
+    if let Some(cached) = jwks_cache().lock().ok().and_then(|guard| guard.clone()) {
+        if cached.fetched_at.elapsed() < Duration::from_secs(300) {
+            if let Some(key) = cached
+                .keys
+                .iter()
+                .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
+            {
+                return Ok(key.clone());
+            }
+        }
+    }
+
+    let url = format!("{base_url}/auth/v1/.well-known/jwks.json");
+    let response = reqwest::Client::new()
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    if !response.status().is_success() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let body: serde_json::Value = response.json().await.map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let keys = body
+        .get("keys")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if let Ok(mut guard) = jwks_cache().lock() {
+        *guard = Some(CachedJwks {
+            fetched_at: Instant::now(),
+            keys: keys.clone(),
+        });
+    }
+    keys.into_iter()
+        .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
+        .ok_or(StatusCode::UNAUTHORIZED)
 }
 
 async fn verify_google_token(token: &str) -> Result<VerifiedIdentity, StatusCode> {
