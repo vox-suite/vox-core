@@ -261,6 +261,7 @@ async fn prepare(db: &Db, deployment: &str, context: &vox_core::identity::Resolv
             AuthorizeConnectionRequest {
                 integration_external_key: "calendar".into(),
                 external_account_reference: "account@test".into(),
+                account_display_id: None,
                 credential_custody: CredentialCustody::ExternalOperator,
                 authorization_state: AuthorizationState::Authorized,
                 authorized_capabilities: vec!["calendar.write".into()],

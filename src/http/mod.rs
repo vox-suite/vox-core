@@ -290,6 +290,8 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
+        .route("/v1/connections/initiate", post(connections::initiate))
+        .route("/v1/connections/callback", post(connections::callback))
         .route("/v1/connections/authorize", post(connections::authorize))
         .route("/v1/connections/list", post(connections::list))
         .route("/v1/connections/{id}/disconnect", post(connections::disconnect))

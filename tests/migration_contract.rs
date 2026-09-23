@@ -68,6 +68,7 @@ async fn migration_creates_the_complete_core_schema() {
         "integration_declaration_versions",
         "external_connections",
         "agent_capability_grants",
+        "connection_authorization_sessions",
         "auth_identities",
         "channel_identities",
         "auth_sessions",
@@ -96,7 +97,7 @@ async fn migration_creates_the_complete_core_schema() {
             .iter()
             .filter(|name| *name != "_sqlx_migrations")
             .count(),
-        42,
+        43,
         "expected consumer and platform tables, found: {names:?}"
     );
 
