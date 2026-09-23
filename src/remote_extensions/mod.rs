@@ -253,6 +253,8 @@ pub struct RemoteExtension {
     pub lifecycle_state: LifecycleState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub capabilities: Vec<ExtensionCapability>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -416,6 +418,7 @@ impl RemoteExtensionService {
             lifecycle_state: LifecycleState::Installed,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            capabilities: request.capabilities,
         })
     }
 
@@ -864,11 +867,13 @@ impl RemoteExtensionService {
         extension_id: Uuid,
     ) -> Result<RemoteExtension, RemoteExtensionError> {
         let row = sqlx::query(
-            "SELECT id, external_key, display_name, protocol, endpoint_url, \
-                    operator_id, operator_name, support_email, terms_url, current_version, \
-                    conformance_status, operator_enabled, consent_status, lifecycle_state, \
-                    created_at, updated_at \
-             FROM remote_extensions WHERE id = $1 AND user_context_id = $2",
+            "SELECT e.id, e.external_key, e.display_name, e.protocol, e.endpoint_url, \
+                    e.operator_id, e.operator_name, e.support_email, e.terms_url, e.current_version, \
+                    e.conformance_status, e.operator_enabled, e.consent_status, e.lifecycle_state, \
+                    e.created_at, e.updated_at, v.capabilities \
+             FROM remote_extensions e \
+             LEFT JOIN remote_extension_versions v ON v.extension_id = e.id AND v.version = e.current_version \
+             WHERE e.id = $1 AND e.user_context_id = $2",
         )
         .bind(extension_id)
         .bind(context.id.0)
@@ -884,12 +889,14 @@ impl RemoteExtensionService {
         context: &ResolvedUserContext,
     ) -> Result<Vec<RemoteExtension>, RemoteExtensionError> {
         let rows = sqlx::query(
-            "SELECT id, external_key, display_name, protocol, endpoint_url, \
-                    operator_id, operator_name, support_email, terms_url, current_version, \
-                    conformance_status, operator_enabled, consent_status, lifecycle_state, \
-                    created_at, updated_at \
-             FROM remote_extensions WHERE user_context_id = $1 \
-             ORDER BY created_at DESC",
+            "SELECT e.id, e.external_key, e.display_name, e.protocol, e.endpoint_url, \
+                    e.operator_id, e.operator_name, e.support_email, e.terms_url, e.current_version, \
+                    e.conformance_status, e.operator_enabled, e.consent_status, e.lifecycle_state, \
+                    e.created_at, e.updated_at, v.capabilities \
+             FROM remote_extensions e \
+             LEFT JOIN remote_extension_versions v ON v.extension_id = e.id AND v.version = e.current_version \
+             WHERE e.user_context_id = $1 \
+             ORDER BY e.created_at DESC",
         )
         .bind(context.id.0)
         .fetch_all(self.db.pool())
@@ -904,6 +911,12 @@ fn map_extension(row: sqlx::postgres::PgRow) -> Result<RemoteExtension, RemoteEx
     let conformance_str: String = row.get("conformance_status");
     let consent_str: String = row.get("consent_status");
     let lifecycle_str: String = row.get("lifecycle_state");
+
+    let capabilities: Vec<ExtensionCapability> = row
+        .try_get("capabilities")
+        .ok()
+        .and_then(|v: serde_json::Value| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
     Ok(RemoteExtension {
         id: row.get("id"),
@@ -925,5 +938,6 @@ fn map_extension(row: sqlx::postgres::PgRow) -> Result<RemoteExtension, RemoteEx
         lifecycle_state: LifecycleState::parse(&lifecycle_str).unwrap_or(LifecycleState::Installed),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        capabilities,
     })
 }
