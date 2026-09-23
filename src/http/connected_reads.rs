@@ -109,6 +109,14 @@ pub async fn read(
             })),
         )
             .into_response(),
+        Err(UberReadError::UnsupportedDirectExecution(msg)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "unsupported_direct_execution",
+                "message": msg
+            })),
+        )
+            .into_response(),
         Err(UberReadError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

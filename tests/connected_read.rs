@@ -23,8 +23,8 @@ use vox_core::{
     providers::{
         MockUberProviderClient, UBER_CAPABILITY_HISTORY, UBER_CAPABILITY_HISTORY_LITE,
         UBER_CAPABILITY_HISTORY_LITE_SHORT, UBER_CAPABILITY_HISTORY_SHORT,
-        UBER_CAPABILITY_RIDE_REQUEST_SHORT, UBER_INTEGRATION_KEY, UberConnectedReadService,
-        UberRawTrip, UberReadError,
+        UBER_CAPABILITY_RIDE_ESTIMATE_SHORT, UBER_CAPABILITY_RIDE_REQUEST_SHORT,
+        UBER_INTEGRATION_KEY, UberConnectedReadService, UberRawTrip, UberReadError,
     },
 };
 
@@ -146,7 +146,7 @@ fn sample_raw_trips() -> Vec<UberRawTrip> {
 async fn integration_declaration_matches_approved_feasibility_finding() {
     let decl = UberConnectedReadService::integration_declaration("dep-test");
     assert_eq!(decl.external_key, UBER_INTEGRATION_KEY);
-    assert_eq!(decl.capabilities.len(), 3);
+    assert_eq!(decl.capabilities.len(), 4);
 
     // 1. History lite: L2 connected read, data minimized
     let lite = decl
@@ -178,7 +178,22 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
     assert_eq!(history.access_needs, vec!["history"]);
     assert_eq!(history.optional_guarantees["includes_city"], true);
 
-    // 3. Ride request: Consequential write, but strictly L0 labelled handoff only
+    // 3. Ride estimate: L1 catalog read
+    let estimate = decl
+        .capabilities
+        .iter()
+        .find(|c| c.external_key == UBER_CAPABILITY_RIDE_ESTIMATE_SHORT)
+        .expect("ride_estimate capability must be declared");
+    assert_eq!(
+        estimate.effect,
+        vox_core::integration_registry::CapabilityEffect::Read
+    );
+    assert_eq!(
+        estimate.optional_guarantees["capability_level"],
+        "L1_catalog_read"
+    );
+
+    // 4. Ride request: Consequential write, but strictly L0 labelled handoff only
     let request = decl
         .capabilities
         .iter()

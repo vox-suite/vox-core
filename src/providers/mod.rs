@@ -1,6 +1,16 @@
+pub mod amazon;
 pub mod expedia;
 pub mod uber;
+pub mod zomato;
 
+pub use amazon::{
+    AmazonCatalogItem, AmazonCatalogSearchResponse, AmazonError, AmazonHandoffRequest,
+    AmazonHandoffResponse, AmazonProviderClient, AmazonService, DefaultAmazonProviderClient,
+    MockAmazonProviderClient, AMAZON_CAPABILITY_CATALOG_SEARCH,
+    AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT, AMAZON_CAPABILITY_ITEM_LOOKUP,
+    AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT, AMAZON_CAPABILITY_PURCHASE_HANDOFF,
+    AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT, AMAZON_INTEGRATION_KEY, AMAZON_OFFICIAL_LOCALES,
+};
 pub use expedia::{
     DefaultExpediaProviderClient, ExpediaBookingOutcome, ExpediaCancellationResult,
     ExpediaLodgingError, ExpediaLodgingProposalDetails, ExpediaLodgingService,
@@ -13,8 +23,18 @@ pub use expedia::{
 pub use uber::{
     DefaultUberProviderClient, MockUberProviderClient, UBER_CAPABILITY_HISTORY,
     UBER_CAPABILITY_HISTORY_LITE, UBER_CAPABILITY_HISTORY_LITE_SHORT,
-    UBER_CAPABILITY_HISTORY_SHORT, UBER_CAPABILITY_RIDE_REQUEST,
+    UBER_CAPABILITY_HISTORY_SHORT, UBER_CAPABILITY_RIDE_ESTIMATE,
+    UBER_CAPABILITY_RIDE_ESTIMATE_SHORT, UBER_CAPABILITY_RIDE_REQUEST,
     UBER_CAPABILITY_RIDE_REQUEST_SHORT, UBER_INTEGRATION_KEY, UberConnectedReadService,
     UberHistoryResponse, UberProviderClient, UberRawHistoryResponse, UberRawTrip, UberReadError,
-    UberTrip,
+    UberRideEstimateRequest, UberRideEstimateResponse, UberRideHandoffRequest,
+    UberRideHandoffResponse, UberRideOption, UberTrip,
+};
+pub use zomato::{
+    DefaultZomatoProviderClient, MockZomatoProviderClient, ZomatoError, ZomatoHandoffRequest,
+    ZomatoHandoffResponse, ZomatoHandoffType, ZomatoProviderClient, ZomatoRestaurant,
+    ZomatoSearchResponse, ZomatoService, ZOMATO_CAPABILITY_ORDER_HANDOFF,
+    ZOMATO_CAPABILITY_ORDER_HANDOFF_SHORT, ZOMATO_CAPABILITY_RESTAURANT_SEARCH,
+    ZOMATO_CAPABILITY_RESTAURANT_SEARCH_SHORT, ZOMATO_CAPABILITY_RESTAURANT_VIEW,
+    ZOMATO_CAPABILITY_RESTAURANT_VIEW_SHORT, ZOMATO_INTEGRATION_KEY,
 };

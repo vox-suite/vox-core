@@ -15,6 +15,7 @@ pub mod durable_tasks;
 pub mod events;
 pub mod execution;
 pub mod execution_policy;
+pub mod handoffs;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
@@ -65,6 +66,8 @@ pub struct AppState {
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
     pub(crate) expedia_write: Option<Arc<crate::providers::ExpediaLodgingService>>,
+    pub(crate) amazon: Option<Arc<crate::providers::AmazonService>>,
+    pub(crate) zomato: Option<Arc<crate::providers::ZomatoService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -94,6 +97,8 @@ impl AppState {
             status: None,
             uber_read: None,
             expedia_write: None,
+            amazon: None,
+            zomato: None,
             service_token: Arc::from(""),
         }
     }
@@ -187,6 +192,22 @@ impl AppState {
                     "https://api.expediagroup.com",
                 )),
             ))),
+            amazon: Some(Arc::new(crate::providers::AmazonService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                Arc::new(crate::providers::DefaultAmazonProviderClient::new(
+                    "https://webservices.amazon.com",
+                )),
+            ))),
+            zomato: Some(Arc::new(crate::providers::ZomatoService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                Arc::new(crate::providers::DefaultZomatoProviderClient::new(
+                    "https://api.zomato.com",
+                )),
+            ))),
             service_token: Arc::from(service_token),
         }
     }
@@ -266,6 +287,22 @@ impl AppState {
                     "https://api.expediagroup.com",
                 )),
             ))),
+            amazon: Some(Arc::new(crate::providers::AmazonService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                Arc::new(crate::providers::DefaultAmazonProviderClient::new(
+                    "https://webservices.amazon.com",
+                )),
+            ))),
+            zomato: Some(Arc::new(crate::providers::ZomatoService::new(
+                db.clone(),
+                crate::connections::ConnectionService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                Arc::new(crate::providers::DefaultZomatoProviderClient::new(
+                    "https://api.zomato.com",
+                )),
+            ))),
             service_token: Arc::from(service_token),
         }
     }
@@ -283,6 +320,22 @@ impl AppState {
         service: Arc<crate::providers::ExpediaLodgingService>,
     ) -> Self {
         self.expedia_write = Some(service);
+        self
+    }
+
+    pub fn with_amazon(
+        mut self,
+        service: Arc<crate::providers::AmazonService>,
+    ) -> Self {
+        self.amazon = Some(service);
+        self
+    }
+
+    pub fn with_zomato(
+        mut self,
+        service: Arc<crate::providers::ZomatoService>,
+    ) -> Self {
+        self.zomato = Some(service);
         self
     }
 
@@ -505,6 +558,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/consequential-writes/reconcile",
             post(consequential_writes::reconcile),
         )
+        .route("/v1/handoffs/amazon", post(handoffs::amazon_handoff))
+        .route("/v1/handoffs/zomato", post(handoffs::zomato_handoff))
+        .route("/v1/handoffs/uber", post(handoffs::uber_handoff))
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
             rate_limit::rate_limit_middleware,
