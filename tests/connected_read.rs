@@ -214,6 +214,7 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn connected_read_enforces_context_minimization() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-minimized").await;
@@ -332,6 +333,7 @@ async fn connected_read_enforces_context_minimization() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn expired_or_revoked_access_pauses_work_and_reconnection_rechecks_facts() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-lifecycle").await;
@@ -464,6 +466,7 @@ async fn expired_or_revoked_access_pauses_work_and_reconnection_rechecks_facts()
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn cross_context_and_ungranted_capability_boundary_enforcement() {
     let db = setup().await;
     let (deployment_a, context_a, _, _) = create_context(&db, "user-alice").await;
@@ -552,6 +555,7 @@ async fn cross_context_and_ungranted_capability_boundary_enforcement() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn rate_limiting_and_pagination() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-paged").await;
@@ -654,6 +658,7 @@ async fn rate_limiting_and_pagination() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn connected_reads_http_endpoint_requires_signed_host_assertion() {
     let db = setup().await;
     let (deployment, context, host_app, host_req) = create_context(&db, "user-http-read").await;

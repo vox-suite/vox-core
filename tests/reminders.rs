@@ -127,6 +127,7 @@ async fn calendar_recurrence_preserves_wall_clock_across_daylight_saving_transit
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn one_time_and_interval_reminders_preserve_timing_and_record_delivery() {
     let db = setup().await;
     let (_, context, _, _) = create_context(&db, "user-reminder-1").await;
@@ -217,6 +218,7 @@ async fn one_time_and_interval_reminders_preserve_timing_and_record_delivery() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn missed_reminder_policy_never_silently_delivers_materially_late_occurrences() {
     let db = setup().await;
     let (_, context, _, _) = create_context(&db, "user-reminder-missed").await;
@@ -282,6 +284,7 @@ async fn missed_reminder_policy_never_silently_delivers_materially_late_occurren
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn bounded_retries_and_retry_window_exhaustion() {
     let db = setup().await;
     let (_, context, _, _) = create_context(&db, "user-reminder-retries").await;
@@ -359,6 +362,7 @@ async fn bounded_retries_and_retry_window_exhaustion() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn reminders_strictly_prohibit_action_authority() {
     let db = setup().await;
     let (_, context, _, _) = create_context(&db, "user-reminder-auth-guard").await;
@@ -397,6 +401,7 @@ async fn reminders_strictly_prohibit_action_authority() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn http_reminder_endpoints_require_signed_host_assertions() {
     let db = setup().await;
     let (_, _context, host_app, host_req) = create_context(&db, "user-reminder-http").await;

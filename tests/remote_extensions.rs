@@ -67,6 +67,7 @@ async fn host(
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn installation_grants_no_authority_or_connections() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-install").await;
@@ -136,6 +137,7 @@ async fn installation_grants_no_authority_or_connections() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn consequential_capabilities_require_conformance_and_operator_enablement() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-consequential").await;
@@ -222,6 +224,7 @@ async fn consequential_capabilities_require_conformance_and_operator_enablement(
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn operator_change_requires_renewed_consent() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-operator-change").await;
@@ -307,6 +310,7 @@ async fn operator_change_requires_renewed_consent() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn expanded_data_recipients_require_renewed_consent() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-recipients-change").await;
@@ -395,6 +399,7 @@ async fn expanded_data_recipients_require_renewed_consent() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn quarantine_and_removal_preserve_historical_evidence() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-quarantine").await;
@@ -467,6 +472,7 @@ async fn quarantine_and_removal_preserve_historical_evidence() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn rejects_invalid_urls_and_local_code_uploads() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-malicious").await;
@@ -525,6 +531,7 @@ fn signed_request(
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn remote_extension_http_endpoints_require_signed_assertions() {
     let db = setup().await;
     let (_, _, registered, host_context) = host(&db, "http-ext-user").await;
