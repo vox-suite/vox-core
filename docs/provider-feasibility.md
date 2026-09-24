@@ -13,7 +13,7 @@ Platform V1 should use the following routes:
 
 1. **Connected read: Uber rider trip history**, using user OAuth with the general `history` or data-minimized `history_lite` scope. Uber documents those scopes as general rather than privileged and documents `GET /history` as a user-token endpoint. This is the lowest-authority named integration that demonstrates a real user connection without granting execution authority ([Uber scopes](https://developer.uber.com/docs/riders/guides/scopes), [Uber authentication](https://developer.uber.com/docs/riders/guides/authentication/introduction)).
 2. **Consequential write: Expedia Rapid Lodging**, limited initially to lodging booking, retrieval, cancellation, and reconciliation. Rapid documents the entire lifecycle and a production onboarding path, but production must remain **disabled** until Expedia approves Vox as a partner, supplies credentials and commercial/payment configuration, and passes the implementation through site review ([Rapid getting started](https://developers.expediagroup.com/docs/products/rapid/setup/getting-started), [Rapid Lodging overview](https://developers.expediagroup.com/rapid/lodging), [Manage Booking](https://developers.expediagroup.com/rapid/lodging/manage-booking/about-mg-booking-api)).
-3. **Release fallback for writes: first-party reminder scheduling and delivery.** If Expedia approval and production validation are not complete at the Platform V1 release freeze, the production approved-write proof should be a Vox-owned reminder capability. The Expedia adapter may remain sandbox-only and must not be presented as a production booking integration.
+3. **Connected-write release gate:** If Expedia approval and production validation are not complete at the Platform V1 release freeze, select another officially authorized provider that can execute an exact approved consequential action and return an authoritative outcome. Keep the Expedia adapter sandbox-only or as a labelled handoff. A Vox-owned reminder is a separate P0 feature and cannot satisfy the PRD's connected consequential-write requirement.
 4. **Amazon, Zomato, and Uber ride ordering:** ship only the verified read subset and an explicitly labelled handoff. Opening Amazon, Zomato, Expedia, or Uber is not completion. Post-handoff outcomes remain unknown unless an authoritative provider mechanism later proves them.
 
 These choices are global-platform choices, not promises of universal service coverage. Capability discovery must still evaluate account, product, point of sale, location, currency, inventory, and provider approval at runtime.
@@ -164,7 +164,7 @@ If any item is missing, the capability is disabled; Uber handoff may remain.
 - Permitted end-to-end evidence for quote expiry/price change, approval, booking success, payment rejection, provider authentication, timeout/unknown, duplicate delivery, cancellation, refund, supplier cancellation, and notification/retrieve reconciliation.
 - Operational runbook for unresolved/stranded bookings and a kill switch that disables booking before read/status.
 
-If any item is missing at release freeze, enable the first-party reminder write instead and expose Expedia only as shopping/handoff at the level actually approved.
+If any item is missing at release freeze, keep Expedia's production write disabled and expose only shopping or handoff at the level actually approved. Select and validate another officially authorized connected consequential-write provider, or leave the release blocked. Reminder scheduling and delivery still need their own P0 evidence, but do not substitute for this gate.
 
 ## Implementation handoff
 
@@ -195,7 +195,8 @@ levels recorded in this document. They cannot reinterpret handoff as execution.
 | Pass Expedia site review and production fault scenarios | Engineering and operations owners | Review approval, redacted test records, reconciliation/cancellation runbook |
 | Confirm Amazon assistant/affiliate permitted use per marketplace | Business/legal owner | Written provider confirmation and active approved tags |
 | Ask Zomato for consumer API availability | Business owner | Written scope or explicit denial; current credentials/docs if approved |
-| Select and approve reminder delivery provider if Expedia misses the gate | Product/operations owner | Production delivery/reconciliation evidence and operator runbook |
+| Select another authorized connected-write provider if Expedia misses the gate | Product/operations owner | Written provider authorization, exact-approval and authoritative-outcome contract, production execution/reconciliation evidence, operator runbook |
+| Select and approve reminder delivery provider | Product/operations owner | Production delivery/reconciliation evidence and operator runbook for the separate reminder requirement |
 
 ## What this research does and does not prove
 
