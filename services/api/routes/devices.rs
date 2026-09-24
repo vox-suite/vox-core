@@ -127,7 +127,9 @@ pub async fn claim_device_jobs(
         });
     }
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(claimed))
 }
@@ -205,7 +207,9 @@ pub async fn submit_job_result(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)
 }

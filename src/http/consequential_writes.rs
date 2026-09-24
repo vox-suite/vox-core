@@ -4,9 +4,7 @@
 use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     host_trust::HostContextRequest,
-    providers::{
-        ExpediaLodgingError, ExpediaLodgingProposalDetails,
-    },
+    providers::{ExpediaLodgingError, ExpediaLodgingProposalDetails},
 };
 use axum::{
     Json,
@@ -75,8 +73,10 @@ pub async fn propose(
         Err(crate::host_trust::HostTrustError::InvalidRequest) => {
             return StatusCode::BAD_REQUEST.into_response();
         }
-        Err(crate::host_trust::HostTrustError::Database(_)
-        | crate::host_trust::HostTrustError::Identity(_)) => {
+        Err(
+            crate::host_trust::HostTrustError::Database(_)
+            | crate::host_trust::HostTrustError::Identity(_),
+        ) => {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
@@ -123,15 +123,22 @@ pub async fn execute(
         Err(crate::host_trust::HostTrustError::InvalidRequest) => {
             return StatusCode::BAD_REQUEST.into_response();
         }
-        Err(crate::host_trust::HostTrustError::Database(_)
-        | crate::host_trust::HostTrustError::Identity(_)) => {
+        Err(
+            crate::host_trust::HostTrustError::Database(_)
+            | crate::host_trust::HostTrustError::Identity(_),
+        ) => {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
     match service
-        .execute_booking(&context, request.approval_id, &request.idempotency_key, Utc::now())
+        .execute_booking(
+            &context,
+            request.approval_id,
+            &request.idempotency_key,
+            Utc::now(),
+        )
         .await
     {
         Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
@@ -163,8 +170,10 @@ pub async fn cancel(
         Err(crate::host_trust::HostTrustError::InvalidRequest) => {
             return StatusCode::BAD_REQUEST.into_response();
         }
-        Err(crate::host_trust::HostTrustError::Database(_)
-        | crate::host_trust::HostTrustError::Identity(_)) => {
+        Err(
+            crate::host_trust::HostTrustError::Database(_)
+            | crate::host_trust::HostTrustError::Identity(_),
+        ) => {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
@@ -209,8 +218,10 @@ pub async fn reconcile(
         Err(crate::host_trust::HostTrustError::InvalidRequest) => {
             return StatusCode::BAD_REQUEST.into_response();
         }
-        Err(crate::host_trust::HostTrustError::Database(_)
-        | crate::host_trust::HostTrustError::Identity(_)) => {
+        Err(
+            crate::host_trust::HostTrustError::Database(_)
+            | crate::host_trust::HostTrustError::Identity(_),
+        ) => {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
@@ -229,98 +240,80 @@ fn map_error(err: ExpediaLodgingError) -> Response {
     match err {
         ExpediaLodgingError::ConnectionNotFound => StatusCode::NOT_FOUND.into_response(),
         ExpediaLodgingError::InvalidIntegration => StatusCode::BAD_REQUEST.into_response(),
-        ExpediaLodgingError::InvalidProposal(msg) => {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "invalid_proposal",
-                    "message": msg
-                })),
-            )
-                .into_response()
-        }
+        ExpediaLodgingError::InvalidProposal(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_proposal",
+                "message": msg
+            })),
+        )
+            .into_response(),
         ExpediaLodgingError::ProposalNotFound => StatusCode::NOT_FOUND.into_response(),
-        ExpediaLodgingError::ProposalExpired => {
-            (
-                StatusCode::GONE,
-                Json(serde_json::json!({
-                    "error": "proposal_expired",
-                    "message": "Action proposal has expired; a fresh proposal and approval are required"
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::NotApproved => {
-            (
-                StatusCode::PRECONDITION_FAILED,
-                Json(serde_json::json!({
-                    "error": "not_approved",
-                    "message": "Proposal has not been approved or proposal details hash mismatched"
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::ReconnectRequired => {
-            (
-                StatusCode::PRECONDITION_REQUIRED,
-                Json(serde_json::json!({
-                    "error": "reconnect_required",
-                    "message": "Connection expired or revoked; user re-authorization required"
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::UnauthorizedCapability(cap, agent) => {
-            (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "unauthorized_capability",
-                    "message": format!("Capability {} is not granted to agent {}", cap, agent)
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::RateLimited(retry_after) => {
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                [("Retry-After", retry_after.to_string())],
-                Json(serde_json::json!({
-                    "error": "rate_limited",
-                    "retry_after_seconds": retry_after
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::ProviderError(msg) => {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({
-                    "error": "provider_error",
-                    "details": msg
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::ExecutionFailed(msg) => {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "execution_failed",
-                    "details": msg
-                })),
-            )
-                .into_response()
-        }
-        ExpediaLodgingError::Timeout => {
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({
-                    "error": "timeout",
-                    "message": "Provider request timed out; outcome remains reconciling"
-                })),
-            )
-                .into_response()
-        }
+        ExpediaLodgingError::ProposalExpired => (
+            StatusCode::GONE,
+            Json(serde_json::json!({
+                "error": "proposal_expired",
+                "message": "Action proposal has expired; a fresh proposal and approval are required"
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::NotApproved => (
+            StatusCode::PRECONDITION_FAILED,
+            Json(serde_json::json!({
+                "error": "not_approved",
+                "message": "Proposal has not been approved or proposal details hash mismatched"
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::ReconnectRequired => (
+            StatusCode::PRECONDITION_REQUIRED,
+            Json(serde_json::json!({
+                "error": "reconnect_required",
+                "message": "Connection expired or revoked; user re-authorization required"
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::UnauthorizedCapability(cap, agent) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "unauthorized_capability",
+                "message": format!("Capability {} is not granted to agent {}", cap, agent)
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::RateLimited(retry_after) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("Retry-After", retry_after.to_string())],
+            Json(serde_json::json!({
+                "error": "rate_limited",
+                "retry_after_seconds": retry_after
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::ProviderError(msg) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": "provider_error",
+                "details": msg
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::ExecutionFailed(msg) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "execution_failed",
+                "details": msg
+            })),
+        )
+            .into_response(),
+        ExpediaLodgingError::Timeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({
+                "error": "timeout",
+                "message": "Provider request timed out; outcome remains reconciling"
+            })),
+        )
+            .into_response(),
         ExpediaLodgingError::Database(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

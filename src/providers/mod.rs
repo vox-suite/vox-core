@@ -4,21 +4,21 @@ pub mod uber;
 pub mod zomato;
 
 pub use amazon::{
-    AmazonCatalogItem, AmazonCatalogSearchResponse, AmazonError, AmazonHandoffRequest,
-    AmazonHandoffResponse, AmazonProviderClient, AmazonService, DefaultAmazonProviderClient,
-    MockAmazonProviderClient, AMAZON_CAPABILITY_CATALOG_SEARCH,
-    AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT, AMAZON_CAPABILITY_ITEM_LOOKUP,
-    AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT, AMAZON_CAPABILITY_PURCHASE_HANDOFF,
-    AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT, AMAZON_INTEGRATION_KEY, AMAZON_OFFICIAL_LOCALES,
+    AMAZON_CAPABILITY_CATALOG_SEARCH, AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT,
+    AMAZON_CAPABILITY_ITEM_LOOKUP, AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT,
+    AMAZON_CAPABILITY_PURCHASE_HANDOFF, AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT,
+    AMAZON_INTEGRATION_KEY, AMAZON_OFFICIAL_LOCALES, AmazonCatalogItem,
+    AmazonCatalogSearchResponse, AmazonError, AmazonHandoffRequest, AmazonHandoffResponse,
+    AmazonProviderClient, AmazonService, DefaultAmazonProviderClient, MockAmazonProviderClient,
 };
 pub use expedia::{
-    DefaultExpediaProviderClient, ExpediaBookingOutcome, ExpediaCancellationResult,
-    ExpediaLodgingError, ExpediaLodgingProposalDetails, ExpediaLodgingService,
-    ExpediaProviderClient, ExpediaRawBookingRequest, ExpediaRawBookingResponse,
-    MockExpediaProviderClient, EXPEDIA_CAPABILITY_LODGING_BOOK,
+    DefaultExpediaProviderClient, EXPEDIA_CAPABILITY_LODGING_BOOK,
     EXPEDIA_CAPABILITY_LODGING_BOOK_SHORT, EXPEDIA_CAPABILITY_LODGING_MANAGE,
     EXPEDIA_CAPABILITY_LODGING_MANAGE_SHORT, EXPEDIA_CAPABILITY_LODGING_SEARCH,
-    EXPEDIA_CAPABILITY_LODGING_SEARCH_SHORT, EXPEDIA_INTEGRATION_KEY,
+    EXPEDIA_CAPABILITY_LODGING_SEARCH_SHORT, EXPEDIA_INTEGRATION_KEY, ExpediaBookingOutcome,
+    ExpediaCancellationResult, ExpediaLodgingError, ExpediaLodgingProposalDetails,
+    ExpediaLodgingService, ExpediaProviderClient, ExpediaRawBookingRequest,
+    ExpediaRawBookingResponse, MockExpediaProviderClient,
 };
 pub use uber::{
     DefaultUberProviderClient, MockUberProviderClient, UBER_CAPABILITY_HISTORY,
@@ -31,10 +31,10 @@ pub use uber::{
     UberRideHandoffResponse, UberRideOption, UberTrip,
 };
 pub use zomato::{
-    DefaultZomatoProviderClient, MockZomatoProviderClient, ZomatoError, ZomatoHandoffRequest,
-    ZomatoHandoffResponse, ZomatoHandoffType, ZomatoProviderClient, ZomatoRestaurant,
-    ZomatoSearchResponse, ZomatoService, ZOMATO_CAPABILITY_ORDER_HANDOFF,
+    DefaultZomatoProviderClient, MockZomatoProviderClient, ZOMATO_CAPABILITY_ORDER_HANDOFF,
     ZOMATO_CAPABILITY_ORDER_HANDOFF_SHORT, ZOMATO_CAPABILITY_RESTAURANT_SEARCH,
     ZOMATO_CAPABILITY_RESTAURANT_SEARCH_SHORT, ZOMATO_CAPABILITY_RESTAURANT_VIEW,
-    ZOMATO_CAPABILITY_RESTAURANT_VIEW_SHORT, ZOMATO_INTEGRATION_KEY,
+    ZOMATO_CAPABILITY_RESTAURANT_VIEW_SHORT, ZOMATO_INTEGRATION_KEY, ZomatoError,
+    ZomatoHandoffRequest, ZomatoHandoffResponse, ZomatoHandoffType, ZomatoProviderClient,
+    ZomatoRestaurant, ZomatoSearchResponse, ZomatoService,
 };

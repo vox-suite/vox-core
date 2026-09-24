@@ -8,8 +8,8 @@ pub mod audit;
 pub mod auth;
 pub mod capability_grants;
 pub mod connected_reads;
-pub mod consequential_writes;
 pub mod connections;
+pub mod consequential_writes;
 pub mod conversations;
 pub mod durable_tasks;
 pub mod events;
@@ -20,6 +20,7 @@ pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
 pub mod preferences;
+pub mod privacy;
 pub mod rate_limit;
 pub mod reminders;
 pub mod remote_extensions;
@@ -63,6 +64,7 @@ pub struct AppState {
     pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
+    pub(crate) privacy: Option<Arc<crate::privacy::PrivacyService>>,
     pub(crate) reminders: Option<Arc<crate::reminders::ReminderService>>,
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
@@ -95,6 +97,7 @@ impl AppState {
             integration_registry: None,
             schedules: None,
             preferences: None,
+            privacy: None,
             reminders: None,
             remote_extensions: None,
             status: None,
@@ -172,6 +175,10 @@ impl AppState {
             schedules: Some(Arc::new(ScheduleService::new(db.clone()))),
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
                 db.clone(),
+            ))),
+            privacy: Some(Arc::new(crate::privacy::PrivacyService::new(
+                db.clone(),
+                None,
             ))),
             reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
             remote_extensions: Some(Arc::new(
@@ -269,6 +276,10 @@ impl AppState {
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
                 db.clone(),
             ))),
+            privacy: Some(Arc::new(crate::privacy::PrivacyService::new(
+                db.clone(),
+                None,
+            ))),
             reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
@@ -328,26 +339,17 @@ impl AppState {
         self
     }
 
-    pub fn with_amazon(
-        mut self,
-        service: Arc<crate::providers::AmazonService>,
-    ) -> Self {
+    pub fn with_amazon(mut self, service: Arc<crate::providers::AmazonService>) -> Self {
         self.amazon = Some(service);
         self
     }
 
-    pub fn with_zomato(
-        mut self,
-        service: Arc<crate::providers::ZomatoService>,
-    ) -> Self {
+    pub fn with_zomato(mut self, service: Arc<crate::providers::ZomatoService>) -> Self {
         self.zomato = Some(service);
         self
     }
 
-    pub fn with_reminders(
-        mut self,
-        service: Arc<crate::reminders::ReminderService>,
-    ) -> Self {
+    pub fn with_reminders(mut self, service: Arc<crate::reminders::ReminderService>) -> Self {
         self.reminders = Some(service);
         self
     }
@@ -456,7 +458,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/reminders", post(reminders::create_reminder))
         .route("/v1/reminders/list", post(reminders::list_reminders))
         .route("/v1/reminders/{id}", post(reminders::get_reminder))
-        .route("/v1/reminders/{id}/cancel", post(reminders::cancel_reminder))
+        .route(
+            "/v1/reminders/{id}/cancel",
+            post(reminders::cancel_reminder),
+        )
         .route(
             "/v1/reminders/{id}/deliveries",
             post(reminders::get_reminder_deliveries),
@@ -525,6 +530,31 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agents/{agent_key}/effective-preferences",
             post(preferences::effective),
+        )
+        .route("/v1/privacy/delete-history", post(privacy::delete_history))
+        .route(
+            "/v1/privacy/portable-export",
+            post(privacy::portable_export),
+        )
+        .route(
+            "/v1/privacy/exports/{id}/download",
+            post(privacy::download_export),
+        )
+        .route(
+            "/v1/privacy/portable-import",
+            post(privacy::portable_import),
+        )
+        .route(
+            "/v1/privacy/retention-policy",
+            get(privacy::get_retention_policy),
+        )
+        .route(
+            "/v1/privacy/retention/prune",
+            post(privacy::prune_retention),
+        )
+        .route(
+            "/v1/privacy/executions/{id}/evidence",
+            post(privacy::get_action_evidence),
         )
         .route(
             "/v1/identity/links",

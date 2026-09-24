@@ -65,13 +65,11 @@ impl SummaryHandler {
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
-        let row = sqlx::query(
-            "SELECT user_id, summary_version FROM conversations WHERE id = $1",
-        )
-        .bind(conversation_id.0)
-        .fetch_optional(self.db.pool())
-        .await?
-        .ok_or(SummaryHandlerError::NotFound)?;
+        let row = sqlx::query("SELECT user_id, summary_version FROM conversations WHERE id = $1")
+            .bind(conversation_id.0)
+            .fetch_optional(self.db.pool())
+            .await?
+            .ok_or(SummaryHandlerError::NotFound)?;
 
         let user_id: Uuid = row.get("user_id");
         let summary_version: i32 = row.get("summary_version");

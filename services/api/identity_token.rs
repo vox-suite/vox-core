@@ -55,7 +55,8 @@ pub fn verify_hs256_jwt(token: &str, secret: Option<&str>) -> Result<VerifiedIde
     if header_value.get("alg").and_then(|value| value.as_str()) != Some("HS256") {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| StatusCode::UNAUTHORIZED)?;
     mac.update(format!("{header}.{payload}").as_bytes());
     let expected = mac.finalize().into_bytes();
     let actual = decode_part(signature)?;
@@ -98,8 +99,12 @@ pub async fn verify_id_token(token: &str) -> Result<VerifiedIdentity, StatusCode
     }
 }
 
-fn identity_from_payload(payload: &[u8], fallback_issuer: &str) -> Result<VerifiedIdentity, StatusCode> {
-    let claims: TokenClaims = serde_json::from_slice(payload).map_err(|_| StatusCode::UNAUTHORIZED)?;
+fn identity_from_payload(
+    payload: &[u8],
+    fallback_issuer: &str,
+) -> Result<VerifiedIdentity, StatusCode> {
+    let claims: TokenClaims =
+        serde_json::from_slice(payload).map_err(|_| StatusCode::UNAUTHORIZED)?;
     if let Some(exp) = claims.exp {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -189,7 +194,10 @@ fn verify_asymmetric_components(
             DecodingKey::from_ec_components(x, y).map_err(|_| StatusCode::UNAUTHORIZED)?
         }
         Algorithm::RS256 => {
-            let (n, e) = (n.ok_or(StatusCode::UNAUTHORIZED)?, e.ok_or(StatusCode::UNAUTHORIZED)?);
+            let (n, e) = (
+                n.ok_or(StatusCode::UNAUTHORIZED)?,
+                e.ok_or(StatusCode::UNAUTHORIZED)?,
+            );
             DecodingKey::from_rsa_components(n, e).map_err(|_| StatusCode::UNAUTHORIZED)?
         }
         _ => return Err(StatusCode::UNAUTHORIZED),
@@ -197,7 +205,8 @@ fn verify_asymmetric_components(
     let mut validation = Validation::new(alg);
     validation.validate_aud = false;
     validation.set_issuer(&[expected_issuer]);
-    let data = decode::<TokenClaims>(token, &key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let data =
+        decode::<TokenClaims>(token, &key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
     let subject = data.claims.sub.trim();
     if subject.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
@@ -230,13 +239,25 @@ async fn verify_supabase_asymmetric(
     let jwk = supabase_jwk(&base, kid).await?;
     match alg {
         Algorithm::ES256 => {
-            let x = jwk.get("x").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
-            let y = jwk.get("y").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            let x = jwk
+                .get("x")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let y = jwk
+                .get("y")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::UNAUTHORIZED)?;
             verify_asymmetric_components(token, alg, x, y, None, None, &expected_issuer)
         }
         Algorithm::RS256 => {
-            let n = jwk.get("n").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
-            let e = jwk.get("e").and_then(|v| v.as_str()).ok_or(StatusCode::UNAUTHORIZED)?;
+            let n = jwk
+                .get("n")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let e = jwk
+                .get("e")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::UNAUTHORIZED)?;
             verify_asymmetric_components(token, alg, "", "", Some(n), Some(e), &expected_issuer)
         }
         _ => Err(StatusCode::UNAUTHORIZED),
@@ -264,7 +285,10 @@ async fn supabase_jwk(base_url: &str, kid: &str) -> Result<serde_json::Value, St
     if !response.status().is_success() {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let body: serde_json::Value = response.json().await.map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let keys = body
         .get("keys")
         .and_then(|value| value.as_array())
@@ -298,12 +322,16 @@ async fn verify_google_token(token: &str) -> Result<VerifiedIdentity, StatusCode
         return Err(StatusCode::UNAUTHORIZED);
     }
     let identity = identity_from_payload(&decode_part(payload)?, "https://accounts.google.com")?;
-    if identity.issuer != "https://accounts.google.com" && identity.issuer != "accounts.google.com" {
+    if identity.issuer != "https://accounts.google.com" && identity.issuer != "accounts.google.com"
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let payload_json: serde_json::Value =
         serde_json::from_slice(&decode_part(payload)?).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let token_audience = payload_json.get("aud").and_then(|value| value.as_str()).unwrap_or("");
+    let token_audience = payload_json
+        .get("aud")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     if token_audience != audience.trim() {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -325,15 +353,29 @@ async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
     if !response.status().is_success() {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let body: serde_json::Value = response.json().await.map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let keys = body.get("keys").and_then(|value| value.as_array()).ok_or(StatusCode::UNAUTHORIZED)?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let keys = body
+        .get("keys")
+        .and_then(|value| value.as_array())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     let key = keys
         .iter()
         .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
         .ok_or(StatusCode::UNAUTHORIZED)?;
     Ok(GoogleKey {
-        n: key.get("n").and_then(|value| value.as_str()).unwrap_or("").to_string(),
-        e: key.get("e").and_then(|value| value.as_str()).unwrap_or("").to_string(),
+        n: key
+            .get("n")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string(),
+        e: key
+            .get("e")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -346,8 +388,8 @@ fn rsa_sha256_valid(key: &GoogleKey, message: &str, signature: &str) -> Result<b
     let exponent = BigUint::from_bytes_be(&decode_part(&key.e)?);
     let public_key = RsaPublicKey::new(modulus, exponent).map_err(|_| StatusCode::UNAUTHORIZED)?;
     let verifier = VerifyingKey::<rsa::sha2::Sha256>::new(public_key);
-    let signature =
-        Signature::try_from(decode_part(signature)?.as_slice()).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let signature = Signature::try_from(decode_part(signature)?.as_slice())
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     Ok(verifier.verify(message.as_bytes(), &signature).is_ok())
 }
 

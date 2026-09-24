@@ -18,10 +18,7 @@ use sqlx::FromRow;
 use std::{str::FromStr, sync::Arc};
 use uuid::Uuid;
 
-use crate::{
-    db::Db,
-    identity::ResolvedUserContext,
-};
+use crate::{db::Db, identity::ResolvedUserContext};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -245,9 +242,10 @@ impl ReminderChannelAdapter for MockReminderChannelAdapter {
     ) -> Result<ReminderDeliveryOutcome, String> {
         let outcome = {
             let lock = self.forced_outcome.lock().unwrap();
-            lock.clone().unwrap_or(ReminderDeliveryOutcome::DeliveredToChannel {
-                provider_receipt_id: Some(format!("rcpt_{}", Uuid::new_v4())),
-            })
+            lock.clone()
+                .unwrap_or(ReminderDeliveryOutcome::DeliveredToChannel {
+                    provider_receipt_id: Some(format!("rcpt_{}", Uuid::new_v4())),
+                })
         };
         self.dispatched
             .lock()
@@ -276,9 +274,8 @@ pub fn compute_next_calendar(
     timezone: Tz,
     after: DateTime<Utc>,
 ) -> Result<DateTime<Utc>, ReminderError> {
-    let schedule = Schedule::from_str(expression).map_err(|e| {
-        ReminderError::Invalid(format!("invalid cron recurrence expression: {e}"))
-    })?;
+    let schedule = Schedule::from_str(expression)
+        .map_err(|e| ReminderError::Invalid(format!("invalid cron recurrence expression: {e}")))?;
     let local = after.with_timezone(&timezone);
     let next_local = schedule.after(&local).next().ok_or_else(|| {
         ReminderError::Invalid("no upcoming occurrences found for recurrence expression".into())
@@ -329,12 +326,17 @@ impl ReminderService {
             return Err(ReminderError::Invalid("channel must not be empty".into()));
         }
         if request.destination.trim().is_empty() {
-            return Err(ReminderError::Invalid("destination must not be empty".into()));
+            return Err(ReminderError::Invalid(
+                "destination must not be empty".into(),
+            ));
         }
 
         // Validate timezone
         let timezone = Tz::from_str(request.timezone.trim()).map_err(|_| {
-            ReminderError::Invalid(format!("unknown or invalid IANA timezone: {}", request.timezone))
+            ReminderError::Invalid(format!(
+                "unknown or invalid IANA timezone: {}",
+                request.timezone
+            ))
         })?;
 
         // Guard against action authority injection
@@ -434,7 +436,10 @@ impl ReminderService {
     }
 
     /// Lists all reminders for the resolved user context.
-    pub async fn list(&self, context: &ResolvedUserContext) -> Result<Vec<Reminder>, ReminderError> {
+    pub async fn list(
+        &self,
+        context: &ResolvedUserContext,
+    ) -> Result<Vec<Reminder>, ReminderError> {
         let reminders = sqlx::query_as::<_, Reminder>(
             "SELECT * FROM reminders WHERE user_context_id = $1 ORDER BY created_at DESC",
         )
@@ -611,7 +616,8 @@ impl ReminderScheduler {
         user_context_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<usize, ReminderError> {
-        self.process_due_reminders_internal(now, Some(user_context_id)).await
+        self.process_due_reminders_internal(now, Some(user_context_id))
+            .await
     }
 
     async fn process_due_reminders_internal(
@@ -860,10 +866,12 @@ impl ReminderScheduler {
                     .execute(&mut *tx)
                     .await?;
                 }
-                ReminderDeliveryOutcome::Missed { scheduled_for, detected_at } => {
-                    let reason = format!(
-                        "Missed occurrence at {scheduled_for} detected at {detected_at}"
-                    );
+                ReminderDeliveryOutcome::Missed {
+                    scheduled_for,
+                    detected_at,
+                } => {
+                    let reason =
+                        format!("Missed occurrence at {scheduled_for} detected at {detected_at}");
                     sqlx::query(
                         r#"
                         INSERT INTO reminder_deliveries (
@@ -918,7 +926,9 @@ impl ReminderScheduler {
                 .ok_or_else(|| ReminderError::Invalid("missing recurrence expression".into()))?;
             compute_next_calendar(expr, timezone, after)
         } else {
-            Err(ReminderError::Invalid("one_time reminder has no next occurrence".into()))
+            Err(ReminderError::Invalid(
+                "one_time reminder has no next occurrence".into(),
+            ))
         }
     }
 }

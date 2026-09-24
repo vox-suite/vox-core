@@ -254,7 +254,10 @@ impl UberProviderClient for DefaultUberProviderClient {
         }
 
         if !resp.status().is_success() {
-            return Err(UberReadError::ProviderError(format!("HTTP {}", resp.status())));
+            return Err(UberReadError::ProviderError(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         resp.json::<Vec<UberRideOption>>()
@@ -326,7 +329,10 @@ impl UberProviderClient for MockUberProviderClient {
         _dropoff_lat: f64,
         _dropoff_lon: f64,
     ) -> Result<Vec<UberRideOption>, UberReadError> {
-        if self.fail_with_rate_limit.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .fail_with_rate_limit
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(UberReadError::RateLimited(30));
         }
         let lock = self.estimates.lock().unwrap();
@@ -583,19 +589,36 @@ impl UberConnectedReadService {
         connection_id: Uuid,
         request: UberRideEstimateRequest,
     ) -> Result<UberRideEstimateResponse, UberReadError> {
-        self.verify_access(context, agent_external_key, connection_id, UBER_CAPABILITY_RIDE_ESTIMATE).await?;
-        let options = self.client.fetch_estimates(
-            request.pickup_latitude,
-            request.pickup_longitude,
-            request.dropoff_latitude,
-            request.dropoff_longitude,
-        ).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            UBER_CAPABILITY_RIDE_ESTIMATE,
+        )
+        .await?;
+        let options = self
+            .client
+            .fetch_estimates(
+                request.pickup_latitude,
+                request.pickup_longitude,
+                request.dropoff_latitude,
+                request.dropoff_longitude,
+            )
+            .await?;
 
-        let expires_at = options.iter().map(|o| o.expires_at).min().unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(5));
+        let expires_at = options
+            .iter()
+            .map(|o| o.expires_at)
+            .min()
+            .unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(5));
 
         Ok(UberRideEstimateResponse {
-            pickup_display_name: request.pickup_display_name.unwrap_or_else(|| "Pickup location".into()),
-            dropoff_display_name: request.dropoff_display_name.unwrap_or_else(|| "Destination".into()),
+            pickup_display_name: request
+                .pickup_display_name
+                .unwrap_or_else(|| "Pickup location".into()),
+            dropoff_display_name: request
+                .dropoff_display_name
+                .unwrap_or_else(|| "Destination".into()),
             options,
             expires_at,
         })
@@ -613,11 +636,20 @@ impl UberConnectedReadService {
         connection_id: Uuid,
         request: UberRideHandoffRequest,
     ) -> Result<UberRideHandoffResponse, UberReadError> {
-        self.verify_access(context, agent_external_key, connection_id, UBER_CAPABILITY_RIDE_REQUEST).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            UBER_CAPABILITY_RIDE_REQUEST,
+        )
+        .await?;
 
         let mut url = format!(
             "https://m.uber.com/ul/?action=setPickup&pickup[latitude]={:.6}&pickup[longitude]={:.6}&dropoff[latitude]={:.6}&dropoff[longitude]={:.6}",
-            request.pickup_latitude, request.pickup_longitude, request.dropoff_latitude, request.dropoff_longitude
+            request.pickup_latitude,
+            request.pickup_longitude,
+            request.dropoff_latitude,
+            request.dropoff_longitude
         );
 
         if let Some(pid) = &request.product_id {
@@ -655,15 +687,15 @@ impl UberConnectedReadService {
         connection_id: Uuid,
         capability: &str,
     ) -> Result<(), UberReadError> {
-        let connection = self
-            .connections
-            .get(context, connection_id)
-            .await
-            .map_err(|e| match e {
-                ConnectionError::NotFound => UberReadError::ConnectionNotFound,
-                ConnectionError::Database(err) => UberReadError::Database(err),
-                _ => UberReadError::ConnectionNotFound,
-            })?;
+        let connection =
+            self.connections
+                .get(context, connection_id)
+                .await
+                .map_err(|e| match e {
+                    ConnectionError::NotFound => UberReadError::ConnectionNotFound,
+                    ConnectionError::Database(err) => UberReadError::Database(err),
+                    _ => UberReadError::ConnectionNotFound,
+                })?;
 
         if connection.integration_external_key != UBER_INTEGRATION_KEY {
             return Err(UberReadError::InvalidIntegration);
@@ -673,7 +705,10 @@ impl UberConnectedReadService {
             return Err(UberReadError::ReconnectRequired);
         }
 
-        if connection.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
+        if connection
+            .expires_at
+            .is_some_and(|exp| exp <= chrono::Utc::now())
+        {
             return Err(UberReadError::ReconnectRequired);
         }
 
@@ -683,7 +718,10 @@ impl UberConnectedReadService {
             .await
             .map_err(|e| match e {
                 CapabilityGrantError::Database(err) => UberReadError::Database(err),
-                _ => UberReadError::UnauthorizedCapability(capability.into(), agent_external_key.into()),
+                _ => UberReadError::UnauthorizedCapability(
+                    capability.into(),
+                    agent_external_key.into(),
+                ),
             })?;
 
         let has_grant = grants

@@ -84,7 +84,10 @@ async fn calendar_recurrence_preserves_wall_clock_across_daylight_saving_transit
     let summer = Utc.with_ymd_and_hms(2026, 7, 15, 0, 0, 0).unwrap();
     let next_summer = compute_next_calendar(expr, tz_ny, summer).unwrap();
     // 9:00 AM EDT is 13:00 UTC
-    assert_eq!(next_summer, Utc.with_ymd_and_hms(2026, 7, 15, 13, 0, 0).unwrap());
+    assert_eq!(
+        next_summer,
+        Utc.with_ymd_and_hms(2026, 7, 15, 13, 0, 0).unwrap()
+    );
     let local_summer = next_summer.with_timezone(&tz_ny);
     assert_eq!(local_summer.format("%H:%M:%S").to_string(), "09:00:00");
 
@@ -102,7 +105,10 @@ async fn calendar_recurrence_preserves_wall_clock_across_daylight_saving_transit
     let winter = Utc.with_ymd_and_hms(2026, 12, 15, 0, 0, 0).unwrap();
     let next_winter = compute_next_calendar(expr, tz_ny, winter).unwrap();
     // 9:00 AM EST is 14:00 UTC
-    assert_eq!(next_winter, Utc.with_ymd_and_hms(2026, 12, 15, 14, 0, 0).unwrap());
+    assert_eq!(
+        next_winter,
+        Utc.with_ymd_and_hms(2026, 12, 15, 14, 0, 0).unwrap()
+    );
     let local_winter = next_winter.with_timezone(&tz_ny);
     assert_eq!(local_winter.format("%H:%M:%S").to_string(), "09:00:00");
 
@@ -112,7 +118,10 @@ async fn calendar_recurrence_preserves_wall_clock_across_daylight_saving_transit
     let march_13 = Utc.with_ymd_and_hms(2027, 3, 13, 15, 0, 0).unwrap();
     let march_14 = compute_next_calendar(expr, tz_ny, march_13).unwrap();
     // March 14 2027 9:00 AM EDT is 13:00 UTC (clock sprang forward 1 hour)
-    assert_eq!(march_14, Utc.with_ymd_and_hms(2027, 3, 14, 13, 0, 0).unwrap());
+    assert_eq!(
+        march_14,
+        Utc.with_ymd_and_hms(2027, 3, 14, 13, 0, 0).unwrap()
+    );
     let local_march_14 = march_14.with_timezone(&tz_ny);
     assert_eq!(local_march_14.format("%H:%M:%S").to_string(), "09:00:00");
 }
@@ -266,7 +275,10 @@ async fn missed_reminder_policy_never_silently_delivers_materially_late_occurren
     // Delivery record is marked "missed"
     let deliveries = service.get_deliveries(&context, reminder.id).await.unwrap();
     assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].status, ReminderDeliveryStatus::Missed.as_str());
+    assert_eq!(
+        deliveries[0].status,
+        ReminderDeliveryStatus::Missed.as_str()
+    );
 }
 
 #[tokio::test]
@@ -340,7 +352,10 @@ async fn bounded_retries_and_retry_window_exhaustion() {
 
     let deliveries = service.get_deliveries(&context, reminder.id).await.unwrap();
     assert_eq!(deliveries.len(), 3);
-    assert_eq!(deliveries[0].status, ReminderDeliveryStatus::Failed.as_str());
+    assert_eq!(
+        deliveries[0].status,
+        ReminderDeliveryStatus::Failed.as_str()
+    );
 }
 
 #[tokio::test]
@@ -409,10 +424,16 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
         .method("POST")
         .uri("/v1/reminders")
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", assertion.secret())
         .header("x-vox-host-audience", assertion.audience())
-        .header("x-vox-host-timestamp", assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", assertion.nonce().to_string())
         .header("x-vox-host-signature", assertion.signature())
         .body(Body::from(create_payload.to_string()))
@@ -420,7 +441,9 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
 
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["title"], "Board Meeting");
     assert_eq!(val["status"], "scheduled");
@@ -437,10 +460,16 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
         .method("POST")
         .uri(format!("/v1/reminders/{reminder_id}/cancel"))
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", cancel_assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            cancel_assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", cancel_assertion.secret())
         .header("x-vox-host-audience", cancel_assertion.audience())
-        .header("x-vox-host-timestamp", cancel_assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            cancel_assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", cancel_assertion.nonce().to_string())
         .header("x-vox-host-signature", cancel_assertion.signature())
         .body(Body::from(json!({ "host_context": host_req }).to_string()))
@@ -448,7 +477,9 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
 
     let cancel_resp = app.clone().oneshot(cancel_req).await.unwrap();
     assert_eq!(cancel_resp.status(), StatusCode::OK);
-    let cancel_bytes = axum::body::to_bytes(cancel_resp.into_body(), usize::MAX).await.unwrap();
+    let cancel_bytes = axum::body::to_bytes(cancel_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let cancel_val: serde_json::Value = serde_json::from_slice(&cancel_bytes).unwrap();
     assert_eq!(cancel_val["status"], "cancelled");
 
@@ -490,7 +521,9 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
 
     let callback_resp = app.oneshot(callback_req).await.unwrap();
     assert_eq!(callback_resp.status(), StatusCode::CREATED);
-    let cb_bytes = axum::body::to_bytes(callback_resp.into_body(), usize::MAX).await.unwrap();
+    let cb_bytes = axum::body::to_bytes(callback_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let cb_val: serde_json::Value = serde_json::from_slice(&cb_bytes).unwrap();
     assert_eq!(cb_val["status"], "delivered_to_channel");
     assert_eq!(cb_val["provider_receipt_id"], "CA1234567890abcdef");

@@ -145,7 +145,10 @@ impl ZomatoProviderClient for DefaultZomatoProviderClient {
         }
 
         if !resp.status().is_success() {
-            return Err(ZomatoError::ProviderError(format!("HTTP {}", resp.status())));
+            return Err(ZomatoError::ProviderError(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         resp.json::<ZomatoSearchResponse>()
@@ -167,7 +170,10 @@ impl ZomatoProviderClient for DefaultZomatoProviderClient {
         }
 
         if !resp.status().is_success() {
-            return Err(ZomatoError::ProviderError(format!("HTTP {}", resp.status())));
+            return Err(ZomatoError::ProviderError(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         let r = resp
@@ -199,7 +205,10 @@ impl ZomatoProviderClient for MockZomatoProviderClient {
         query: &str,
         city: &str,
     ) -> Result<ZomatoSearchResponse, ZomatoError> {
-        if self.fail_with_rate_limit.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .fail_with_rate_limit
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(ZomatoError::RateLimited(45));
         }
         let lock = self.restaurants.lock().unwrap();
@@ -209,7 +218,9 @@ impl ZomatoProviderClient for MockZomatoProviderClient {
             .iter()
             .filter(|r| {
                 (r.name.to_lowercase().contains(&q_lower)
-                    || r.cuisines.iter().any(|c| c.to_lowercase().contains(&q_lower)))
+                    || r.cuisines
+                        .iter()
+                        .any(|c| c.to_lowercase().contains(&q_lower)))
                     && (c_lower.is_empty() || r.city.to_lowercase().contains(&c_lower))
             })
             .cloned()
@@ -224,7 +235,10 @@ impl ZomatoProviderClient for MockZomatoProviderClient {
     }
 
     async fn get_restaurant(&self, res_id: &str) -> Result<Option<ZomatoRestaurant>, ZomatoError> {
-        if self.fail_with_rate_limit.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .fail_with_rate_limit
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(ZomatoError::RateLimited(45));
         }
         let lock = self.restaurants.lock().unwrap();
@@ -312,7 +326,13 @@ impl ZomatoService {
         query: &str,
         city: &str,
     ) -> Result<ZomatoSearchResponse, ZomatoError> {
-        self.verify_access(context, agent_external_key, connection_id, ZOMATO_CAPABILITY_RESTAURANT_SEARCH).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            ZOMATO_CAPABILITY_RESTAURANT_SEARCH,
+        )
+        .await?;
         self.client.search_restaurants(query, city).await
     }
 
@@ -324,7 +344,13 @@ impl ZomatoService {
         connection_id: Uuid,
         res_id: &str,
     ) -> Result<Option<ZomatoRestaurant>, ZomatoError> {
-        self.verify_access(context, agent_external_key, connection_id, ZOMATO_CAPABILITY_RESTAURANT_VIEW).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            ZOMATO_CAPABILITY_RESTAURANT_VIEW,
+        )
+        .await?;
         self.client.get_restaurant(res_id).await
     }
 
@@ -339,24 +365,46 @@ impl ZomatoService {
         connection_id: Uuid,
         request: ZomatoHandoffRequest,
     ) -> Result<ZomatoHandoffResponse, ZomatoError> {
-        self.verify_access(context, agent_external_key, connection_id, ZOMATO_CAPABILITY_ORDER_HANDOFF).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            ZOMATO_CAPABILITY_ORDER_HANDOFF,
+        )
+        .await?;
 
         let (action, handoff_url) = match request.handoff_type {
             ZomatoHandoffType::ViewRestaurant => {
-                let id = request.res_id.as_deref().ok_or(ZomatoError::MissingParameter)?;
-                ("view_restaurant", format!("https://www.zomato.com/restaurant/{}", id.trim()))
+                let id = request
+                    .res_id
+                    .as_deref()
+                    .ok_or(ZomatoError::MissingParameter)?;
+                (
+                    "view_restaurant",
+                    format!("https://www.zomato.com/restaurant/{}", id.trim()),
+                )
             }
             ZomatoHandoffType::CartAndCheckout => {
-                let id = request.res_id.as_deref().ok_or(ZomatoError::MissingParameter)?;
-                ("cart_and_checkout", format!("https://www.zomato.com/order/{}", id.trim()))
+                let id = request
+                    .res_id
+                    .as_deref()
+                    .ok_or(ZomatoError::MissingParameter)?;
+                (
+                    "cart_and_checkout",
+                    format!("https://www.zomato.com/order/{}", id.trim()),
+                )
             }
             ZomatoHandoffType::TrackOrder => {
-                let order_id = request.order_id.as_deref().ok_or(ZomatoError::MissingParameter)?;
-                ("track_order", format!("https://www.zomato.com/order/track/{}", order_id.trim()))
+                let order_id = request
+                    .order_id
+                    .as_deref()
+                    .ok_or(ZomatoError::MissingParameter)?;
+                (
+                    "track_order",
+                    format!("https://www.zomato.com/order/track/{}", order_id.trim()),
+                )
             }
-            ZomatoHandoffType::Reorder => {
-                ("reorder", "https://www.zomato.com/user/orders".into())
-            }
+            ZomatoHandoffType::Reorder => ("reorder", "https://www.zomato.com/user/orders".into()),
         };
 
         Ok(ZomatoHandoffResponse {
@@ -390,15 +438,15 @@ impl ZomatoService {
         connection_id: Uuid,
         capability: &str,
     ) -> Result<(), ZomatoError> {
-        let connection = self
-            .connections
-            .get(context, connection_id)
-            .await
-            .map_err(|e| match e {
-                ConnectionError::NotFound => ZomatoError::ConnectionNotFound,
-                ConnectionError::Database(err) => ZomatoError::Database(err),
-                _ => ZomatoError::ConnectionNotFound,
-            })?;
+        let connection =
+            self.connections
+                .get(context, connection_id)
+                .await
+                .map_err(|e| match e {
+                    ConnectionError::NotFound => ZomatoError::ConnectionNotFound,
+                    ConnectionError::Database(err) => ZomatoError::Database(err),
+                    _ => ZomatoError::ConnectionNotFound,
+                })?;
 
         if connection.integration_external_key != ZOMATO_INTEGRATION_KEY {
             return Err(ZomatoError::InvalidIntegration);
@@ -408,7 +456,10 @@ impl ZomatoService {
             return Err(ZomatoError::ReconnectRequired);
         }
 
-        if connection.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
+        if connection
+            .expires_at
+            .is_some_and(|exp| exp <= chrono::Utc::now())
+        {
             return Err(ZomatoError::ReconnectRequired);
         }
 
@@ -418,7 +469,10 @@ impl ZomatoService {
             .await
             .map_err(|e| match e {
                 CapabilityGrantError::Database(err) => ZomatoError::Database(err),
-                _ => ZomatoError::UnauthorizedCapability(capability.into(), agent_external_key.into()),
+                _ => ZomatoError::UnauthorizedCapability(
+                    capability.into(),
+                    agent_external_key.into(),
+                ),
             })?;
 
         let has_grant = grants

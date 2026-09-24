@@ -9,7 +9,10 @@ fn schedule_outbound_call_tool_metadata() {
     };
     let tool = ScheduleOutboundCall::new(None, None, owner);
     assert_eq!(ScheduleOutboundCall::NAME, "schedule_outbound_call");
-    assert!(tool.description().contains("Schedule an outbound phone call"));
+    assert!(
+        tool.description()
+            .contains("Schedule an outbound phone call")
+    );
     let params = tool.parameters();
     assert_eq!(params["type"], "object");
     assert!(params["properties"]["delay_minutes"].is_object());

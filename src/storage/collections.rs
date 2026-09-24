@@ -73,7 +73,11 @@ impl CollectionRepository {
         })
     }
 
-    pub async fn get_by_id(&self, user_id: Uuid, id: Uuid) -> Result<Option<Collection>, sqlx::Error> {
+    pub async fn get_by_id(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Collection>, sqlx::Error> {
         let row = sqlx::query(
             r#"
             SELECT id, user_id, name, description, kind, status, metadata, version, created_at, updated_at
@@ -175,7 +179,11 @@ impl CollectionRepository {
 
         Ok(result.rows_affected() > 0)
     }
-    pub async fn find_by_name(&self, user_id: Uuid, name: &str) -> Result<Option<Collection>, sqlx::Error> {
+    pub async fn find_by_name(
+        &self,
+        user_id: Uuid,
+        name: &str,
+    ) -> Result<Option<Collection>, sqlx::Error> {
         let row = sqlx::query(
             r#"
             SELECT id, user_id, name, description, kind, status, metadata, version, created_at, updated_at

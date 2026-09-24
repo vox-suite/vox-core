@@ -2,16 +2,16 @@
 * Conversational agent logic, prompting structures, and TTS token chunking.
 */
 use super::{AgentError, tools};
+use crate::outbound::OutboundCallService;
 use crate::{
     config::Config,
     db::Db,
     identity::{ResourceOwner, UserId},
 };
-use crate::outbound::OutboundCallService;
 use async_trait::async_trait;
-use std::sync::Arc;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use futures_util::Stream;
 use std::pin::Pin;

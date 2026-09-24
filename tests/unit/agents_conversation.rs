@@ -43,9 +43,7 @@ fn preserves_audio_tags_and_pauses_for_elevenlabs() {
 #[test]
 fn normalizes_currency_and_abbreviations_for_speech() {
     assert_eq!(
-        spoken_response(
-            "Apple stock is currently at $235.40. India vs. West Indies on Oct. 2."
-        ),
+        spoken_response("Apple stock is currently at $235.40. India vs. West Indies on Oct. 2."),
         "Apple stock is currently at 235 dollars and 40 cents. India versus West Indies on October 2."
     );
 }

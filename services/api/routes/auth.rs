@@ -1,12 +1,7 @@
 /**
 * Session token exchange endpoint for authenticating clients and devices.
 */
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -33,7 +28,10 @@ pub async fn exchange_token(
     Json(payload): Json<AuthExchangeRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let identity = verify_id_token(&payload.id_token).await?;
-    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let existing = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT user_id, id FROM auth_identities WHERE issuer = $1 AND subject = $2",
@@ -133,7 +131,11 @@ pub async fn exchange_token(
         None
     };
 
-    let raw_token = format!("vox_sess_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let raw_token = format!(
+        "vox_sess_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
     let token_hash = hex::encode(Sha256::digest(raw_token.as_bytes()));
     let expires_at = Utc::now() + Duration::days(30);
     let family_id = Uuid::new_v4();
@@ -152,7 +154,9 @@ pub async fn exchange_token(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(AuthExchangeResponse {
         token: raw_token,

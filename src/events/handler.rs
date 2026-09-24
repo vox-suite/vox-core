@@ -159,10 +159,12 @@ impl EventHandler {
             }
         }
 
-        sqlx::query("UPDATE inbound_events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1")
-            .bind(event_id.0)
-            .execute(self.db.pool())
-            .await?;
+        sqlx::query(
+            "UPDATE inbound_events SET processed_at = COALESCE(processed_at, now()) WHERE id = $1",
+        )
+        .bind(event_id.0)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 }

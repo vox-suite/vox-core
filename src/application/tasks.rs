@@ -6,7 +6,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    domain::{identity::Actor, tasks::{Task, TaskStatus}},
+    domain::{
+        identity::Actor,
+        tasks::{Task, TaskStatus},
+    },
     storage::{collections::CollectionRepository, tasks::TaskRepository},
 };
 

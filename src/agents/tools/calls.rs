@@ -166,9 +166,8 @@ impl Tool for ScheduleOutboundCall {
             chrono::DateTime::parse_from_rfc3339(dt_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S").map(
-                        |naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc),
-                    )
+                    chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S")
+                        .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
                 })
                 .map_err(|_| {
                     CallToolError::InvalidInput(

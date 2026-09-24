@@ -13,7 +13,8 @@ use std::sync::Arc;
 pub struct MemoryService {
     db: Db,
     cache: Option<Arc<dyn cache::ContextCache>>,
-    projection_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<UserId, (String, std::time::Instant)>>>,
+    projection_cache:
+        Arc<tokio::sync::RwLock<std::collections::HashMap<UserId, (String, std::time::Instant)>>>,
 }
 
 impl MemoryService {

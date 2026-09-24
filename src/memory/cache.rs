@@ -35,11 +35,7 @@ pub trait ContextCache: Send + Sync {
         Ok(None)
     }
 
-    async fn put_user(
-        &self,
-        _user_id: UserId,
-        _info: &MinimalUserInfo,
-    ) -> Result<(), CacheError> {
+    async fn put_user(&self, _user_id: UserId, _info: &MinimalUserInfo) -> Result<(), CacheError> {
         Ok(())
     }
 
@@ -53,10 +49,7 @@ pub trait ContextCache: Send + Sync {
     }
 
     /// Replace the entire minimal-user cache from a Postgres snapshot.
-    async fn replace_users(
-        &self,
-        _users: &[(UserId, MinimalUserInfo)],
-    ) -> Result<(), CacheError> {
+    async fn replace_users(&self, _users: &[(UserId, MinimalUserInfo)]) -> Result<(), CacheError> {
         Ok(())
     }
 }
@@ -152,10 +145,7 @@ impl ContextCache for RedisContextCache {
         Ok(info.map(|info| (user_id, info)))
     }
 
-    async fn replace_users(
-        &self,
-        users: &[(UserId, MinimalUserInfo)],
-    ) -> Result<(), CacheError> {
+    async fn replace_users(&self, users: &[(UserId, MinimalUserInfo)]) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         Self::delete_pattern(&mut connection, redis_keys::USER_SCAN).await?;
         Self::delete_pattern(&mut connection, redis_keys::CHANNEL_SCAN).await?;
@@ -166,9 +156,7 @@ impl ContextCache for RedisContextCache {
         pipeline.atomic();
         for (user_id, info) in users {
             let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
-            pipeline
-                .set(redis_keys::user(*user_id), payload)
-                .ignore();
+            pipeline.set(redis_keys::user(*user_id), payload).ignore();
             for channel in &info.channels {
                 pipeline
                     .set(

@@ -44,7 +44,10 @@ struct DummyPlanner;
 
 #[async_trait]
 impl EventPlanning for DummyPlanner {
-    async fn plan(&self, _: EventPlanningPrompt) -> Result<Vec<PlannedAction>, vox_core::agents::AgentError> {
+    async fn plan(
+        &self,
+        _: EventPlanningPrompt,
+    ) -> Result<Vec<PlannedAction>, vox_core::agents::AgentError> {
         Ok(vec![])
     }
 }
@@ -120,7 +123,10 @@ async fn outbound_service_creates_records_and_dispatches_bridge_call() {
 async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     let (db, owner, phone) = setup().await;
     let mock_bridge = Arc::new(MockBridge::default());
-    let service = Arc::new(OutboundCallService::new(db.clone(), Some(mock_bridge.clone())));
+    let service = Arc::new(OutboundCallService::new(
+        db.clone(),
+        Some(mock_bridge.clone()),
+    ));
 
     let tool = ScheduleOutboundCall::new(Some(db.clone()), Some(service.clone()), owner);
 
@@ -169,8 +175,8 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     let count = ticker.tick(Utc::now()).await.unwrap();
     assert!(count >= 1);
 
-    let handler = ScheduleHandler::new(db.clone(), Arc::new(DummyPlanner))
-        .with_outbound(service.clone());
+    let handler =
+        ScheduleHandler::new(db.clone(), Arc::new(DummyPlanner)).with_outbound(service.clone());
 
     handler
         .handle(vox_core::schedules::ScheduleId(schedule_id), Utc::now())
@@ -181,7 +187,11 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
         let calls = mock_bridge.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].identity.external_id, phone);
-        assert!(calls[0].opening_instruction.contains("Remind user to clean bedroom"));
+        assert!(
+            calls[0]
+                .opening_instruction
+                .contains("Remind user to clean bedroom")
+        );
     }
 
     let completed_task = sqlx::query("SELECT status FROM tasks WHERE id = $1")
@@ -198,7 +208,10 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
 async fn trigger_outbound_call_tool_places_immediate_call() {
     let (db, owner, phone) = setup().await;
     let mock_bridge = Arc::new(MockBridge::default());
-    let service = Arc::new(OutboundCallService::new(db.clone(), Some(mock_bridge.clone())));
+    let service = Arc::new(OutboundCallService::new(
+        db.clone(),
+        Some(mock_bridge.clone()),
+    ));
 
     let tool = TriggerOutboundCall::new(Some(db.clone()), Some(service.clone()), owner);
 
