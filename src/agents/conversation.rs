@@ -3,6 +3,7 @@
 */
 use super::{AgentError, tools};
 use crate::outbound::OutboundCallService;
+use crate::realtime::DeviceHub;
 use crate::{
     config::Config,
     db::Db,
@@ -54,6 +55,7 @@ pub struct ConversationAgent {
     outbound: Option<Arc<OutboundCallService>>,
     tool_router: Option<crate::jev::ToolRouter>,
     tts_provider: String,
+    device_hub: Option<DeviceHub>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -90,6 +92,7 @@ impl ConversationAgent {
             outbound: None,
             tool_router,
             tts_provider: config.tts_provider.clone(),
+            device_hub: None,
         })
     }
 
@@ -118,6 +121,11 @@ impl ConversationAgent {
         self
     }
 
+    pub fn with_device_hub(mut self, hub: DeviceHub) -> Self {
+        self.device_hub = Some(hub);
+        self
+    }
+
     async fn build_agent_and_input(
         &self,
         prompt: &ConversationPrompt,
@@ -132,11 +140,24 @@ impl ConversationAgent {
         let onboarding_instruction =
             onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding);
 
+        // ponytail: fixed 0.55 cutoff, tune from routed-domain/confidence logs if it misfires elsewhere
+        const TOOL_DOMAIN_CONFIDENCE_THRESHOLD: f64 = 0.55;
+
         let routed_domain = if is_call_opening {
             crate::jev::ToolDomain::None
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
-                Ok((domain, _confidence)) => domain,
+                Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
+                    domain
+                }
+                Ok((domain, confidence)) => {
+                    tracing::warn!(
+                        ?domain,
+                        confidence,
+                        "Jev tool router confidence too low for a single domain, falling back to all tools"
+                    );
+                    crate::jev::ToolDomain::All
+                }
                 Err(err) => {
                     tracing::warn!(%err, "Jev tool router classification failed, falling back to all tools");
                     crate::jev::ToolDomain::All
@@ -208,6 +229,16 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .tool(tools::terminal::OpenTerminal::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
+                        ))
+                        .tool(tools::terminal::RunTerminalCommand::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
+                        ))
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => client
@@ -262,6 +293,16 @@ impl ConversationAgent {
                         .tool(tools::records::ListUserRecords::new(
                             self.db.clone(),
                             prompt.user_id,
+                        ))
+                        .tool(tools::terminal::OpenTerminal::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
+                        ))
+                        .tool(tools::terminal::RunTerminalCommand::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -339,6 +380,16 @@ impl ConversationAgent {
                     .tool(tools::records::ManageUserGoal::new(
                         self.db.clone(),
                         prompt.user_id,
+                    ))
+                    .tool(tools::terminal::OpenTerminal::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                        self.device_hub.clone().unwrap_or_default(),
+                    ))
+                    .tool(tools::terminal::RunTerminalCommand::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                        self.device_hub.clone().unwrap_or_default(),
                     ))
                     .default_max_turns(10)
                     .build()

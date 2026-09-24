@@ -3,6 +3,7 @@
 */
 pub mod auth;
 pub mod collections;
+pub mod device_socket;
 pub mod devices;
 pub mod events;
 pub mod identity;

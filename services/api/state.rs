@@ -9,6 +9,7 @@ use vox_core::{
     },
     db::Db,
     http::AppState,
+    realtime::DeviceHub,
     storage::{
         collections::CollectionRepository, devices::DeviceRepository, records::RecordRepository,
         schemas::SchemaRepository, tasks::TaskRepository,
@@ -24,10 +25,11 @@ pub struct ApiState {
     pub records: RecordService,
     pub schemas: SchemaService,
     pub devices: DeviceService,
+    pub device_hub: DeviceHub,
 }
 
 impl ApiState {
-    pub fn new(legacy: AppState, db: Db) -> Self {
+    pub fn new(legacy: AppState, db: Db, device_hub: DeviceHub) -> Self {
         let pool = db.pool().clone();
         let coll_repo = CollectionRepository::new(pool.clone());
         let task_repo = TaskRepository::new(pool.clone());
@@ -49,6 +51,7 @@ impl ApiState {
             records,
             schemas,
             devices,
+            device_hub,
         }
     }
 }

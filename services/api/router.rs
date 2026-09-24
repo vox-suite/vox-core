@@ -12,6 +12,7 @@ use crate::{
     routes::{
         auth::exchange_token,
         collections::{archive_collection, create_collection, get_collection, list_collections},
+        device_socket::{DeviceSocketState, device_socket},
         devices::{
             DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result,
         },
@@ -72,6 +73,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/device-jobs/{id}/result", post(submit_job_result))
         .with_state(device_api_state);
 
+    let device_socket_state = DeviceSocketState {
+        hub: state.device_hub.clone(),
+        pool: state.pool.clone(),
+    };
+    let device_socket_routes = Router::new()
+        .route("/v1/devices/{id}/socket", get(device_socket))
+        .with_state(device_socket_state);
+
     let event_routes = Router::new()
         .route("/v1/events/batch", post(ingest_batch))
         .with_state(state.pool.clone());
@@ -85,6 +94,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(record_routes)
         .merge(schema_routes)
         .merge(device_routes)
+        .merge(device_socket_routes)
         .merge(event_routes)
         .merge(identity_routes)
         .layer(middleware::from_fn_with_state(

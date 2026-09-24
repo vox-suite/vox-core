@@ -35,9 +35,11 @@ async fn main() {
         .await
         .expect("Vox Core database migration failed");
 
+    let device_hub = vox_core::realtime::DeviceHub::new();
     let agent = Arc::new(
         ConversationAgent::with_db(&config, db.clone())
-            .expect("Vox Core agent configuration is invalid"),
+            .expect("Vox Core agent configuration is invalid")
+            .with_device_hub(device_hub.clone()),
     );
     let redis_url = config.redis_url.as_deref().unwrap_or("redis://redis:6379");
     let cache = RedisContextCache::new(redis_url)
@@ -62,7 +64,7 @@ async fn main() {
     {
         legacy_state = legacy_state.with_admin(admin);
     }
-    let api_state = ApiState::new(legacy_state, db);
+    let api_state = ApiState::new(legacy_state, db, device_hub);
     let app = build_api_router(api_state);
 
     tracing::info!("Vox Core API listening on {}", config.bind_address);

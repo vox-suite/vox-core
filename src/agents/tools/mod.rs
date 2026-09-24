@@ -8,4 +8,5 @@ pub mod profile;
 pub mod projects;
 pub mod records;
 pub mod tasks;
+pub mod terminal;
 pub mod web_search;
