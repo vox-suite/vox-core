@@ -251,6 +251,21 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
+                    crate::jev::ToolDomain::Device => client
+                        .agent(&self.model)
+                        .preamble(preamble)
+                        .tool(tools::terminal::OpenTerminal::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
+                        ))
+                        .tool(tools::terminal::RunTerminalCommand::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            self.device_hub.clone().unwrap_or_default(),
+                        ))
+                        .default_max_turns(6)
+                        .build(),
                     _ => client
                         .agent(&self.model)
                         .preamble(preamble)

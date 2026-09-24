@@ -13,6 +13,7 @@ pub enum ToolDomain {
     Maps,
     TasksAndRecords,
     Calendar,
+    Device,
     All,
 }
 
@@ -57,6 +58,12 @@ impl ToolRouter {
                 Some("Checking upcoming schedule, calendar events, meetings, or availability"),
             ),
             (
+                "device",
+                Some(
+                    "Opening a terminal, running a shell command, or checking status on the user's registered computer or device (e.g. their Mac, laptop)",
+                ),
+            ),
+            (
                 "all",
                 Some("Complex or multi-intent request requiring a combination of multiple tools"),
             ),
@@ -70,6 +77,7 @@ impl ToolRouter {
             "maps" => ToolDomain::Maps,
             "tasks_and_records" => ToolDomain::TasksAndRecords,
             "calendar" => ToolDomain::Calendar,
+            "device" => ToolDomain::Device,
             _ => ToolDomain::All,
         };
 

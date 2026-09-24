@@ -31,7 +31,17 @@ pub async fn register_device(
         .devices
         .register_device(&actor, input)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| {
+            tracing::warn!(user_id = %actor.user_id, %err, "Device registration failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    tracing::info!(
+        device_id = %device.id,
+        user_id = %actor.user_id,
+        platform = %device.platform,
+        label = %device.label,
+        "Device registered"
+    );
     Ok((StatusCode::CREATED, Json(device)))
 }
 

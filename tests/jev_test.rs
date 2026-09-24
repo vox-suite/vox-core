@@ -213,6 +213,7 @@ fn test_tool_domain_variants() {
         ToolDomain::Maps,
         ToolDomain::TasksAndRecords,
         ToolDomain::Calendar,
+        ToolDomain::Device,
         ToolDomain::All,
     ];
 

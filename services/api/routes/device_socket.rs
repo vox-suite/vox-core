@@ -37,6 +37,7 @@ pub async fn device_socket(
     .unwrap_or(false);
 
     if !owned {
+        tracing::warn!(device_id = %id, user_id = %actor.user_id, "Device socket rejected: not an active device owned by this user");
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
 
@@ -44,6 +45,7 @@ pub async fn device_socket(
 }
 
 async fn handle_socket(socket: WebSocket, state: DeviceSocketState, device_id: Uuid) {
+    tracing::info!(device_id = %device_id, "Device socket connected");
     let mut outgoing = state.hub.register(device_id);
     let (mut sender, mut receiver) = socket.split();
 
@@ -66,4 +68,5 @@ async fn handle_socket(socket: WebSocket, state: DeviceSocketState, device_id: U
 
     forward_task.abort();
     state.hub.unregister(device_id);
+    tracing::info!(device_id = %device_id, "Device socket disconnected");
 }
