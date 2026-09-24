@@ -142,9 +142,20 @@ impl ConversationAgent {
 
         // ponytail: fixed 0.55 cutoff, tune from routed-domain/confidence logs if it misfires elsewhere
         const TOOL_DOMAIN_CONFIDENCE_THRESHOLD: f64 = 0.55;
+        // One id per agent turn: device commands proposed in this turn can
+        // only be confirmed by a later one (see RunTerminalCommand).
+        let turn = uuid::Uuid::new_v4();
 
+        let awaiting_device_confirmation = self
+            .device_hub
+            .as_ref()
+            .is_some_and(|hub| hub.has_pending_command(prompt.user_id.0));
         let routed_domain = if is_call_opening {
             crate::jev::ToolDomain::None
+        } else if awaiting_device_confirmation {
+            // A bare "yes" would otherwise route to no tools and the pending
+            // device command could never be confirmed.
+            crate::jev::ToolDomain::Device
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
                 Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
@@ -203,6 +214,16 @@ impl ConversationAgent {
                         .preamble(preamble)
                         .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
                         .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::UpdateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::projects::CreateProject::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
+                        .tool(tools::projects::ListProjects::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
                         .tool(tools::calls::ScheduleOutboundCall::new(
                             self.db.clone(),
                             self.outbound.clone(),
@@ -229,16 +250,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::terminal::OpenTerminal::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::terminal::RunTerminalCommand::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
-                        ))
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => client
@@ -263,6 +274,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                             self.device_hub.clone().unwrap_or_default(),
+                            turn,
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -308,16 +320,6 @@ impl ConversationAgent {
                         .tool(tools::records::ListUserRecords::new(
                             self.db.clone(),
                             prompt.user_id,
-                        ))
-                        .tool(tools::terminal::OpenTerminal::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::terminal::RunTerminalCommand::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -405,6 +407,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                         self.device_hub.clone().unwrap_or_default(),
+                        turn,
                     ))
                     .default_max_turns(10)
                     .build()

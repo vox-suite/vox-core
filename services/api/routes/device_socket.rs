@@ -28,7 +28,7 @@ pub async fn device_socket(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let owned = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1 AND user_id = $2 AND is_active = true)",
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1 AND user_id = $2 AND is_active = true AND execution_consent = true)",
     )
     .bind(id)
     .bind(actor.user_id)
@@ -44,29 +44,47 @@ pub async fn device_socket(
     ws.on_upgrade(move |socket| handle_socket(socket, state, id))
 }
 
+const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+
 async fn handle_socket(socket: WebSocket, state: DeviceSocketState, device_id: Uuid) {
     tracing::info!(device_id = %device_id, "Device socket connected");
-    let mut outgoing = state.hub.register(device_id);
+    let (generation, mut outgoing) = state.hub.register(device_id);
     let (mut sender, mut receiver) = socket.split();
 
-    let forward_task = tokio::spawn(async move {
-        while let Some(frame) = outgoing.recv().await {
-            if sender.send(Message::Text(frame.into())).await.is_err() {
+    // Pings keep proxies from dropping an idle link; the writer ends when a
+    // reconnect replaces this link (its sender is dropped) or a send fails.
+    let mut forward_task = tokio::spawn(async move {
+        let mut ping = tokio::time::interval(PING_INTERVAL);
+        ping.tick().await;
+        loop {
+            let message = tokio::select! {
+                frame = outgoing.recv() => match frame {
+                    Some(frame) => Message::Text(frame.into()),
+                    None => break,
+                },
+                _ = ping.tick() => Message::Ping(Vec::new().into()),
+            };
+            if sender.send(message).await.is_err() {
                 break;
             }
         }
+        let _ = sender.close().await;
     });
 
-    while let Some(Ok(message)) = receiver.next().await {
-        let Message::Text(text) = message else {
-            continue;
-        };
-        if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
-            state.hub.resolve_incoming(device_id, &frame);
+    loop {
+        tokio::select! {
+            message = receiver.next() => {
+                let Some(Ok(message)) = message else { break };
+                let Message::Text(text) = message else { continue };
+                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
+                    state.hub.resolve_incoming(device_id, &frame);
+                }
+            }
+            _ = &mut forward_task => break,
         }
     }
 
     forward_task.abort();
-    state.hub.unregister(device_id);
+    state.hub.unregister(device_id, generation);
     tracing::info!(device_id = %device_id, "Device socket disconnected");
 }

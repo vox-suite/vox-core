@@ -5,7 +5,7 @@
 use crate::{
     db::Db,
     identity::UserId,
-    realtime::{DeviceHub, DeviceLinkError},
+    realtime::{Confirmation, DeviceHub, DeviceLinkError},
 };
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ async fn resolve_device(
 ) -> Result<DeviceRow, TerminalToolError> {
     let rows = sqlx::query_as::<_, DeviceRow>(
         "SELECT id, label, platform FROM devices \
-         WHERE user_id = $1 AND is_active = true \
+         WHERE user_id = $1 AND is_active = true AND execution_consent = true \
          ORDER BY last_seen_at DESC",
     )
     .bind(user_id)
@@ -60,7 +60,7 @@ async fn resolve_device(
 
     if rows.is_empty() {
         return Err(TerminalToolError::DeviceUnavailable(
-            "The user has no registered devices. Ask them to sign in to the Vox desktop app on the device first.".into(),
+            "No device has remote control enabled. Ask the user to open the Vox desktop app on their Mac and turn on remote control (the Desktop Link tile).".into(),
         ));
     }
 
@@ -192,11 +192,34 @@ pub struct RunTerminalCommand {
     db: Option<Db>,
     user_id: UserId,
     hub: DeviceHub,
+    /// Identifies the agent turn this tool instance belongs to; a command is
+    /// only run when it was proposed in an earlier turn (see `confirm_command`).
+    turn: Uuid,
 }
 
 impl RunTerminalCommand {
-    pub fn new(db: Option<Db>, user_id: UserId, hub: DeviceHub) -> Self {
-        Self { db, user_id, hub }
+    pub fn new(db: Option<Db>, user_id: UserId, hub: DeviceHub, turn: Uuid) -> Self {
+        Self {
+            db,
+            user_id,
+            hub,
+            turn,
+        }
+    }
+}
+
+async fn audit_device_command(db: &Db, user_id: Uuid, device_id: Uuid, details: Value) {
+    let result = sqlx::query(
+        "INSERT INTO audit_events (user_id, actor, event_type, affected_ids, details) \
+         VALUES ($1, 'agent', 'device.command', $2, $3)",
+    )
+    .bind(user_id)
+    .bind(json!([{ "type": "device", "id": device_id }]))
+    .bind(details)
+    .execute(db.pool())
+    .await;
+    if let Err(err) = result {
+        tracing::error!(%err, %device_id, "failed to audit device command");
     }
 }
 
@@ -208,7 +231,10 @@ impl Tool for RunTerminalCommand {
 
     fn description(&self) -> String {
         "Run one shell command in the terminal session already opened with open_terminal on one of the user's registered devices, \
-         and return its output. The session keeps state (working directory, environment) between calls. Open a session first if none is open."
+         and return its output. The session keeps state (working directory, environment) between calls. Open a session first if none is open. \
+         Every command needs the user's explicit confirmation: the first call returns status 'needs_confirmation' — read the exact command \
+         back to the user and ask them to confirm. Only after they say yes, call again with the identical command to run it. \
+         If they decline or change it, do not call it again with the old command."
             .to_owned()
     }
 
@@ -244,10 +270,51 @@ impl Tool for RunTerminalCommand {
         let device = resolve_device(db, self.user_id.0, args.device_hint.as_deref()).await?;
         let link = device_link(&self.hub, &device)?;
 
+        match self
+            .hub
+            .confirm_command(self.user_id.0, device.id, command, self.turn)
+        {
+            Confirmation::Proposed => {
+                return Ok(json!({
+                    "status": "needs_confirmation",
+                    "device": device.label,
+                    "command": command,
+                    "instruction": "Read this exact command back to the user and ask them to confirm. Do not run it until they say yes in their next reply.",
+                }));
+            }
+            Confirmation::AwaitingUser => {
+                return Ok(json!({
+                    "status": "awaiting_user",
+                    "instruction": "The user has not confirmed yet. Stop and wait for their answer.",
+                }));
+            }
+            Confirmation::Confirmed => {}
+        }
+
         let response = link
             .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                audit_device_command(
+                    db,
+                    self.user_id.0,
+                    device.id,
+                    json!({ "command": command, "outcome": "unreachable", "error": err.to_string() }),
+                )
+                .await;
+                return Err(err.into());
+            }
+        };
         if let Some(err) = response_error(&response) {
+            audit_device_command(
+                db,
+                self.user_id.0,
+                device.id,
+                json!({ "command": command, "outcome": "rejected", "error": err }),
+            )
+            .await;
             return Err(TerminalToolError::DeviceUnavailable(err));
         }
 
@@ -261,6 +328,13 @@ impl Tool for RunTerminalCommand {
             output.push_str("\n… output truncated");
         }
         let exit_code = response.get("exit_code").and_then(Value::as_i64);
+        audit_device_command(
+            db,
+            self.user_id.0,
+            device.id,
+            json!({ "command": command, "outcome": "executed", "exit_code": exit_code }),
+        )
+        .await;
 
         Ok(json!({
             "device": device.label,

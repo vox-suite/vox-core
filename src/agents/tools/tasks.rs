@@ -19,6 +19,14 @@ pub enum TaskToolError {
     NotConfigured,
 }
 
+/// Accepts RFC 3339 only: a timestamp without an offset is ambiguous (the
+/// user's timezone is unknown here), so it is rejected rather than guessed.
+fn parse_due_at(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CreateTaskArgs {
     pub title: String,
@@ -73,7 +81,7 @@ impl Tool for CreateTask {
                 },
                 "due_at": {
                     "type": "string",
-                    "description": "ISO 8601 timestamp string when the task is due (e.g. '2026-04-01T15:00:00Z')"
+                    "description": "ISO 8601 timestamp with the user's timezone offset when the task is due (e.g. '2026-04-01T15:00:00+05:30'). Omit if no due time."
                 },
                 "execution_type": {
                     "type": "string",
@@ -123,7 +131,7 @@ impl Tool for CreateTask {
             let pid = Uuid::parse_str(pid_str.trim())
                 .map_err(|_| TaskToolError::InvalidInput("Invalid project UUID".into()))?;
             let owned = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND user_id = $2)",
+                "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND user_id = $2 AND kind = 'project')",
             )
             .bind(pid)
             .bind(self.owner.user_id.0)
@@ -139,7 +147,8 @@ impl Tool for CreateTask {
             let pname_clean = pname.trim();
             if !pname_clean.is_empty() {
                 let existing = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM collections WHERE user_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1",
+                    "SELECT id FROM collections WHERE user_id = $1 AND kind = 'project' AND LOWER(name) = LOWER($2) \
+                     ORDER BY created_at LIMIT 1",
                 )
                 .bind(self.owner.user_id.0)
                 .bind(pname_clean)
@@ -150,8 +159,8 @@ impl Tool for CreateTask {
                     bound_collection_id = Some(pid);
                 } else {
                     let new_pid = sqlx::query_scalar::<_, Uuid>(
-                        "INSERT INTO collections (user_id, name, description, kind, metadata) \
-                         VALUES ($1, $2, 'Auto-created project', 'project', '{}'::jsonb) \
+                        "INSERT INTO collections (user_id, name, description, status, kind, metadata) \
+                         VALUES ($1, $2, 'Auto-created project', 'active', 'project', '{}'::jsonb) \
                          RETURNING id",
                     )
                     .bind(self.owner.user_id.0)
@@ -163,22 +172,14 @@ impl Tool for CreateTask {
             }
         }
 
-        let due_at_parsed: Option<chrono::DateTime<chrono::Utc>> =
-            args.due_at.as_deref().and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .or_else(|| {
-                        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-                            .ok()
-                            .map(|naive| {
-                                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                                    naive,
-                                    chrono::Utc,
-                                )
-                            })
-                    })
-            });
+        let due_at_parsed = match args.due_at.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(raw) => Some(parse_due_at(raw).ok_or_else(|| {
+                TaskToolError::InvalidInput(format!(
+                    "due_at '{raw}' is not a valid ISO 8601 timestamp with a timezone offset, e.g. 2026-04-01T15:00:00+05:30"
+                ))
+            })?),
+        };
 
         let task_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO tasks (user_id, collection_id, title, instruction, status, execution_type, due_at) \
