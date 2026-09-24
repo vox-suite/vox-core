@@ -154,7 +154,10 @@ pub async fn get_retention_policy(State(s): State<AppState>) -> Response {
 }
 
 /// POST /v1/privacy/retention/prune
-pub async fn prune_retention(State(s): State<AppState>) -> Response {
+pub async fn prune_retention(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    if !crate::http::auth::authorized(&headers, &s.service_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     let Some(service) = s.privacy.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };

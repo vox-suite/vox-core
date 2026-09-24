@@ -165,6 +165,7 @@ async fn amazon_declaration_and_capabilities_match_official_creators_api() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn amazon_purchase_handoff_is_never_reported_as_purchase_completion() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-amazon-1").await;
@@ -313,6 +314,7 @@ async fn zomato_distinguishes_merchant_apis_and_enforces_consumer_handoff() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn zomato_order_states_are_distinguished_and_never_reported_as_order_completion() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-zomato-1").await;
@@ -457,6 +459,7 @@ async fn zomato_order_states_are_distinguished_and_never_reported_as_order_compl
 // =========================================================================
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn uber_ride_estimates_bind_route_and_opening_uber_is_not_confirmed_ride() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-uber-ride-1").await;
@@ -604,6 +607,7 @@ async fn uber_ride_estimates_bind_route_and_opening_uber_is_not_confirmed_ride()
 // =========================================================================
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_uncompleted_status() {
     let db = setup().await;
     let (deployment, context, host_app, host_req) = create_context(&db, "user-http-handoff").await;

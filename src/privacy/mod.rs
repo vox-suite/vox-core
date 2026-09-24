@@ -14,6 +14,7 @@ use crate::{db::Db, identity::ResolvedUserContext};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -521,17 +522,23 @@ impl PrivacyService {
                 .await?;
 
                 if let Some(int_id) = integration_id {
+                    let display_str = c.account_display_id.as_deref().unwrap_or("default");
+                    let mut hasher = Sha256::new();
+                    hasher.update(display_str.as_bytes());
+                    let account_hash = hasher.finalize().to_vec();
+
                     sqlx::query(
                         r#"
                         INSERT INTO external_connections (
-                            user_context_id, integration_definition_id, account_display_id,
-                            credential_custody, authorization_state, authorized_capabilities, created_at
-                        ) VALUES ($1, $2, $3, $4, 'pending', '[]'::jsonb, $5)
-                        ON CONFLICT DO NOTHING
+                            user_context_id, integration_id, external_account_hash, account_display_id,
+                            credential_custody, authorization_state, authorized_capabilities, created_at, updated_at
+                        ) VALUES ($1, $2, $3, $4, $5, 'pending', '{}'::text[], $6, $6)
+                        ON CONFLICT (user_context_id, integration_id, external_account_hash) DO NOTHING
                         "#,
                     )
                     .bind(context.id.0)
                     .bind(int_id)
+                    .bind(account_hash)
                     .bind(&c.account_display_id)
                     .bind(&c.credential_custody)
                     .bind(now)
@@ -665,7 +672,7 @@ impl PrivacyService {
             r#"
             SELECT i.external_key, c.account_display_id, c.credential_custody
             FROM external_connections c
-            JOIN integration_definitions i ON i.id = c.integration_definition_id
+            JOIN integration_definitions i ON i.id = c.integration_id
             WHERE c.user_context_id = $1
             "#,
         )
@@ -721,11 +728,11 @@ impl PrivacyService {
         let grant_rows = sqlx::query(
             r#"
             SELECT a.external_key AS agent_key, i.external_key AS integration_key,
-                   c.external_key AS capability_key, g.state
+                   g.capability_external_key AS capability_key, g.state
             FROM agent_capability_grants g
             JOIN agent_definitions a ON a.id = g.agent_definition_id
-            JOIN integration_capability_declarations c ON c.id = g.integration_capability_declaration_id
-            JOIN integration_definitions i ON i.id = c.integration_definition_id
+            JOIN external_connections conn ON conn.id = g.connection_id
+            JOIN integration_definitions i ON i.id = conn.integration_id
             WHERE g.user_context_id = $1
             "#,
         )
@@ -836,6 +843,9 @@ impl PrivacyService {
                         || (lower.contains("credential") && k != "credential_custody")
                         || lower.contains("private_key")
                         || lower.contains("session_id")
+                        || lower.contains("cvv")
+                        || lower.contains("card_number")
+                        || lower.contains("pin")
                         || (lower.contains("approval") && !lower.contains("summary"))
                     {
                         return Err(PrivacyError::ProhibitedData(format!(
@@ -854,7 +864,12 @@ impl PrivacyService {
                 let lower = s.to_ascii_lowercase();
                 if lower.starts_with("bearer ")
                     || lower.starts_with("sk_live_")
+                    || lower.starts_with("sk-")
+                    || lower.starts_with("vox_sk_")
+                    || lower.starts_with("key-")
                     || lower.starts_with("eyj")
+                    || lower.contains("-----begin")
+                    || lower.contains("private key-----")
                 {
                     return Err(PrivacyError::ProhibitedData(
                         "credential or token value detected in export payload".into(),

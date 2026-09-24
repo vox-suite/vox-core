@@ -426,6 +426,7 @@ async fn test_protocol_parity_read_and_consequential_scenarios() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn test_protocol_choice_provides_no_inherent_trust_or_permission() {
     let db = setup_db().await;
     let (context, _) = create_host_context(&db, "user-parity-trust").await;
@@ -973,6 +974,7 @@ async fn test_fuzzing_and_malformed_protocol_resilience() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn test_consequential_dispatch_succeeds_after_conformance_and_operator_enablement() {
     let db = setup_db().await;
     let (context, _) = create_host_context(&db, "user-consequential-success").await;

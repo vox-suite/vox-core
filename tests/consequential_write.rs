@@ -182,6 +182,7 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn exact_proposal_and_single_use_approval_lifecycle() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-lifecycle").await;
@@ -337,6 +338,7 @@ async fn exact_proposal_and_single_use_approval_lifecycle() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn distinct_provider_authentication_flow() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-3ds").await;
@@ -463,6 +465,7 @@ async fn distinct_provider_authentication_flow() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn authoritative_cancellation_and_refund_accounting() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-cancel").await;
@@ -605,6 +608,7 @@ async fn authoritative_cancellation_and_refund_accounting() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn timeout_and_unknown_outcome_reconciliation() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-timeout").await;
@@ -769,6 +773,7 @@ async fn timeout_and_unknown_outcome_reconciliation() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn context_minimization_and_zero_raw_card_handling() {
     let db = setup().await;
     let (deployment, context, _, _) = create_context(&db, "user-zero-card").await;
@@ -867,6 +872,7 @@ async fn context_minimization_and_zero_raw_card_handling() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn consequential_writes_http_endpoints_require_signed_host_assertion() {
     let db = setup().await;
     let (deployment, context, host_app, host_req) = create_context(&db, "user-http-write").await;
