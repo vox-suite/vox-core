@@ -21,6 +21,7 @@ pub struct AuthExchangeResponse {
     pub token: String,
     pub user_id: Uuid,
     pub expires_at: chrono::DateTime<Utc>,
+    pub has_phone: bool,
 }
 
 pub async fn exchange_token(
@@ -118,6 +119,17 @@ pub async fn exchange_token(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    let has_phone = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(\
+            SELECT 1 FROM channel_identities \
+            WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL\
+        )",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     let device_id = if let Some(device_id) = payload.device_id {
         let owns_device = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL)",
@@ -166,5 +178,6 @@ pub async fn exchange_token(
         token: raw_token,
         user_id,
         expires_at,
+        has_phone,
     }))
 }

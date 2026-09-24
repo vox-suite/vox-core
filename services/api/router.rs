@@ -85,7 +85,9 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/events/batch", post(ingest_batch))
         .with_state(state.pool.clone());
 
-    let identity_routes = Router::new().route("/v1/me", get(get_me));
+    let identity_routes = Router::new()
+        .route("/v1/me", get(get_me))
+        .with_state(state.pool.clone());
 
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
