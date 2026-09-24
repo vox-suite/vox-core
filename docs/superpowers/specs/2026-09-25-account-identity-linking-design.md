@@ -1,8 +1,8 @@
 # Account/identity linking: box, desktop, web
 
 Date: 2026-09-25
-Repos touched: vox-core, vox-bridge, vox-web. vox-desktop is unaffected (its
-auth path is already correct and is the pattern vox-web moves onto).
+Repos touched: vox-core, vox-bridge, vox-desktop. vox-web is explicitly out
+of scope for this plan (see step 1).
 
 ## Problem
 
@@ -61,24 +61,37 @@ its only current first-party dependent.
 
 ## Design
 
-### 1. Unify vox-web onto the same auth path as vox-desktop
+### 1. vox-web: no changes in this plan
 
-vox-web's sign-in already produces a Supabase session
-(`sign-in-form.tsx` → `supabase.auth.signInWithOAuth`). Instead of routing
-through `better-auth`/`core-host-client.ts`'s federated-proof path, call the
-same endpoint vox-desktop already uses:
+Investigation during planning found `core-host-client.ts` is not just an
+identity-resolution shim — it is the live vox-core API client for 9 working
+vox-web features (reminders, tasks, connections, proposals, extensions,
+grants, privacy, journeys), all authenticated via host-trust
+(`host_user_id = "vox-account:<supabase-uid>"`), independent of
+`better-auth`. Google sign-in genuinely does not route through
+`better-auth`. However, `better-auth`'s `auth-options.ts` and the
+Kysely/nodemailer/database wiring in `runtime.ts` are **not** dead code as
+first assessed — `getConsumerAuthRuntime()` also backs a live
+"email recovery code" feature (`RecoveryEnrollment`, rendered
+unconditionally on the main app page, via `/api/account/recovery/start` and
+`/api/account/recovery/confirm`, using better-auth's own OTP API and email
+sender). Deleting those files would break that feature.
 
-- `session.ts` (`currentConsumer()`) calls `POST /v1/auth/exchange` with the
-  Supabase access token, exactly as `vox-desktop/src-tauri/src/auth.rs` does,
-  and uses the returned `user_id` / session bearer instead of aliasing
-  `supabase user.id` directly as `coreUserContextId`.
-- Delete `consumer-auth/auth-options.ts`, `core-host-client.ts`,
-  `account-authority.ts`, and the `better-auth` dependency and its route
-  (`src/app/api/account/auth/[...all]/route.ts`) — dead once nothing calls
-  them.
+So: **this plan makes no vox-web changes.** vox-web keeps its current
+working host-trust identity for its 9 features and its better-auth-backed
+recovery-code feature, untouched.
 
-Result: desktop and web resolve the same Google account to the same
-`users.id`, via the same existing endpoint. No new identity mechanism.
+**Explicitly deferred, not solved here:** vox-web's `users.id` for a given
+Google account (resolved via host-trust) remains a different row from
+vox-desktop's `users.id` for the same account (resolved via
+`/v1/auth/exchange`'s `auth_identities`). Unifying them means migrating all
+9 vox-web features from host-trust auth to bearer-session auth, which may
+also require vox-core changes to expose those endpoints outside the legacy
+host-trust router — plus now, properly scoping what (if anything) of the
+better-auth recovery-code feature needs to change alongside it. That's a
+separate, properly-scoped follow-up project, not part of this plan.
+Practical effect of deferring it: a user who links their phone via
+vox-desktop is recognized by the box, but not yet by vox-web.
 
 ### 2. Capture the Google display name on account creation
 
@@ -130,7 +143,20 @@ further code: `cached_opening()`
 `(channel, external_id) → name` and greets by name when found — it just
 needs the identity graph underneath it to be correct.
 
-### 5. Delete the stale schema files
+### 5. vox-desktop: phone-entry step
+
+`GET /v1/me` (`services/api/routes/identity.rs`) gains a `has_phone`
+boolean (`EXISTS(SELECT 1 FROM channel_identities WHERE user_id = $1 AND
+channel = 'phone' AND revoked_at IS NULL)`), so a client can tell whether
+the signed-in user still needs to provide a number without a separate
+round trip.
+
+vox-desktop: after sign-in, if `has_phone` is false, show a phone-entry
+screen (same visual pattern as `SignInScreen`) before the main app, with a
+new Tauri command that calls `POST /v1/me/phone` using the stored session
+bearer, matching the existing `exchange_with_core` pattern in `auth.rs`.
+
+### 6. Delete the stale schema files
 
 Delete `vox-core/schema/01_extensions.sql` through `21_user_voiceprints.sql`
 and `vox-core/supabase_schema.sql`. Keep `vox-core/schema/target_core.sql`
@@ -145,8 +171,12 @@ identity system.
 - OTP/SMS phone verification.
 - Any change to the `host_apps`/`platform_deployments`/federated-proof
   layer itself.
-- Merging/UI changes in vox-desktop (already correct).
+- Any vox-web changes at all (see step 1's "no changes in this plan").
 - Any new tables. Reuses `users`, `auth_identities`, `channel_identities`.
+
+vox-desktop's Google sign-in / `/v1/auth/exchange` call is already correct
+and unchanged; this plan adds a phone-entry step, a `has_phone` field on
+`/v1/me`, and a call to the new `/v1/me/phone` endpoint on top of it.
 
 ## Testing
 
