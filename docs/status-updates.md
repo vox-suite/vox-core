@@ -23,9 +23,14 @@ credentials, raw provider bodies, payment details, or model reasoning.
 Hosts create and inspect subscriptions at
 `/v1/status-webhook-subscriptions`; they can rotate the signing secret via
 `/{id}/rotate` and disable the subscription with `DELETE /{id}`. Core returns a
-secret only at creation and rotation. It stores only a hash; deployments must
-provide KMS/vault-backed `WebhookSecretStore` custody before subscriptions are
-enabled. Without it, subscription creation fails closed.
+secret only at creation and rotation. The self-hosted store encrypts it with
+AES-256-GCM before PostgreSQL storage, using `VOX_STATUS_WEBHOOK_KEY` (32 random
+bytes encoded as 64 hexadecimal characters) supplied to both Core API and
+worker from the deployment secret manager. Generate the key with
+`openssl rand -hex 32`; retain it across restarts and backups. Key loss makes
+existing webhook subscriptions unusable; rotation requires a planned
+re-encryption migration. Without a configured key, subscription creation fails
+closed and cursor polling remains available.
 
 Deliveries are durable outbox jobs and are at-least-once. Each request has:
 
@@ -40,9 +45,13 @@ The JSON body is deliberately minimal: a version, delivery/cursor identity,
 aggregate identity, transition metadata, and `authoritative: false`. Hosts
 should reject stale timestamps, verify the signature against the exact bytes,
 deduplicate delivery IDs, and then cursor-poll Core for authoritative state.
-The worker uses bounded exponential retry, does not follow redirects, and marks
-a subscription `unhealthy` after the retry ceiling. Polling stays available for
-recovery; disabling a subscription stops future enqueueing.
+The worker uses bounded exponential retry, does not follow redirects, resolves
+and pins only public destination addresses, and marks a subscription `unhealthy`
+after eight failed attempts. The delivery ID stays stable across retries.
+Polling stays available for recovery; disabling a subscription stops future
+enqueueing and removes its signing secret. A request already in flight may
+finish after disable, so hosts still verify signatures and retrieve current
+state rather than treating a hint as authority.
 
 ## Provider-originated events
 

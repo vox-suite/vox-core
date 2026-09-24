@@ -16,6 +16,7 @@ use vox_core::{
     },
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
+    status::{EncryptedWebhookSecretStore, StatusService},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
 };
@@ -81,6 +82,34 @@ pub async fn run_worker(
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
 
     let worker_id = Uuid::new_v4().to_string();
+    let status_handle = if let Some(key) = config.status_webhook_key.as_deref() {
+        let secrets = EncryptedWebhookSecretStore::from_hex_key(db.clone(), key)?;
+        let delivery = StatusService::new(db.clone())
+            .with_secret_store(Arc::new(secrets))
+            .delivery_worker();
+        let status_cancel = cancellation.clone();
+        let status_worker_id = worker_id.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = status_cancel.cancelled() => break,
+                    result = delivery.deliver_next(&status_worker_id, chrono::Utc::now()) => {
+                        match result {
+                            Ok(true) => continue,
+                            Ok(false) => {},
+                            Err(error) => tracing::warn!("Status webhook delivery unavailable: {}", error),
+                        }
+                    }
+                }
+                tokio::select! {
+                    _ = status_cancel.cancelled() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                }
+            }
+        }))
+    } else {
+        None
+    };
     let worker = Worker::with_all_handlers(
         JobRepository::new(db),
         events,
@@ -94,6 +123,11 @@ pub async fn run_worker(
 
     tokio::spawn(memory.run_greeting_sync(cancellation.clone()));
 
-    worker.run(cancellation).await?;
+    let result = worker.run(cancellation.clone()).await;
+    cancellation.cancel();
+    if let Some(handle) = status_handle {
+        handle.await?;
+    }
+    result?;
     Ok(())
 }

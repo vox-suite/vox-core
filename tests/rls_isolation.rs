@@ -44,6 +44,11 @@ async fn rls_is_enabled_on_all_core_tables() {
         "execution_attempts",
         "inbound_events",
         "audit_events",
+        "status_events",
+        "status_webhook_subscriptions",
+        "status_webhook_secrets",
+        "status_webhook_deliveries",
+        "verified_integration_events",
     ];
 
     for table in expected {
