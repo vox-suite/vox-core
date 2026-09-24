@@ -45,7 +45,11 @@ pub async fn exchange_token(
     let (user_id, identity_id) = if let Some(row) = existing {
         row
     } else {
-        let display_name = identity.email.as_deref().unwrap_or("Vox User");
+        let display_name = identity
+            .name
+            .as_deref()
+            .or(identity.email.as_deref())
+            .unwrap_or("Vox User");
         let new_uid = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO users (status, display_name) VALUES ('active', $1) RETURNING id",
         )

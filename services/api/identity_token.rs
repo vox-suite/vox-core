@@ -19,6 +19,7 @@ pub struct VerifiedIdentity {
     pub issuer: String,
     pub subject: String,
     pub email: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +31,38 @@ struct TokenClaims {
     exp: Option<u64>,
     #[serde(default)]
     email: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    user_metadata: Option<SupabaseUserMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SupabaseUserMetadata {
+    #[serde(default)]
+    full_name: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn claims_name(claims: &TokenClaims) -> Option<String> {
+    let direct = claims
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    direct.or_else(|| {
+        claims.user_metadata.as_ref().and_then(|metadata| {
+            metadata
+                .full_name
+                .as_deref()
+                .or(metadata.name.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+    })
 }
 
 #[derive(Clone)]
@@ -127,10 +160,12 @@ fn identity_from_payload(
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback_issuer)
         .to_string();
+    let name = claims_name(&claims);
     Ok(VerifiedIdentity {
         issuer,
         subject: subject.to_string(),
         email: claims.email.filter(|value| !value.trim().is_empty()),
+        name,
     })
 }
 
@@ -215,9 +250,15 @@ fn verify_asymmetric_components(
         issuer: data
             .claims
             .iss
+            .clone()
             .unwrap_or_else(|| expected_issuer.to_string()),
         subject: subject.to_string(),
-        email: data.claims.email.filter(|value| !value.trim().is_empty()),
+        email: data
+            .claims
+            .email
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        name: claims_name(&data.claims),
     })
 }
 

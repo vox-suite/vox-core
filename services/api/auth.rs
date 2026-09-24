@@ -31,7 +31,11 @@ pub async fn extract_actor(
     if token.split('.').count() == 3 {
         let claims = crate::identity_token::verify_id_token(token).await?;
         let user_id = Uuid::parse_str(&claims.subject).map_err(|_| StatusCode::UNAUTHORIZED)?;
-        let display_name = claims.email.as_deref().unwrap_or("Vox User");
+        let display_name = claims
+            .name
+            .as_deref()
+            .or(claims.email.as_deref())
+            .unwrap_or("Vox User");
         let mut tx = pool
             .begin()
             .await
