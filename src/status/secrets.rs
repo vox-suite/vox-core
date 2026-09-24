@@ -26,11 +26,33 @@ impl EncryptedWebhookSecretStore {
             UnboundKey::new(&aead::AES_256_GCM, &self.key).map_err(|_| StatusError::Unavailable)?;
         Ok(LessSafeKey::new(key))
     }
+
+    fn decrypt(&self, id: Uuid, stored: &[u8]) -> Result<String, StatusError> {
+        let (nonce, body) = stored
+            .split_at_checked(12)
+            .ok_or(StatusError::Unavailable)?;
+        let nonce: [u8; 12] = nonce.try_into().map_err(|_| StatusError::Unavailable)?;
+        let mut plaintext = body.to_vec();
+        let opened = self
+            .cipher()?
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(id.as_bytes().as_slice()),
+                &mut plaintext,
+            )
+            .map_err(|_| StatusError::Unavailable)?;
+        String::from_utf8(opened.to_vec()).map_err(|_| StatusError::Unavailable)
+    }
 }
 
 #[async_trait::async_trait]
 impl WebhookSecretStore for EncryptedWebhookSecretStore {
-    async fn put(&self, id: Uuid, secret: String) -> Result<(), StatusError> {
+    async fn put_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+        secret: String,
+    ) -> Result<(), StatusError> {
         let mut nonce_bytes = [0u8; 12];
         SystemRandom::new()
             .fill(&mut nonce_bytes)
@@ -53,7 +75,7 @@ impl WebhookSecretStore for EncryptedWebhookSecretStore {
         )
         .bind(id)
         .bind(stored)
-        .execute(self.db.pool())
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }
@@ -66,26 +88,31 @@ impl WebhookSecretStore for EncryptedWebhookSecretStore {
         .fetch_optional(self.db.pool())
         .await?;
         let stored = stored.ok_or(StatusError::Unavailable)?;
-        let (nonce, body) = stored
-            .split_at_checked(12)
-            .ok_or(StatusError::Unavailable)?;
-        let nonce: [u8; 12] = nonce.try_into().map_err(|_| StatusError::Unavailable)?;
-        let mut plaintext = body.to_vec();
-        let opened = self
-            .cipher()?
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::from(id.as_bytes().as_slice()),
-                &mut plaintext,
-            )
-            .map_err(|_| StatusError::Unavailable)?;
-        String::from_utf8(opened.to_vec()).map_err(|_| StatusError::Unavailable)
+        self.decrypt(id, &stored)
     }
 
-    async fn delete(&self, id: Uuid) -> Result<(), StatusError> {
+    async fn get_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<String, StatusError> {
+        let stored: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT ciphertext FROM status_webhook_secrets WHERE subscription_id=$1",
+        )
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        self.decrypt(id, &stored.ok_or(StatusError::Unavailable)?)
+    }
+
+    async fn delete_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<(), StatusError> {
         sqlx::query("DELETE FROM status_webhook_secrets WHERE subscription_id=$1")
             .bind(id)
-            .execute(self.db.pool())
+            .execute(&mut **tx)
             .await?;
         Ok(())
     }

@@ -51,15 +51,30 @@ pub struct WebhookSubscription {
     pub id: Uuid,
     pub endpoint: String,
     pub state: String,
+    pub secret_version: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
 
 #[async_trait::async_trait]
 pub trait WebhookSecretStore: Send + Sync {
-    async fn put(&self, subscription_id: Uuid, secret: String) -> Result<(), StatusError>;
+    async fn put_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        subscription_id: Uuid,
+        secret: String,
+    ) -> Result<(), StatusError>;
     async fn get(&self, subscription_id: Uuid) -> Result<String, StatusError>;
-    async fn delete(&self, subscription_id: Uuid) -> Result<(), StatusError>;
+    async fn get_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        subscription_id: Uuid,
+    ) -> Result<String, StatusError>;
+    async fn delete_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        subscription_id: Uuid,
+    ) -> Result<(), StatusError>;
 }
 
 #[derive(Clone)]
@@ -67,13 +82,29 @@ pub struct UnavailableWebhookSecretStore;
 
 #[async_trait::async_trait]
 impl WebhookSecretStore for UnavailableWebhookSecretStore {
-    async fn put(&self, _: Uuid, _: String) -> Result<(), StatusError> {
+    async fn put_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _: Uuid,
+        _: String,
+    ) -> Result<(), StatusError> {
         Err(StatusError::Unavailable)
     }
     async fn get(&self, _: Uuid) -> Result<String, StatusError> {
         Err(StatusError::Unavailable)
     }
-    async fn delete(&self, _: Uuid) -> Result<(), StatusError> {
+    async fn get_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _: Uuid,
+    ) -> Result<String, StatusError> {
+        Err(StatusError::Unavailable)
+    }
+    async fn delete_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _: Uuid,
+    ) -> Result<(), StatusError> {
         Err(StatusError::Unavailable)
     }
 }
@@ -202,6 +233,7 @@ impl StatusService {
         let endpoint = webhook_endpoint(&request.endpoint)?;
         let id = Uuid::new_v4();
         let secret = new_webhook_secret();
+        let mut tx = self.db.pool().begin().await?;
         sqlx::query(
             "INSERT INTO status_webhook_subscriptions (id,user_context_id,endpoint,state)
              VALUES ($1,$2,$3,'disabled')",
@@ -209,32 +241,23 @@ impl StatusService {
         .bind(id)
         .bind(context.id.0)
         .bind(&endpoint)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?;
-        if let Err(error) = self.secrets.put(id, secret.clone()).await {
-            let _ = sqlx::query("DELETE FROM status_webhook_subscriptions WHERE id=$1")
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-            return Err(error);
-        }
-        if let Err(error) = sqlx::query(
+        self.secrets
+            .put_in_transaction(&mut tx, id, secret.clone())
+            .await?;
+        sqlx::query(
             "UPDATE status_webhook_subscriptions SET state='enabled',updated_at=now() WHERE id=$1",
         )
         .bind(id)
-        .execute(self.db.pool())
-        .await
-        {
-            let _ = sqlx::query("DELETE FROM status_webhook_subscriptions WHERE id=$1")
-                .bind(id)
-                .execute(self.db.pool())
-                .await;
-            return Err(error.into());
-        }
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(WebhookSubscription {
             id,
             endpoint,
             state: "enabled".into(),
+            secret_version: 1,
             secret: Some(secret),
         })
     }
@@ -244,43 +267,37 @@ impl StatusService {
         context: &ResolvedUserContext,
         id: Uuid,
     ) -> Result<WebhookSubscription, StatusError> {
-        let owned = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM status_webhook_subscriptions WHERE id=$1 AND user_context_id=$2 AND state='enabled'",
+        let mut tx = self.db.pool().begin().await?;
+        let endpoint = sqlx::query_scalar::<_, String>(
+            "SELECT endpoint FROM status_webhook_subscriptions
+             WHERE id=$1 AND user_context_id=$2 AND state='enabled' FOR UPDATE",
         )
         .bind(id)
         .bind(context.id.0)
-        .fetch_optional(self.db.pool())
+        .fetch_optional(&mut *tx)
         .await?;
-        if owned.is_none() {
-            return Err(StatusError::NotFound);
-        }
-        let old_secret = self.secrets.get(id).await?;
+        let endpoint = endpoint.ok_or(StatusError::NotFound)?;
+        // A missing or wrong custody key must not overwrite the only secret.
+        self.secrets.get_in_transaction(&mut tx, id).await?;
         let secret = new_webhook_secret();
-        self.secrets.put(id, secret.clone()).await?;
-        let updated = sqlx::query(
+        self.secrets
+            .put_in_transaction(&mut tx, id, secret.clone())
+            .await?;
+        let version: i32 = sqlx::query_scalar(
             "UPDATE status_webhook_subscriptions SET secret_version=secret_version+1, updated_at=now()
-             WHERE id=$1 AND user_context_id=$2 AND state='enabled' RETURNING endpoint",
+             WHERE id=$1 RETURNING secret_version",
         )
         .bind(id)
-        .bind(context.id.0)
-        .fetch_optional(self.db.pool())
-        .await;
-        match updated {
-            Ok(Some(row)) => Ok(WebhookSubscription {
-                id,
-                endpoint: row.get("endpoint"),
-                state: "enabled".into(),
-                secret: Some(secret),
-            }),
-            other => {
-                self.secrets.put(id, old_secret).await?;
-                match other {
-                    Ok(None) => Err(StatusError::NotFound),
-                    Err(error) => Err(error.into()),
-                    _ => unreachable!(),
-                }
-            }
-        }
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(WebhookSubscription {
+            id,
+            endpoint,
+            state: "enabled".into(),
+            secret_version: version,
+            secret: Some(secret),
+        })
     }
 
     pub async fn disable_subscription(
@@ -288,19 +305,21 @@ impl StatusService {
         context: &ResolvedUserContext,
         id: Uuid,
     ) -> Result<(), StatusError> {
+        let mut tx = self.db.pool().begin().await?;
         let changed = sqlx::query(
             "UPDATE status_webhook_subscriptions SET state='disabled', updated_at=now()
              WHERE id=$1 AND user_context_id=$2 AND state IN ('enabled','unhealthy')",
         )
         .bind(id)
         .bind(context.id.0)
-        .execute(self.db.pool())
+        .execute(&mut *tx)
         .await?
         .rows_affected();
         if changed == 0 {
             return Err(StatusError::NotFound);
         }
-        self.secrets.delete(id).await?;
+        self.secrets.delete_in_transaction(&mut tx, id).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -309,7 +328,7 @@ impl StatusService {
         context: &ResolvedUserContext,
     ) -> Result<Vec<WebhookSubscription>, StatusError> {
         let rows = sqlx::query(
-            "SELECT id, endpoint, state FROM status_webhook_subscriptions
+            "SELECT id, endpoint, state, secret_version FROM status_webhook_subscriptions
              WHERE user_context_id=$1 ORDER BY created_at, id",
         )
         .bind(context.id.0)
@@ -321,6 +340,7 @@ impl StatusService {
                 id: row.get("id"),
                 endpoint: row.get("endpoint"),
                 state: row.get("state"),
+                secret_version: row.get("secret_version"),
                 secret: None,
             })
             .collect())

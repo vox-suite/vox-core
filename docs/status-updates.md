@@ -32,6 +32,16 @@ existing webhook subscriptions unusable; rotation requires a planned
 re-encryption migration. Without a configured key, subscription creation fails
 closed and cursor polling remains available.
 
+Subscription responses include `secret_version`. Creation, rotation, and
+disable commit the subscription state and encrypted secret together. Concurrent
+rotations serialize on the subscription row; the highest committed version is
+the current secret. A delivery already in flight may use the previous secret.
+If the host has stopped accepting it, the rejected delivery is retried with
+the current secret and the same delivery ID. The host should retain its prior
+verification key briefly during planned rotation, but always cursor-poll for
+authoritative state. Disable removes the stored secret and stops new delivery
+claims; an already sent request cannot be recalled.
+
 Deliveries are durable outbox jobs and are at-least-once. Each request has:
 
 - `X-Vox-Signature-Version: v1`
