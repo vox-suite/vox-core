@@ -79,17 +79,30 @@ impl ExecutionPolicyService {
         context: &ResolvedUserContext,
         request: SpendingPolicyRequest,
     ) -> Result<(), ExecutionPolicyError> {
-        let _ = key(&request.capability_external_key)?;
-        let _ = request
+        let capability = key(&request.capability_external_key)?;
+        let provider = request
             .provider_external_key
             .as_deref()
             .map(key)
-            .transpose()?;
-        let _ = currency(&request.currency)?;
+            .transpose()?
+            .unwrap_or_else(|| "*".into());
+        let currency = currency(&request.currency)?;
         if request.max_amount_minor < 0 {
             return Err(ExecutionPolicyError::Invalid);
         }
-        let _ = context;
+        sqlx::query(
+            "INSERT INTO spending_policies (user_context_id,capability_external_key,provider_external_key,currency,max_amount_minor)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (user_context_id,capability_external_key,provider_external_key,currency)
+             DO UPDATE SET max_amount_minor=EXCLUDED.max_amount_minor,version=spending_policies.version+1",
+        )
+        .bind(context.id.0)
+        .bind(capability)
+        .bind(provider)
+        .bind(currency)
+        .bind(request.max_amount_minor)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 
@@ -103,15 +116,32 @@ impl ExecutionPolicyService {
             return Err(ExecutionPolicyError::Invalid);
         }
         let owns_connection = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND user_id = $2)",
+            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND user_context_id = $2
+             AND provider_key=$3 AND external_account_hash=$4)",
         )
         .bind(identity.connection_id)
-        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .bind(&identity.provider_external_key)
+        .bind(hex::encode(&identity.account_hash))
         .fetch_one(self.db.pool())
         .await?;
         if !owns_connection {
             return Err(ExecutionPolicyError::Invalid);
         }
+        sqlx::query(
+            "INSERT INTO operational_quotas (user_context_id,provider_external_key,model_identifier,account_hash,connection_id,max_attempts)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (user_context_id,provider_external_key,model_identifier,account_hash,connection_id)
+             DO UPDATE SET max_attempts=EXCLUDED.max_attempts,version=operational_quotas.version+1",
+        )
+        .bind(context.id.0)
+        .bind(identity.provider_external_key)
+        .bind(identity.model_identifier)
+        .bind(identity.account_hash)
+        .bind(identity.connection_id)
+        .bind(request.max_attempts)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 
@@ -121,8 +151,22 @@ impl ExecutionPolicyService {
         request: ExecutionRequest,
         now: DateTime<Utc>,
     ) -> Result<PolicyDecision, ExecutionPolicyError> {
-        let identity = execution_identity(&request.execution)?;
         let mut tx = self.db.pool().begin().await?;
+        let decision = self
+            .evaluate_in_transaction(context, request, now, &mut tx)
+            .await?;
+        tx.commit().await?;
+        Ok(decision)
+    }
+
+    pub(crate) async fn evaluate_in_transaction(
+        &self,
+        context: &ResolvedUserContext,
+        request: ExecutionRequest,
+        now: DateTime<Utc>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<PolicyDecision, ExecutionPolicyError> {
+        let identity = execution_identity(&request.execution)?;
         let proposal = sqlx::query(
             "SELECT a.proposal_id, a.consumed_execution_id, a.approved_details_hash, p.details, p.details_hash, \
                     p.expires_at, p.state, p.capability \
@@ -131,7 +175,7 @@ impl ExecutionPolicyService {
         )
         .bind(request.approval_id)
         .bind(context.user_id.0)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or(ExecutionPolicyError::ApprovalRequired)?;
         if proposal
@@ -148,12 +192,77 @@ impl ExecutionPolicyService {
         }
         let approved = proposal_execution(&proposal.get::<Value, _>("details"))?;
         if approved != identity {
-            tx.commit().await?;
             return Err(ExecutionPolicyError::FreshProposalRequired);
         }
-        tx.commit().await?;
+        let spending = sqlx::query(
+            "SELECT id, version, max_amount_minor FROM spending_policies
+             WHERE user_context_id=$1 AND capability_external_key=$2
+               AND provider_external_key IN ($3,'*') AND currency=$4 ORDER BY id FOR UPDATE",
+        )
+        .bind(context.id.0)
+        .bind(proposal.get::<String, _>("capability"))
+        .bind(&identity.provider_external_key)
+        .bind(&identity.price_currency)
+        .fetch_all(&mut **tx)
+        .await?;
+        if spending
+            .iter()
+            .any(|row| identity.price_amount_minor > row.get::<i64, _>("max_amount_minor"))
+        {
+            return Err(ExecutionPolicyError::SpendingPolicyExceeded);
+        }
+        let quota = sqlx::query(
+            "SELECT id, version, max_attempts, reserved_attempts FROM operational_quotas
+             WHERE user_context_id=$1 AND provider_external_key=$2 AND model_identifier=$3
+               AND account_hash=$4 AND connection_id=$5 FOR UPDATE",
+        )
+        .bind(context.id.0)
+        .bind(&identity.provider_external_key)
+        .bind(&identity.model_identifier)
+        .bind(&identity.account_hash)
+        .bind(identity.connection_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let mut quota_snapshot = Vec::new();
+        if let Some(row) = quota {
+            let quota_id: Uuid = row.get("id");
+            let prior_reservation = sqlx::query_scalar::<_, Uuid>(
+                "SELECT quota_id FROM operational_quota_reservations WHERE attempt_id=$1 AND approval_id=$2",
+            )
+            .bind(request.attempt_id)
+            .bind(request.approval_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+            if prior_reservation != Some(quota_id) {
+                if prior_reservation.is_some()
+                    || row.get::<i32, _>("reserved_attempts") >= row.get::<i32, _>("max_attempts")
+                {
+                    return Err(ExecutionPolicyError::QuotaExhausted);
+                }
+                sqlx::query("UPDATE operational_quotas SET reserved_attempts=reserved_attempts+1 WHERE id=$1")
+                    .bind(quota_id)
+                    .execute(&mut **tx)
+                    .await?;
+                sqlx::query("INSERT INTO operational_quota_reservations (attempt_id,quota_id,approval_id) VALUES ($1,$2,$3)")
+                    .bind(request.attempt_id)
+                    .bind(quota_id)
+                    .bind(request.approval_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            quota_snapshot.push(serde_json::json!({"id":quota_id,"version":row.get::<i32,_>("version"),"max_attempts":row.get::<i32,_>("max_attempts")}));
+        }
+        let spending_snapshot: Vec<Value> = spending
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id":row.get::<Uuid,_>("id"),"version":row.get::<i32,_>("version"),
+                    "max_amount_minor":row.get::<i64,_>("max_amount_minor")
+                })
+            })
+            .collect();
         Ok(PolicyDecision {
-            policy_snapshot: serde_json::json!({}),
+            policy_snapshot: serde_json::json!({"spending":spending_snapshot,"quota":quota_snapshot}),
         })
     }
 }
@@ -209,16 +318,19 @@ fn execution_identity(
 
 struct QuotaIdentity {
     connection_id: Uuid,
+    provider_external_key: String,
+    model_identifier: String,
+    account_hash: Vec<u8>,
 }
 
 fn quota_identity(
     request: &OperationalQuotaRequest,
 ) -> Result<QuotaIdentity, ExecutionPolicyError> {
-    let _ = key(&request.provider_external_key)?;
-    let _ = key(&request.model_identifier)?;
-    let _ = account_hash(&request.account_reference)?;
     Ok(QuotaIdentity {
         connection_id: request.connection_id,
+        provider_external_key: key(&request.provider_external_key)?,
+        model_identifier: key(&request.model_identifier)?,
+        account_hash: account_hash(&request.account_reference)?,
     })
 }
 

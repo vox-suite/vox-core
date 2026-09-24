@@ -128,50 +128,183 @@ impl StatusService {
 
     pub async fn append(
         &self,
-        _context: &ResolvedUserContext,
-        _input: AppendStatusEvent,
+        context: &ResolvedUserContext,
+        input: AppendStatusEvent,
     ) -> Result<StatusEvent, StatusError> {
-        Err(StatusError::Unavailable)
+        let aggregate_type = trimmed(&input.aggregate_type, 64).ok_or(StatusError::Invalid)?;
+        let event_type = trimmed(&input.event_type, 128).ok_or(StatusError::Invalid)?;
+        let state = trimmed(&input.state, 128).ok_or(StatusError::Invalid)?;
+        let key = trimmed(&input.deduplication_key, 255).ok_or(StatusError::Invalid)?;
+        let mut tx = self.db.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(73125, hashtext($1::text))")
+            .bind(context.id.0)
+            .execute(&mut *tx)
+            .await?;
+        let existing = sqlx::query(
+            "SELECT cursor, aggregate_type, aggregate_id, event_type, state, occurred_at, committed_at, payload
+             FROM status_events WHERE user_context_id=$1 AND deduplication_key=$2",
+        )
+        .bind(context.id.0)
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = existing {
+            tx.commit().await?;
+            return Ok(event_from_row(&row));
+        }
+        let row = sqlx::query(
+            "INSERT INTO status_events (user_context_id, aggregate_type, aggregate_id, event_type, state, deduplication_key, occurred_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             RETURNING cursor, aggregate_type, aggregate_id, event_type, state, occurred_at, committed_at, payload",
+        )
+        .bind(context.id.0)
+        .bind(aggregate_type)
+        .bind(input.aggregate_id)
+        .bind(event_type)
+        .bind(state)
+        .bind(key)
+        .bind(input.occurred_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(event_from_row(&row))
     }
 
     pub async fn list(
         &self,
-        _context: &ResolvedUserContext,
-        _after: i64,
-        _limit: i64,
+        context: &ResolvedUserContext,
+        after: i64,
+        limit: i64,
     ) -> Result<Vec<StatusEvent>, StatusError> {
-        Ok(vec![])
+        if after < 0 || !(1..=200).contains(&limit) {
+            return Err(StatusError::Invalid);
+        }
+        let rows = sqlx::query(
+            "SELECT cursor, aggregate_type, aggregate_id, event_type, state, occurred_at, committed_at, payload
+             FROM status_events WHERE user_context_id=$1 AND cursor>$2 ORDER BY cursor LIMIT $3",
+        )
+        .bind(context.id.0)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows.iter().map(event_from_row).collect())
     }
 
     pub async fn create_subscription(
         &self,
-        _context: &ResolvedUserContext,
-        _request: CreateSubscriptionRequest,
+        context: &ResolvedUserContext,
+        request: CreateSubscriptionRequest,
     ) -> Result<WebhookSubscription, StatusError> {
-        Err(StatusError::Unavailable)
+        let endpoint = webhook_endpoint(&request.endpoint)?;
+        let id = Uuid::new_v4();
+        let secret = new_webhook_secret();
+        self.secrets.put(id, secret.clone()).await?;
+        if let Err(error) = sqlx::query(
+            "INSERT INTO status_webhook_subscriptions (id,user_context_id,endpoint) VALUES ($1,$2,$3)",
+        )
+        .bind(id)
+        .bind(context.id.0)
+        .bind(&endpoint)
+        .execute(self.db.pool())
+        .await
+        {
+            let _ = self.secrets.delete(id).await;
+            return Err(error.into());
+        }
+        Ok(WebhookSubscription {
+            id,
+            endpoint,
+            state: "enabled".into(),
+            secret: Some(secret),
+        })
     }
 
     pub async fn rotate_subscription(
         &self,
-        _context: &ResolvedUserContext,
-        _id: Uuid,
+        context: &ResolvedUserContext,
+        id: Uuid,
     ) -> Result<WebhookSubscription, StatusError> {
-        Err(StatusError::Unavailable)
+        let owned = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM status_webhook_subscriptions WHERE id=$1 AND user_context_id=$2 AND state='enabled'",
+        )
+        .bind(id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?;
+        if owned.is_none() {
+            return Err(StatusError::NotFound);
+        }
+        let old_secret = self.secrets.get(id).await?;
+        let secret = new_webhook_secret();
+        self.secrets.put(id, secret.clone()).await?;
+        let updated = sqlx::query(
+            "UPDATE status_webhook_subscriptions SET secret_version=secret_version+1, updated_at=now()
+             WHERE id=$1 AND user_context_id=$2 AND state='enabled' RETURNING endpoint",
+        )
+        .bind(id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await;
+        match updated {
+            Ok(Some(row)) => Ok(WebhookSubscription {
+                id,
+                endpoint: row.get("endpoint"),
+                state: "enabled".into(),
+                secret: Some(secret),
+            }),
+            other => {
+                self.secrets.put(id, old_secret).await?;
+                match other {
+                    Ok(None) => Err(StatusError::NotFound),
+                    Err(error) => Err(error.into()),
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 
     pub async fn disable_subscription(
         &self,
-        _context: &ResolvedUserContext,
-        _id: Uuid,
+        context: &ResolvedUserContext,
+        id: Uuid,
     ) -> Result<(), StatusError> {
-        Err(StatusError::Unavailable)
+        let changed = sqlx::query(
+            "UPDATE status_webhook_subscriptions SET state='disabled', updated_at=now()
+             WHERE id=$1 AND user_context_id=$2 AND state='enabled'",
+        )
+        .bind(id)
+        .bind(context.id.0)
+        .execute(self.db.pool())
+        .await?
+        .rows_affected();
+        if changed == 0 {
+            return Err(StatusError::NotFound);
+        }
+        self.secrets.delete(id).await?;
+        Ok(())
     }
 
     pub async fn list_subscriptions(
         &self,
-        _context: &ResolvedUserContext,
+        context: &ResolvedUserContext,
     ) -> Result<Vec<WebhookSubscription>, StatusError> {
-        Ok(vec![])
+        let rows = sqlx::query(
+            "SELECT id, endpoint, state FROM status_webhook_subscriptions
+             WHERE user_context_id=$1 ORDER BY created_at, id",
+        )
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| WebhookSubscription {
+                id: row.get("id"),
+                endpoint: row.get("endpoint"),
+                state: row.get("state"),
+                secret: None,
+            })
+            .collect())
     }
 
     pub async fn apply_verified_external_event(
@@ -228,6 +361,24 @@ impl StatusService {
             .await
             .map_err(StatusError::from)
     }
+}
+
+fn event_from_row(row: &sqlx::postgres::PgRow) -> StatusEvent {
+    StatusEvent {
+        cursor: row.get("cursor"),
+        aggregate_type: row.get("aggregate_type"),
+        aggregate_id: row.get("aggregate_id"),
+        event_type: row.get("event_type"),
+        state: row.get("state"),
+        occurred_at: row.get("occurred_at"),
+        committed_at: row.get("committed_at"),
+        payload: row.get("payload"),
+        authoritative: false,
+    }
+}
+
+fn new_webhook_secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 #[allow(dead_code)]

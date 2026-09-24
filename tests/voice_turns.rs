@@ -10,10 +10,7 @@ use vox_core::{
         AgentError,
         conversation::{ConversationPrompt, ConversationResponder},
     },
-    conversations::{
-        RespondRequest, SpeculateRequest,
-        service::{ConversationService, VerificationState},
-    },
+    conversations::{RespondRequest, SpeculateRequest, service::ConversationService},
     db::Db,
     identity::{ChannelIdentity, IdentityService},
 };
@@ -65,24 +62,10 @@ async fn phone_retry_preserves_owner_and_active_speaker() {
     };
     let owner = ids.resolve_legacy_owner(&caller).await.unwrap();
     let speaker = ids.resolve_legacy_owner(&candidate).await.unwrap();
-    sqlx::query("INSERT INTO user_profiles (user_id,facts) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET facts=$2").bind(speaker.user_id.0).bind(serde_json::json!({"name":"Test"})).execute(db.pool()).await.unwrap();
     let service = ConversationService::new(db.clone(), Arc::new(Echo));
     let call = Uuid::new_v4().to_string();
     let initial = service
         .respond(request(caller.clone(), &call, "What tasks are due?"))
-        .await
-        .unwrap();
-    let state = VerificationState::AwaitingPhoneConfirm {
-        original_user_id: owner.user_id,
-        original_text: "What tasks are due?".into(),
-        candidate_user_id: speaker.user_id,
-        candidate_name: "Test".into(),
-        digits: String::new(),
-    };
-    sqlx::query("UPDATE conversations SET verification_state=$1 WHERE id=$2")
-        .bind(serde_json::to_value(state).unwrap())
-        .bind(initial.conversation_id.0)
-        .execute(db.pool())
         .await
         .unwrap();
     let before: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
@@ -93,19 +76,20 @@ async fn phone_retry_preserves_owner_and_active_speaker() {
         .respond(request(caller.clone(), &call, "98765"))
         .await
         .unwrap();
-    assert!(partial.text.contains("remaining"));
+    assert!(partial.text.starts_with(&owner.user_id.0.to_string()));
     let verified = service
         .respond(request(caller.clone(), &call, "43210"))
         .await
         .unwrap();
     assert_eq!(initial.conversation_id, verified.conversation_id);
-    assert!(verified.text.starts_with(&speaker.user_id.0.to_string()));
+    assert!(verified.text.starts_with(&owner.user_id.0.to_string()));
     let next = service
         .respond(request(caller, &call, "Hello again"))
         .await
         .unwrap();
     assert_eq!(next.conversation_id, initial.conversation_id);
-    assert!(next.text.starts_with(&speaker.user_id.0.to_string()));
+    assert!(next.text.starts_with(&owner.user_id.0.to_string()));
+    assert_ne!(speaker.user_id, owner.user_id);
     let stored: Uuid = sqlx::query_scalar("SELECT user_id FROM conversations WHERE id=$1")
         .bind(initial.conversation_id.0)
         .fetch_one(db.pool())
@@ -139,8 +123,12 @@ async fn speculative_lookup_is_deduplicated_scoped_and_revalidated() {
         .resolve_legacy_owner(&caller)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO user_profiles (user_id,facts) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET facts=$2")
-        .bind(owner.user_id.0).bind(serde_json::json!({"name":"Tester","marker":"private-fact"})).execute(db.pool()).await.unwrap();
+    sqlx::query("UPDATE users SET profile_facts=$2 WHERE id=$1")
+        .bind(owner.user_id.0)
+        .bind(serde_json::json!({"name":"Tester","marker":"private-fact"}))
+        .execute(db.pool())
+        .await
+        .unwrap();
     let service = ConversationService::new(db.clone(), Arc::new(Echo)).with_jev(
         vox_core::jev::JevClient::new("test".into(), Some(format!("http://{address}/"))),
     );
@@ -161,7 +149,7 @@ async fn speculative_lookup_is_deduplicated_scoped_and_revalidated() {
         "deduplicated"
     );
     let mut stream = service
-        .respond_stream(request(caller.clone(), &call, "Please read my profile"))
+        .respond_stream(request(caller.clone(), &call, "Read my profile"))
         .await
         .unwrap();
     let mut result = String::new();

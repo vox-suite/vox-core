@@ -8,7 +8,7 @@ use crate::{
     identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
     memory::MemoryService,
-    outbound::OutboundCallService,
+    outbound::{OutboundCallService, OutboundError},
 };
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -33,6 +33,8 @@ pub enum ScheduleHandlerError {
     Agent(#[from] crate::agents::AgentError),
     #[error("schedule not found")]
     NotFound,
+    #[error("scheduled external dispatch outcome is unknown")]
+    Outbound(#[from] OutboundError),
 }
 
 impl ScheduleHandler {
@@ -124,7 +126,23 @@ impl ScheduleHandler {
             .await
             .unwrap_or_default();
 
-        if !planned.is_empty() {
+        if self.outbound.is_some() {
+            let claimed = sqlx::query(
+                "INSERT INTO schedule_occurrence_dispatches (schedule_id,occurrence_at,state)
+                 VALUES ($1,$2,'claimed') ON CONFLICT DO NOTHING",
+            )
+            .bind(schedule_id.0)
+            .bind(occurrence_at)
+            .execute(self.db.pool())
+            .await?
+            .rows_affected();
+            if claimed == 0 {
+                return Ok(());
+            }
+        }
+
+        let dispatched = if !planned.is_empty() {
+            let mut sent = false;
             for action in planned {
                 match action {
                     crate::agents::event_planner::PlannedAction::OutboundCall {
@@ -132,7 +150,7 @@ impl ScheduleHandler {
                         opening_instruction,
                     } => {
                         if let Some(outbound) = &self.outbound {
-                            let _ = outbound
+                            outbound
                                 .initiate_call_for_user(
                                     owner,
                                     &reason,
@@ -140,20 +158,35 @@ impl ScheduleHandler {
                                     Some(schedule_id.0),
                                     None,
                                 )
-                                .await;
+                                .await?;
+                            sent = true;
                         }
                     }
                 }
             }
+            sent
         } else if let Some(outbound) = &self.outbound {
             let reason = format!("Scheduled reminder: {}", instruction);
             let opening = format!(
                 "Remind the user of their scheduled reminder: {}",
                 instruction
             );
-            let _ = outbound
+            outbound
                 .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
-                .await;
+                .await?;
+            true
+        } else {
+            false
+        };
+        if dispatched {
+            sqlx::query(
+                "UPDATE schedule_occurrence_dispatches SET state='dispatched',updated_at=now()
+                 WHERE schedule_id=$1 AND occurrence_at=$2",
+            )
+            .bind(schedule_id.0)
+            .bind(occurrence_at)
+            .execute(self.db.pool())
+            .await?;
         }
 
         let _ = sqlx::query(

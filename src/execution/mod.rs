@@ -162,25 +162,13 @@ impl ExecutionCoordinator {
         let id = Uuid::new_v4();
         let proposal_id: Uuid = row.get("proposal_id");
         tx.commit().await?;
-        let decision = ExecutionPolicyService::new(self.db.clone())
-            .evaluate(
-                context,
-                ExecutionRequest {
-                    approval_id: request.approval_id,
-                    attempt_id: id,
-                    execution: identity.clone(),
-                },
-                now,
-            )
-            .await
-            .map_err(|_| ExecutionError::Unavailable)?;
         let provider_snapshot = serde_json::json!({
             "capability": capability,
             "identity": identity,
         });
         let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
-            "SELECT a.proposal_id, a.consumed_execution_id, p.state \
+            "SELECT a.proposal_id, a.consumed_execution_id, p.state, p.actor_key \
              FROM action_approvals a JOIN action_proposals p ON p.id = a.proposal_id \
              WHERE a.id = $1 AND a.user_id = $2 FOR UPDATE OF a, p",
         )
@@ -196,6 +184,56 @@ impl ExecutionCoordinator {
         {
             return Err(ExecutionError::FreshApproval);
         }
+        let connection_current = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM connections WHERE id=$1 AND user_context_id=$2
+             AND authorization_state='authorized' AND (expires_at IS NULL OR expires_at>$3)
+             AND $4=ANY(allowed_capabilities) FOR SHARE",
+        )
+        .bind(connection_id)
+        .bind(context.id.0)
+        .bind(now)
+        .bind(&capability)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if connection_current.is_none() {
+            return Err(ExecutionError::Unavailable);
+        }
+        let grant_current = sqlx::query_scalar::<_, Uuid>(
+            "SELECT g.id FROM agent_capability_grants g
+             JOIN agent_definitions a ON a.id=g.agent_definition_id
+             JOIN external_connections x ON x.id=g.connection_id
+             JOIN integration_definitions i ON i.id=x.integration_id
+             WHERE g.user_context_id=$1 AND g.connection_id=$2
+               AND g.capability_external_key=$3 AND g.state='enabled'
+               AND a.external_key=$4 AND a.deployment_id=$5 AND a.state='enabled'
+               AND x.user_context_id=$1 AND x.authorization_state='authorized'
+               AND (x.expires_at IS NULL OR x.expires_at>$6) AND i.state='enabled'
+             FOR SHARE OF g,a,x,i",
+        )
+        .bind(context.id.0)
+        .bind(connection_id)
+        .bind(&capability)
+        .bind(row.get::<String, _>("actor_key"))
+        .bind(context.subject.deployment_id.0)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if grant_current.is_none() {
+            return Err(ExecutionError::Unavailable);
+        }
+        let decision = ExecutionPolicyService::new(self.db.clone())
+            .evaluate_in_transaction(
+                context,
+                ExecutionRequest {
+                    approval_id: request.approval_id,
+                    attempt_id: id,
+                    execution: identity.clone(),
+                },
+                now,
+                &mut tx,
+            )
+            .await
+            .map_err(|_| ExecutionError::Unavailable)?;
         let request_hash = hex::encode(Sha256::digest(key.as_bytes()));
         sqlx::query(
             "INSERT INTO executions (id, user_id, approval_id, proposal_id, connection_id, idempotency_key, provider_snapshot, policy_snapshot, state) \

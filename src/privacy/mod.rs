@@ -242,44 +242,37 @@ impl PrivacyService {
         let mut tx = self.db.pool().begin().await?;
 
         // 1. Delete associated jobs for tasks belonging to user
-        let deleted_jobs =
-            sqlx::query("DELETE FROM jobs WHERE user_id = $1 OR user_context_id = $2")
-                .bind(context.user_id.0)
-                .bind(context.id.0)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected() as usize;
+        let deleted_jobs = sqlx::query("DELETE FROM jobs WHERE user_context_id = $1")
+            .bind(context.id.0)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
 
         // 2. Delete tasks belonging to user
-        let deleted_tasks =
-            sqlx::query("DELETE FROM tasks WHERE user_id = $1 OR user_context_id = $2")
-                .bind(context.user_id.0)
-                .bind(context.id.0)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected() as usize;
+        let deleted_tasks = sqlx::query("DELETE FROM tasks WHERE user_context_id = $1")
+            .bind(context.id.0)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
 
         let mut deleted_convs = 0;
         if delete_conversations {
             // Delete messages in user's conversations
             sqlx::query(
                 "DELETE FROM messages WHERE conversation_id IN (
-                    SELECT id FROM conversations WHERE user_id = $1 OR user_context_id = $2
+                    SELECT id FROM conversations WHERE user_context_id = $1
                 )",
             )
-            .bind(context.user_id.0)
             .bind(context.id.0)
             .execute(&mut *tx)
             .await?;
 
             // Delete conversations
-            deleted_convs =
-                sqlx::query("DELETE FROM conversations WHERE user_id = $1 OR user_context_id = $2")
-                    .bind(context.user_id.0)
-                    .bind(context.id.0)
-                    .execute(&mut *tx)
-                    .await?
-                    .rows_affected() as usize;
+            deleted_convs = sqlx::query("DELETE FROM conversations WHERE user_context_id = $1")
+                .bind(context.id.0)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
         }
 
         // Note: audit_events are preserved for the mandatory legal hold window (audit_retention_days).
@@ -411,20 +404,6 @@ impl PrivacyService {
         let bundle_json = serde_json::to_string(&bundle)
             .map_err(|e| PrivacyError::Invalid(format!("export encoding error: {e}")))?;
 
-        // Ensure table exists for caching generated exports
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS portable_exports (
-                id UUID PRIMARY KEY,
-                user_context_id UUID NOT NULL,
-                categories TEXT[] NOT NULL,
-                bundle_data JSONB NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                expires_at TIMESTAMPTZ NOT NULL
-            )",
-        )
-        .execute(self.db.pool())
-        .await?;
-
         let expires_at = now + Duration::hours(24);
         sqlx::query(
             "INSERT INTO portable_exports (id, user_context_id, categories, bundle_data, created_at, expires_at)
@@ -515,8 +494,9 @@ impl PrivacyService {
             for c in &cfg.connections {
                 // Find integration definition id by key
                 let integration_id = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM integration_definitions WHERE external_key = $1 LIMIT 1",
+                    "SELECT id FROM integration_definitions WHERE deployment_id=$1 AND external_key = $2 LIMIT 1",
                 )
+                .bind(context.subject.deployment_id.0)
                 .bind(&c.integration_key)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -570,7 +550,7 @@ impl PrivacyService {
             r#"
             SELECT
                 e.id AS execution_id,
-                e.action_proposal_id,
+                e.proposal_id,
                 e.state,
                 e.provider_reference,
                 e.confirmation_evidence,
@@ -579,12 +559,11 @@ impl PrivacyService {
                 p.capability,
                 p.details AS proposal_details
             FROM executions e
-            LEFT JOIN action_proposals p ON p.id = e.action_proposal_id
-            WHERE e.id = $1 AND (e.user_id = $2 OR e.user_context_id = $3)
+            LEFT JOIN action_proposals p ON p.id = e.proposal_id
+            WHERE e.id = $1 AND e.user_context_id = $2
             "#,
         )
         .bind(execution_id)
-        .bind(context.user_id.0)
         .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?
@@ -616,7 +595,7 @@ impl PrivacyService {
 
         Ok(HistoricalActionEvidence {
             execution_id,
-            proposal_id: row.get("action_proposal_id"),
+            proposal_id: row.get("proposal_id"),
             capability_external_key: capability,
             proposal_details,
             state: row.get("state"),
@@ -635,8 +614,9 @@ impl PrivacyService {
     ) -> Result<ExportedConfig, PrivacyError> {
         // 1. Agent definitions
         let agent_rows = sqlx::query(
-            "SELECT external_key, display_name, purpose FROM agent_definitions WHERE enabled = true",
+            "SELECT external_key, purpose, requested_capability_categories FROM agent_definitions WHERE deployment_id=$1 AND state='enabled'",
         )
+        .bind(context.subject.deployment_id.0)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -644,16 +624,17 @@ impl PrivacyService {
             .into_iter()
             .map(|r| ExportedAgentDefinition {
                 external_key: r.get("external_key"),
-                display_name: r.get("display_name"),
+                display_name: r.get("external_key"),
                 description: r.get("purpose"),
-                requested_capabilities: vec![],
+                requested_capabilities: r.get("requested_capability_categories"),
             })
             .collect();
 
         // 2. Integration declarations (declarations only - no secrets)
         let int_rows = sqlx::query(
-            "SELECT external_key, display_name, protocol FROM integration_definitions WHERE enabled = true",
+            "SELECT external_key, display_name, protocol FROM integration_definitions WHERE deployment_id=$1 AND state='enabled'",
         )
+        .bind(context.subject.deployment_id.0)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -762,9 +743,8 @@ impl PrivacyService {
         context: &ResolvedUserContext,
     ) -> Result<ExportedTasks, PrivacyError> {
         let task_rows = sqlx::query(
-            "SELECT id, title, status, created_at FROM tasks WHERE user_id = $1 OR user_context_id = $2 ORDER BY created_at DESC LIMIT 500",
+            "SELECT id, title, status, created_at FROM tasks WHERE user_context_id = $1 ORDER BY created_at DESC LIMIT 500",
         )
-        .bind(context.user_id.0)
         .bind(context.id.0)
         .fetch_all(self.db.pool())
         .await?;
@@ -783,12 +763,11 @@ impl PrivacyService {
             r#"
             SELECT e.id, p.capability, e.state, e.provider_reference, e.confirmation_evidence, e.created_at
             FROM executions e
-            LEFT JOIN action_proposals p ON p.id = e.action_proposal_id
-            WHERE e.user_id = $1 OR e.user_context_id = $2
+            LEFT JOIN action_proposals p ON p.id = e.proposal_id
+            WHERE e.user_context_id = $1
             ORDER BY e.created_at DESC LIMIT 500
             "#,
         )
-        .bind(context.user_id.0)
         .bind(context.id.0)
         .fetch_all(self.db.pool())
         .await?;
@@ -806,9 +785,8 @@ impl PrivacyService {
             .collect();
 
         let audit_rows = sqlx::query(
-            "SELECT cursor_id, event_type, occurred_at, details FROM audit_events WHERE user_id = $1 OR user_context_id = $2 ORDER BY cursor_id DESC LIMIT 500",
+            "SELECT cursor_id, event_type, occurred_at, details FROM audit_events WHERE user_context_id = $1 ORDER BY cursor_id DESC LIMIT 500",
         )
-        .bind(context.user_id.0)
         .bind(context.id.0)
         .fetch_all(self.db.pool())
         .await?;

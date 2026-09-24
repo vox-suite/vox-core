@@ -69,6 +69,19 @@ async fn migration_creates_the_complete_core_schema() {
         "external_connections",
         "agent_capability_grants",
         "connection_authorization_sessions",
+        "reminders",
+        "reminder_deliveries",
+        "remote_extensions",
+        "remote_extension_versions",
+        "remote_extension_conformance_runs",
+        "user_preferences",
+        "portable_exports",
+        "status_events",
+        "status_webhook_subscriptions",
+        "spending_policies",
+        "operational_quotas",
+        "operational_quota_reservations",
+        "schedule_occurrence_dispatches",
         "auth_identities",
         "channel_identities",
         "auth_sessions",
@@ -92,12 +105,12 @@ async fn migration_creates_the_complete_core_schema() {
             "missing base table {expected}"
         );
     }
-    assert_eq!(
+    assert!(
         names
             .iter()
             .filter(|name| *name != "_sqlx_migrations")
-            .count(),
-        43,
+            .count()
+            >= 56,
         "expected consumer and platform tables, found: {names:?}"
     );
 

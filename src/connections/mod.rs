@@ -466,7 +466,7 @@ impl ConnectionService {
 
         sqlx::query(
             "UPDATE connections SET authorization_state='revoked', \
-             allowed_capabilities='{}'::text[], expires_at=NULL, failure_code=NULL, updated_at=now() \
+             allowed_capabilities='{}'::text[], expires_at=NULL, updated_at=now() \
              WHERE id=$1 AND user_id=$2",
         )
         .bind(connection_id)

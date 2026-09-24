@@ -74,12 +74,51 @@ async fn rls_enforces_user_isolation_and_allows_service_role() {
         .await
         .expect("insert test users");
 
-    sqlx::query("INSERT INTO records (id, user_id, kind, title, data) VALUES (gen_random_uuid(), $1, 'note', 'Note A', '{}'), (gen_random_uuid(), $2, 'note', 'Note B', '{}')")
-        .bind(user_a)
-        .bind(user_b)
-        .execute(&mut *tx)
-        .await
-        .expect("insert test records");
+    let deployment: Uuid = sqlx::query_scalar(
+        "INSERT INTO platform_deployments (external_key) VALUES ($1) RETURNING id",
+    )
+    .bind(format!("rls-test-{}", Uuid::new_v4()))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert test deployment");
+    let host: Uuid = sqlx::query_scalar(
+        "INSERT INTO host_apps (deployment_id,external_key) VALUES ($1,'rls-test') RETURNING id",
+    )
+    .bind(deployment)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert test host");
+    sqlx::query(
+        "INSERT INTO user_contexts (deployment_id,host_app_id,host_user_id,user_id)
+         VALUES ($1,$2,'user-a',$3),($1,$2,'user-b',$4)",
+    )
+    .bind(deployment)
+    .bind(host)
+    .bind(user_a)
+    .bind(user_b)
+    .execute(&mut *tx)
+    .await
+    .expect("insert canonical contexts");
+
+    let schema_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO data_schemas (namespace,name,json_schema)
+         VALUES ('rls-test','note','{}'::jsonb) RETURNING id",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert global test schema");
+
+    sqlx::query(
+        "INSERT INTO records (id, user_id, schema_id, schema_scope, kind, title, data)
+                 VALUES (gen_random_uuid(), $1, $3, 'global', 'fact', 'Note A', '{}'),
+                        (gen_random_uuid(), $2, $3, 'global', 'fact', 'Note B', '{}')",
+    )
+    .bind(user_a)
+    .bind(user_b)
+    .bind(schema_id)
+    .execute(&mut *tx)
+    .await
+    .expect("insert test records");
 
     // 1. Authenticated as User A
     sqlx::query("SET LOCAL ROLE authenticated")
@@ -100,16 +139,26 @@ async fn rls_enforces_user_isolation_and_allows_service_role() {
     assert_eq!(owner_a, user_a);
 
     // Attempt to insert record belonging to User B should fail under User A session
+    sqlx::query("SAVEPOINT cross_user_insert")
+        .execute(&mut *tx)
+        .await
+        .expect("savepoint before expected RLS denial");
     let insert_b_result = sqlx::query(
-        "INSERT INTO records (id, user_id, kind, title, data) VALUES (gen_random_uuid(), $1, 'note', 'Illicit B', '{}')",
+        "INSERT INTO records (id, user_id, schema_id, schema_scope, kind, title, data)
+         VALUES (gen_random_uuid(), $1, $2, 'global', 'fact', 'Illicit B', '{}')",
     )
     .bind(user_b)
+    .bind(schema_id)
     .execute(&mut *tx)
     .await;
     assert!(
         insert_b_result.is_err(),
         "RLS must block inserting rows for another user"
     );
+    sqlx::query("ROLLBACK TO SAVEPOINT cross_user_insert")
+        .execute(&mut *tx)
+        .await
+        .expect("clear expected RLS error");
 
     // 2. Switch to service_role (backend worker / admin)
     sqlx::query("SET LOCAL ROLE service_role")

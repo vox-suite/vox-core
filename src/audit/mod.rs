@@ -95,10 +95,10 @@ impl AuditService {
             return Err(AuditError::Invalid);
         }
         let rows = sqlx::query(
-            "SELECT cursor_id, schema_version, user_id, actor, event_type, affected_ids, occurred_at, details \
+            "SELECT cursor_id, schema_version, user_context_id, actor, event_type, affected_ids, occurred_at, details \
              FROM audit_events \
              WHERE cursor_id > $1 \
-             AND ($2::uuid IS NULL OR user_id = $2) \
+             AND ($2::uuid IS NULL OR user_context_id = $2) \
              AND ($3::uuid IS NULL OR affected_ids::text LIKE '%' || $3::text || '%') \
              AND ($4::uuid IS NULL OR affected_ids::text LIKE '%' || $4::text || '%') \
              ORDER BY cursor_id LIMIT $5",
@@ -144,7 +144,7 @@ fn event(row: sqlx::postgres::PgRow) -> Result<AuditEvent, AuditError> {
     Ok(AuditEvent {
         cursor: row.try_get("cursor_id")?,
         schema_version: row.try_get("schema_version")?,
-        user_context_id: row.try_get("user_id")?,
+        user_context_id: row.try_get("user_context_id")?,
         actor_type: row.try_get("actor")?,
         actor_reference: details
             .get("actor_reference")

@@ -67,19 +67,38 @@ pub async fn respond_stream(
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let started = std::time::Instant::now();
+    let turn_id = request.conversation.turn_id.clone();
     match service.respond_stream(request.conversation).await {
         Ok(stream) => {
-            let sse_stream = stream.map(|item| match item {
-                Ok(delta) if delta == crate::conversations::speculation::LOOKUP_PENDING => {
-                    Ok("event: lookup_pending\ndata: {}\n\n".to_string())
+            let preparation_ms = started.elapsed().as_millis();
+            let mut first_text_seen = false;
+            let sse_stream = stream.map(move |item| {
+                if let Ok(delta) = &item
+                    && !first_text_seen
+                    && !delta.is_empty()
+                    && delta != crate::conversations::speculation::LOOKUP_PENDING
+                {
+                    first_text_seen = true;
+                    tracing::info!(
+                        turn_id = ?turn_id,
+                        preparation_ms,
+                        first_text_ms = started.elapsed().as_millis(),
+                        "CORE_STREAM_FIRST_TEXT"
+                    );
                 }
-                Ok(delta) => {
-                    let data = serde_json::json!({ "delta": delta }).to_string();
-                    Ok::<_, std::convert::Infallible>(format!("data: {data}\n\n"))
+                match item {
+                    Ok(delta) if delta == crate::conversations::speculation::LOOKUP_PENDING => {
+                        Ok("event: lookup_pending\ndata: {}\n\n".to_string())
+                    }
+                    Ok(delta) => {
+                        let data = serde_json::json!({ "delta": delta }).to_string();
+                        Ok::<_, std::convert::Infallible>(format!("data: {data}\n\n"))
+                    }
+                    Err(_) => Ok::<_, std::convert::Infallible>(
+                        "event: error\ndata: {\"error\":\"agent error\"}\n\n".to_string(),
+                    ),
                 }
-                Err(_) => Ok::<_, std::convert::Infallible>(
-                    "event: error\ndata: {\"error\":\"agent error\"}\n\n".to_string(),
-                ),
             });
             let done_stream = futures_util::stream::once(async move {
                 Ok::<_, std::convert::Infallible>("data: [DONE]\n\n".to_string())

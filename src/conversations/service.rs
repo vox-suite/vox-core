@@ -761,7 +761,7 @@ impl ConversationService {
         };
 
         let mut tx = self.db.pool().begin().await?;
-        sqlx::query(
+        let changed = sqlx::query(
             "UPDATE conversations \
              SET state = 'completed', \
                  completed_at = COALESCE(completed_at, now()), \
@@ -770,14 +770,17 @@ impl ConversationService {
         )
         .bind(conversation_id)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
 
-        sqlx::query(
-            "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1)",
-        )
-        .bind(conversation_id)
-        .execute(&mut *tx)
-        .await?;
+        if changed == 1 {
+            sqlx::query(
+                "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1)",
+            )
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         Ok(())
     }

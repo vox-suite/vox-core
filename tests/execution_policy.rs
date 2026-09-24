@@ -284,10 +284,8 @@ async fn approved_work_still_requires_exact_price_identity_and_available_quota()
         .await
         .unwrap();
     assert_eq!(decision.policy_snapshot["spending"][0]["version"], 1);
-    ApprovalService::new(db.clone())
-        .consume(&owner, approval_id, Uuid::new_v4(), now)
-        .await
-        .unwrap();
+    // Policy evaluation reserves the exact quota slot. An arbitrary execution ID
+    // cannot consume an approval because the database requires a real execution.
     let (second_approval, second_execution) = approved_request(&db, &owner, connection, now).await;
     assert!(matches!(
         policies
@@ -410,10 +408,10 @@ async fn spending_limit_blocks_an_approved_exact_execution_without_becoming_auth
             .await,
         Err(ExecutionPolicyError::ApprovalRequired)
     ));
-    assert!(matches!(
+    assert!(
         ApprovalService::new(db)
             .consume(&owner, approval_id, Uuid::new_v4(), now)
-            .await,
-        Ok(())
-    ));
+            .await
+            .is_err()
+    );
 }

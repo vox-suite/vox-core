@@ -432,7 +432,7 @@ impl ConversationAgent {
 
         tracing::info!(
             channel = %prompt.channel,
-            prompt = %prompt.user_text,
+            prompt_len = prompt.user_text.len(),
             duration_ms = start.elapsed().as_millis(),
             "Core LLM response completed"
         );
@@ -449,7 +449,13 @@ impl ConversationAgent {
         use rig::agent::MultiTurnStreamItem;
         use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 
+        let preparation_started = std::time::Instant::now();
         let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+        tracing::info!(
+            channel = %prompt.channel,
+            preparation_ms = preparation_started.elapsed().as_millis(),
+            "CORE_AGENT_PREPARATION"
+        );
         let stream = agent.stream_prompt(input).await;
 
         let text_stream = stream.filter_map(|item_res| async move {
