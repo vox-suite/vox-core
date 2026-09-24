@@ -45,10 +45,15 @@ pub async fn set(
     ) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match service.set_preference(&context, r.preference, Utc::now()).await {
+    match service
+        .set_preference(&context, r.preference, Utc::now())
+        .await
+    {
         Ok(pref) => (StatusCode::OK, Json(pref)).into_response(),
         Err(PreferenceError::Invalid(_)) => StatusCode::BAD_REQUEST.into_response(),
-        Err(PreferenceError::ConfirmationRequired) => StatusCode::PRECONDITION_REQUIRED.into_response(),
+        Err(PreferenceError::ConfirmationRequired) => {
+            StatusCode::PRECONDITION_REQUIRED.into_response()
+        }
         Err(PreferenceError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -67,7 +72,9 @@ pub async fn list(
     match service.list_preferences(&context).await {
         Ok(prefs) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(PreferenceError::Invalid(_)) => StatusCode::BAD_REQUEST.into_response(),
-        Err(PreferenceError::ConfirmationRequired) => StatusCode::PRECONDITION_REQUIRED.into_response(),
+        Err(PreferenceError::ConfirmationRequired) => {
+            StatusCode::PRECONDITION_REQUIRED.into_response()
+        }
         Err(PreferenceError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -84,10 +91,15 @@ pub async fn effective(
     ) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match service.effective_for_agent(&context, &agent_key, &r.categories).await {
+    match service
+        .effective_for_agent(&context, &agent_key, &r.categories)
+        .await
+    {
         Ok(prefs) => (StatusCode::OK, Json(prefs)).into_response(),
         Err(PreferenceError::Invalid(_)) => StatusCode::BAD_REQUEST.into_response(),
-        Err(PreferenceError::ConfirmationRequired) => StatusCode::PRECONDITION_REQUIRED.into_response(),
+        Err(PreferenceError::ConfirmationRequired) => {
+            StatusCode::PRECONDITION_REQUIRED.into_response()
+        }
         Err(PreferenceError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -108,7 +120,9 @@ pub async fn delete_key(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(PreferenceError::Invalid(_)) => StatusCode::BAD_REQUEST.into_response(),
-        Err(PreferenceError::ConfirmationRequired) => StatusCode::PRECONDITION_REQUIRED.into_response(),
+        Err(PreferenceError::ConfirmationRequired) => {
+            StatusCode::PRECONDITION_REQUIRED.into_response()
+        }
         Err(PreferenceError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

@@ -74,7 +74,11 @@ impl AuditDeliveryWorker {
         }
     }
 
-    pub async fn deliver_next(&self, _worker: &str, _now: DateTime<Utc>) -> Result<bool, AuditError> {
+    pub async fn deliver_next(
+        &self,
+        _worker: &str,
+        _now: DateTime<Utc>,
+    ) -> Result<bool, AuditError> {
         Ok(false)
     }
 }
@@ -142,7 +146,10 @@ fn event(row: sqlx::postgres::PgRow) -> Result<AuditEvent, AuditError> {
         schema_version: row.try_get("schema_version")?,
         user_context_id: row.try_get("user_id")?,
         actor_type: row.try_get("actor")?,
-        actor_reference: details.get("actor_reference").and_then(|v| v.as_str()).map(str::to_owned),
+        actor_reference: details
+            .get("actor_reference")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
         event_type: row.try_get("event_type")?,
         aggregate_type: affected
             .get(0)

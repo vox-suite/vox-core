@@ -280,13 +280,24 @@ async fn agents_receive_only_relevant_permitted_preferences() {
         .unwrap();
 
     assert_eq!(locale_prefs.len(), 2);
-    let keys: Vec<&str> = locale_prefs.iter().map(|p| p.preference_key.as_str()).collect();
+    let keys: Vec<&str> = locale_prefs
+        .iter()
+        .map(|p| p.preference_key.as_str())
+        .collect();
     assert!(keys.contains(&"display_currency"));
     assert!(keys.contains(&"timezone"));
 
     // Sensitive passport preference was NEVER delivered to dining or calendar agents
-    assert!(!locale_prefs.iter().any(|p| p.preference_key == "passport_number"));
-    assert!(!dining_prefs.iter().any(|p| p.preference_key == "passport_number"));
+    assert!(
+        !locale_prefs
+            .iter()
+            .any(|p| p.preference_key == "passport_number")
+    );
+    assert!(
+        !dining_prefs
+            .iter()
+            .any(|p| p.preference_key == "passport_number")
+    );
 }
 
 #[tokio::test]
@@ -315,8 +326,13 @@ async fn provider_currency_and_timezone_remain_authoritative_regardless_of_displ
 
     // Verifies that the returned preference explicitly carries the authority disclaimer
     // guaranteeing that preferences never override provider facts or confer execution authority.
-    assert!(pref.authority_disclaimer.contains("confers no execution authority"));
-    assert!(pref.authority_disclaimer.contains("Provider currency, timezone, and inventory facts remain strictly authoritative"));
+    assert!(
+        pref.authority_disclaimer
+            .contains("confers no execution authority")
+    );
+    assert!(pref.authority_disclaimer.contains(
+        "Provider currency, timezone, and inventory facts remain strictly authoritative"
+    ));
 }
 
 #[tokio::test]
@@ -344,10 +360,16 @@ async fn cross_context_preferences_are_strictly_isolated() {
         .unwrap();
 
     let prefs_b = service.list_preferences(&owner_b).await.unwrap();
-    assert!(prefs_b.is_empty(), "Context B must not see Context A's preferences");
+    assert!(
+        prefs_b.is_empty(),
+        "Context B must not see Context A's preferences"
+    );
 
     // Deleting in Context B does not affect Context A
-    let deleted_b = service.delete_preference(&owner_b, "timezone").await.unwrap();
+    let deleted_b = service
+        .delete_preference(&owner_b, "timezone")
+        .await
+        .unwrap();
     assert!(!deleted_b);
 
     let prefs_a = service.list_preferences(&owner_a).await.unwrap();
@@ -417,7 +439,8 @@ async fn preference_http_endpoints_require_signed_assertions() {
         .sign_context_request(&host_context, now, Uuid::new_v4())
         .unwrap();
 
-    let sensitive_signed = signed_request(uri.clone(), "POST", sensitive_body, &sensitive_assertion);
+    let sensitive_signed =
+        signed_request(uri.clone(), "POST", sensitive_body, &sensitive_assertion);
     let res2 = app.clone().oneshot(sensitive_signed).await.unwrap();
     assert_eq!(res2.status(), StatusCode::PRECONDITION_REQUIRED);
 }

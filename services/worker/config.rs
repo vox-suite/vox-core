@@ -12,7 +12,8 @@ pub struct WorkerConfig {
 #[allow(dead_code)]
 impl WorkerConfig {
     pub fn from_env() -> Result<Self, String> {
-        let inner = Config::from_env().map_err(|e| format!("Invalid worker configuration: {}", e))?;
+        let inner =
+            Config::from_env().map_err(|e| format!("Invalid worker configuration: {}", e))?;
         Ok(Self { inner })
     }
 }

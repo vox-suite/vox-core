@@ -29,16 +29,16 @@ use vox_core::{
     http::{AppState, router},
     integration_registry::{CapabilityEffect, IntegrationRegistry, SetIntegrationEnabledRequest},
     providers::{
-        AmazonCatalogItem, AmazonHandoffRequest, AmazonService, MockAmazonProviderClient,
-        MockUberProviderClient, MockZomatoProviderClient, UberConnectedReadService,
-        UberRideEstimateRequest, UberRideHandoffRequest, ZomatoHandoffRequest, ZomatoHandoffType,
-        ZomatoRestaurant, ZomatoService, AMAZON_CAPABILITY_CATALOG_SEARCH,
-        AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT, AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT,
-        AMAZON_CAPABILITY_PURCHASE_HANDOFF, AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT,
-        AMAZON_INTEGRATION_KEY, UBER_CAPABILITY_RIDE_ESTIMATE, UBER_CAPABILITY_RIDE_REQUEST,
-        UBER_INTEGRATION_KEY, ZOMATO_CAPABILITY_ORDER_HANDOFF,
+        AMAZON_CAPABILITY_CATALOG_SEARCH, AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT,
+        AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT, AMAZON_CAPABILITY_PURCHASE_HANDOFF,
+        AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT, AMAZON_INTEGRATION_KEY, AmazonCatalogItem,
+        AmazonHandoffRequest, AmazonService, MockAmazonProviderClient, MockUberProviderClient,
+        MockZomatoProviderClient, UBER_CAPABILITY_RIDE_ESTIMATE, UBER_CAPABILITY_RIDE_REQUEST,
+        UBER_INTEGRATION_KEY, UberConnectedReadService, UberRideEstimateRequest,
+        UberRideHandoffRequest, ZOMATO_CAPABILITY_ORDER_HANDOFF,
         ZOMATO_CAPABILITY_ORDER_HANDOFF_SHORT, ZOMATO_CAPABILITY_RESTAURANT_SEARCH,
-        ZOMATO_CAPABILITY_RESTAURANT_SEARCH_SHORT, ZOMATO_INTEGRATION_KEY,
+        ZOMATO_CAPABILITY_RESTAURANT_SEARCH_SHORT, ZOMATO_INTEGRATION_KEY, ZomatoHandoffRequest,
+        ZomatoHandoffType, ZomatoRestaurant, ZomatoService,
     },
 };
 
@@ -131,7 +131,10 @@ async fn amazon_declaration_and_capabilities_match_official_creators_api() {
         .find(|c| c.external_key == AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT)
         .expect("catalog_search must be declared");
     assert_eq!(search.effect, CapabilityEffect::Read);
-    assert_eq!(search.optional_guarantees["capability_level"], "L1_catalog_read");
+    assert_eq!(
+        search.optional_guarantees["capability_level"],
+        "L1_catalog_read"
+    );
     assert_eq!(search.regions.len(), 22);
 
     let lookup = decl
@@ -140,7 +143,10 @@ async fn amazon_declaration_and_capabilities_match_official_creators_api() {
         .find(|c| c.external_key == AMAZON_CAPABILITY_ITEM_LOOKUP_SHORT)
         .expect("item_lookup must be declared");
     assert_eq!(lookup.effect, CapabilityEffect::Read);
-    assert_eq!(lookup.optional_guarantees["capability_level"], "L1_catalog_read");
+    assert_eq!(
+        lookup.optional_guarantees["capability_level"],
+        "L1_catalog_read"
+    );
 
     let handoff = decl
         .capabilities
@@ -148,8 +154,14 @@ async fn amazon_declaration_and_capabilities_match_official_creators_api() {
         .find(|c| c.external_key == AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT)
         .expect("purchase_handoff must be declared");
     assert_eq!(handoff.effect, CapabilityEffect::Write);
-    assert_eq!(handoff.optional_guarantees["capability_level"], "L0_labelled_handoff_only");
-    assert_eq!(handoff.optional_guarantees["direct_execution_supported"], false);
+    assert_eq!(
+        handoff.optional_guarantees["capability_level"],
+        "L0_labelled_handoff_only"
+    );
+    assert_eq!(
+        handoff.optional_guarantees["direct_execution_supported"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -242,8 +254,16 @@ async fn amazon_purchase_handoff_is_never_reported_as_purchase_completion() {
     assert_eq!(handoff_resp.provider, "amazon");
     assert_eq!(handoff_resp.status, "handoff_created");
     assert!(!handoff_resp.completed);
-    assert!(handoff_resp.handoff_url.contains("amazon.com/dp/B09V3KXJPB?tag=vox-20"));
-    assert!(handoff_resp.disclaimer.contains("Vox does not place consumer orders directly"));
+    assert!(
+        handoff_resp
+            .handoff_url
+            .contains("amazon.com/dp/B09V3KXJPB?tag=vox-20")
+    );
+    assert!(
+        handoff_resp
+            .disclaimer
+            .contains("Vox does not place consumer orders directly")
+    );
 
     // 2. Direct purchase execution fails closed as unsupported
     let direct_err = amazon_svc
@@ -271,7 +291,10 @@ async fn zomato_distinguishes_merchant_apis_and_enforces_consumer_handoff() {
         .find(|c| c.external_key == ZOMATO_CAPABILITY_RESTAURANT_SEARCH_SHORT)
         .expect("restaurant_search must be declared");
     assert_eq!(search.effect, CapabilityEffect::Read);
-    assert_eq!(search.optional_guarantees["capability_level"], "L1_catalog_read");
+    assert_eq!(
+        search.optional_guarantees["capability_level"],
+        "L1_catalog_read"
+    );
 
     let order = decl
         .capabilities
@@ -279,8 +302,14 @@ async fn zomato_distinguishes_merchant_apis_and_enforces_consumer_handoff() {
         .find(|c| c.external_key == ZOMATO_CAPABILITY_ORDER_HANDOFF_SHORT)
         .expect("consumer_order_handoff must be declared");
     assert_eq!(order.effect, CapabilityEffect::Write);
-    assert_eq!(order.optional_guarantees["capability_level"], "L0_labelled_handoff_only");
-    assert_eq!(order.optional_guarantees["direct_execution_supported"], false);
+    assert_eq!(
+        order.optional_guarantees["capability_level"],
+        "L0_labelled_handoff_only"
+    );
+    assert_eq!(
+        order.optional_guarantees["direct_execution_supported"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -374,8 +403,16 @@ async fn zomato_order_states_are_distinguished_and_never_reported_as_order_compl
     assert_eq!(cart_handoff.action, "cart_and_checkout");
     assert_eq!(cart_handoff.status, "handoff_created");
     assert!(!cart_handoff.completed);
-    assert!(cart_handoff.handoff_url.contains("zomato.com/order/res_bombay_canteen_12"));
-    assert!(cart_handoff.disclaimer.contains("Vox does not place consumer orders directly"));
+    assert!(
+        cart_handoff
+            .handoff_url
+            .contains("zomato.com/order/res_bombay_canteen_12")
+    );
+    assert!(
+        cart_handoff
+            .disclaimer
+            .contains("Vox does not place consumer orders directly")
+    );
 
     // 2. Track order handoff
     let track_handoff = zomato_svc
@@ -394,11 +431,20 @@ async fn zomato_order_states_are_distinguished_and_never_reported_as_order_compl
 
     assert_eq!(track_handoff.action, "track_order");
     assert!(!track_handoff.completed);
-    assert!(track_handoff.handoff_url.contains("zomato.com/order/track/ord_998877"));
+    assert!(
+        track_handoff
+            .handoff_url
+            .contains("zomato.com/order/track/ord_998877")
+    );
 
     // 3. Direct order placement fails closed
     let direct_err = zomato_svc
-        .execute_order(&context, "saathi", connection.id, json!({ "items": ["butter_chicken"] }))
+        .execute_order(
+            &context,
+            "saathi",
+            connection.id,
+            json!({ "items": ["butter_chicken"] }),
+        )
         .await;
     assert!(matches!(
         direct_err,
@@ -417,7 +463,9 @@ async fn uber_ride_estimates_bind_route_and_opening_uber_is_not_confirmed_ride()
 
     let registry = IntegrationRegistry::new(db.clone());
     registry
-        .register(UberConnectedReadService::integration_declaration(&deployment))
+        .register(UberConnectedReadService::integration_declaration(
+            &deployment,
+        ))
         .await
         .unwrap();
     registry
@@ -530,8 +578,16 @@ async fn uber_ride_estimates_bind_route_and_opening_uber_is_not_confirmed_ride()
     assert_eq!(handoff.action, "open_uber_ride_request");
     assert_eq!(handoff.status, "handoff_created");
     assert!(!handoff.completed); // Invariant: Opening Uber is not a confirmed ride
-    assert!(handoff.handoff_url.contains("m.uber.com/ul/?action=setPickup"));
-    assert!(handoff.disclaimer.contains("Vox does not claim a confirmed ride"));
+    assert!(
+        handoff
+            .handoff_url
+            .contains("m.uber.com/ul/?action=setPickup")
+    );
+    assert!(
+        handoff
+            .disclaimer
+            .contains("Vox does not claim a confirmed ride")
+    );
 
     // 3. Direct execution fails closed without privileged production approval
     let direct_err = uber_svc
@@ -562,7 +618,9 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
         .await
         .unwrap();
     registry
-        .register(UberConnectedReadService::integration_declaration(&deployment))
+        .register(UberConnectedReadService::integration_declaration(
+            &deployment,
+        ))
         .await
         .unwrap();
 
@@ -726,10 +784,16 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
         .method("POST")
         .uri("/v1/handoffs/amazon")
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", amazon_assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            amazon_assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", amazon_assertion.secret())
         .header("x-vox-host-audience", amazon_assertion.audience())
-        .header("x-vox-host-timestamp", amazon_assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            amazon_assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", amazon_assertion.nonce().to_string())
         .header("x-vox-host-signature", amazon_assertion.signature())
         .body(Body::from(amazon_body.to_string()))
@@ -737,7 +801,9 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
 
     let amazon_resp = app.clone().oneshot(amazon_req).await.unwrap();
     assert_eq!(amazon_resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(amazon_resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(amazon_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["provider"], "amazon");
     assert_eq!(val["completed"], false);
@@ -764,10 +830,16 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
         .method("POST")
         .uri("/v1/handoffs/zomato")
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", zomato_assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            zomato_assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", zomato_assertion.secret())
         .header("x-vox-host-audience", zomato_assertion.audience())
-        .header("x-vox-host-timestamp", zomato_assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            zomato_assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", zomato_assertion.nonce().to_string())
         .header("x-vox-host-signature", zomato_assertion.signature())
         .body(Body::from(zomato_body.to_string()))
@@ -775,7 +847,9 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
 
     let zomato_resp = app.clone().oneshot(zomato_req).await.unwrap();
     assert_eq!(zomato_resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(zomato_resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(zomato_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["provider"], "zomato");
     assert_eq!(val["completed"], false);
@@ -804,10 +878,16 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
         .method("POST")
         .uri("/v1/handoffs/uber")
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", uber_assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            uber_assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", uber_assertion.secret())
         .header("x-vox-host-audience", uber_assertion.audience())
-        .header("x-vox-host-timestamp", uber_assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            uber_assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", uber_assertion.nonce().to_string())
         .header("x-vox-host-signature", uber_assertion.signature())
         .body(Body::from(uber_body.to_string()))
@@ -815,7 +895,9 @@ async fn http_handoff_endpoints_require_signed_assertions_and_report_honest_unco
 
     let uber_resp = app.oneshot(uber_req).await.unwrap();
     assert_eq!(uber_resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(uber_resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(uber_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["provider"], "uber");
     assert_eq!(val["completed"], false);

@@ -106,7 +106,10 @@ async fn rls_enforces_user_isolation_and_allows_service_role() {
     .bind(user_b)
     .execute(&mut *tx)
     .await;
-    assert!(insert_b_result.is_err(), "RLS must block inserting rows for another user");
+    assert!(
+        insert_b_result.is_err(),
+        "RLS must block inserting rows for another user"
+    );
 
     // 2. Switch to service_role (backend worker / admin)
     sqlx::query("SET LOCAL ROLE service_role")
@@ -118,7 +121,11 @@ async fn rls_enforces_user_isolation_and_allows_service_role() {
         .fetch_all(&mut *tx)
         .await
         .expect("select records as service_role");
-    assert_eq!(all_records.len(), 2, "service_role must have access to all records");
+    assert_eq!(
+        all_records.len(),
+        2,
+        "service_role must have access to all records"
+    );
 
     tx.rollback().await.expect("rollback clean");
 }

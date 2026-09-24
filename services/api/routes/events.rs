@@ -1,12 +1,7 @@
 /**
 * HTTP handlers for event ingestion and telemetry tracking.
 */
-use axum::{
-    Extension, Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Extension, Json, extract::State, http::StatusCode, response::IntoResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,7 +36,10 @@ pub async fn ingest_batch(
         return Ok(Json(BatchEventsResponse { inserted: 0 }));
     }
 
-    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut count = 0;
 
     for item in body.events {
@@ -51,11 +49,12 @@ pub async fn ingest_batch(
         }
         let payload = item.payload.unwrap_or_else(|| serde_json::json!({}));
         let occurred_at = item.occurred_at.unwrap_or_else(Utc::now);
-        let source_kind = if actor.device_id().is_some() { "device" } else { "user" };
-        let source_id = actor
-            .device_id()
-            .unwrap_or(actor.user_id)
-            .to_string();
+        let source_kind = if actor.device_id().is_some() {
+            "device"
+        } else {
+            "user"
+        };
+        let source_id = actor.device_id().unwrap_or(actor.user_id).to_string();
         let external_event_id = item
             .external_event_id
             .as_deref()
@@ -86,7 +85,9 @@ pub async fn ingest_batch(
         count += usize::try_from(inserted.rows_affected()).unwrap_or(0);
     }
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(BatchEventsResponse { inserted: count }))
 }

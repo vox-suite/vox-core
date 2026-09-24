@@ -75,8 +75,7 @@ async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_on
         db.clone(),
         Some(Arc::new(MockBridge)),
     ));
-    let handler = ScheduleHandler::new(db.clone(), Arc::new(CallPlanner))
-        .with_outbound(outbound);
+    let handler = ScheduleHandler::new(db.clone(), Arc::new(CallPlanner)).with_outbound(outbound);
     let now = at("2026-09-13T03:00:00Z");
 
     let schedule = service
@@ -125,12 +124,11 @@ async fn recurring_schedule_uses_timezone_and_each_occurrence_creates_actions_on
         .fetch_one(db.pool())
         .await
         .unwrap();
-    let dispatch_jobs: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM jobs WHERE kind = 'dispatch_action'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let dispatch_jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind = 'dispatch_action'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert_eq!(run_jobs, 2);
     assert_eq!(dispatch_jobs, 2);
 }

@@ -32,8 +32,8 @@ pub const AMAZON_CAPABILITY_PURCHASE_HANDOFF_SHORT: &str = "purchase_handoff";
 
 /// Official 22 marketplace locales documented by Amazon Creators API.
 pub const AMAZON_OFFICIAL_LOCALES: &[&str] = &[
-    "US", "CA", "BR", "MX", "GB", "DE", "FR", "ES", "IT", "NL", "PL", "SE", "TR", "AE", "SA",
-    "EG", "IN", "JP", "SG", "AU", "BE", "IE",
+    "US", "CA", "BR", "MX", "GB", "DE", "FR", "ES", "IT", "NL", "PL", "SE", "TR", "AE", "SA", "EG",
+    "IN", "JP", "SG", "AU", "BE", "IE",
 ];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -105,7 +105,11 @@ pub trait AmazonProviderClient: Send + Sync {
         locale: &str,
     ) -> Result<AmazonCatalogSearchResponse, AmazonError>;
 
-    async fn get_item(&self, asin: &str, locale: &str) -> Result<Option<AmazonCatalogItem>, AmazonError>;
+    async fn get_item(
+        &self,
+        asin: &str,
+        locale: &str,
+    ) -> Result<Option<AmazonCatalogItem>, AmazonError>;
 }
 
 pub struct DefaultAmazonProviderClient {
@@ -144,7 +148,10 @@ impl AmazonProviderClient for DefaultAmazonProviderClient {
         }
 
         if !resp.status().is_success() {
-            return Err(AmazonError::ProviderError(format!("HTTP {}", resp.status())));
+            return Err(AmazonError::ProviderError(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         resp.json::<AmazonCatalogSearchResponse>()
@@ -152,7 +159,11 @@ impl AmazonProviderClient for DefaultAmazonProviderClient {
             .map_err(|e| AmazonError::ProviderError(e.to_string()))
     }
 
-    async fn get_item(&self, asin: &str, locale: &str) -> Result<Option<AmazonCatalogItem>, AmazonError> {
+    async fn get_item(
+        &self,
+        asin: &str,
+        locale: &str,
+    ) -> Result<Option<AmazonCatalogItem>, AmazonError> {
         let domain_tld = locale_to_tld(locale);
         let url = format!("{}/catalog/items/{}", self.base_url, asin);
         let resp = self
@@ -168,7 +179,10 @@ impl AmazonProviderClient for DefaultAmazonProviderClient {
         }
 
         if !resp.status().is_success() {
-            return Err(AmazonError::ProviderError(format!("HTTP {}", resp.status())));
+            return Err(AmazonError::ProviderError(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         let item = resp
@@ -200,14 +214,20 @@ impl AmazonProviderClient for MockAmazonProviderClient {
         query: &str,
         locale: &str,
     ) -> Result<AmazonCatalogSearchResponse, AmazonError> {
-        if self.fail_with_rate_limit.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .fail_with_rate_limit
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(AmazonError::RateLimited(45));
         }
         let lock = self.items.lock().unwrap();
         let q_lower = query.to_lowercase();
         let matched: Vec<AmazonCatalogItem> = lock
             .iter()
-            .filter(|it| it.title.to_lowercase().contains(&q_lower) || it.asin.to_lowercase().contains(&q_lower))
+            .filter(|it| {
+                it.title.to_lowercase().contains(&q_lower)
+                    || it.asin.to_lowercase().contains(&q_lower)
+            })
             .cloned()
             .collect();
         let total = matched.len();
@@ -219,8 +239,15 @@ impl AmazonProviderClient for MockAmazonProviderClient {
         })
     }
 
-    async fn get_item(&self, asin: &str, _locale: &str) -> Result<Option<AmazonCatalogItem>, AmazonError> {
-        if self.fail_with_rate_limit.load(std::sync::atomic::Ordering::SeqCst) {
+    async fn get_item(
+        &self,
+        asin: &str,
+        _locale: &str,
+    ) -> Result<Option<AmazonCatalogItem>, AmazonError> {
+        if self
+            .fail_with_rate_limit
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(AmazonError::RateLimited(45));
         }
         let lock = self.items.lock().unwrap();
@@ -265,7 +292,10 @@ impl AmazonService {
                     effect: CapabilityEffect::Read,
                     access_needs: vec!["creators_api_read".into()],
                     data_recipients: vec!["webservices.amazon.com".into()],
-                    regions: AMAZON_OFFICIAL_LOCALES.iter().map(|s| s.to_string()).collect(),
+                    regions: AMAZON_OFFICIAL_LOCALES
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     failure_modes: vec!["rate_limited".into(), "invalid_locale".into()],
                     optional_guarantees: json!({
                         "capability_level": "L1_catalog_read",
@@ -277,7 +307,10 @@ impl AmazonService {
                     effect: CapabilityEffect::Read,
                     access_needs: vec!["creators_api_read".into()],
                     data_recipients: vec!["webservices.amazon.com".into()],
-                    regions: AMAZON_OFFICIAL_LOCALES.iter().map(|s| s.to_string()).collect(),
+                    regions: AMAZON_OFFICIAL_LOCALES
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     failure_modes: vec!["rate_limited".into(), "not_found".into()],
                     optional_guarantees: json!({
                         "capability_level": "L1_catalog_read",
@@ -288,7 +321,10 @@ impl AmazonService {
                     effect: CapabilityEffect::Write,
                     access_needs: vec![],
                     data_recipients: vec!["amazon.com".into()],
-                    regions: AMAZON_OFFICIAL_LOCALES.iter().map(|s| s.to_string()).collect(),
+                    regions: AMAZON_OFFICIAL_LOCALES
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     failure_modes: vec!["unsupported_direct_execution".into()],
                     optional_guarantees: json!({
                         "capability_level": "L0_labelled_handoff_only",
@@ -317,7 +353,13 @@ impl AmazonService {
             ));
         }
 
-        self.verify_access(context, agent_external_key, connection_id, AMAZON_CAPABILITY_CATALOG_SEARCH).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            AMAZON_CAPABILITY_CATALOG_SEARCH,
+        )
+        .await?;
         self.client.search_catalog(query, &norm_locale).await
     }
 
@@ -338,7 +380,13 @@ impl AmazonService {
             ));
         }
 
-        self.verify_access(context, agent_external_key, connection_id, AMAZON_CAPABILITY_ITEM_LOOKUP).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            AMAZON_CAPABILITY_ITEM_LOOKUP,
+        )
+        .await?;
         self.client.get_item(asin, &norm_locale).await
     }
 
@@ -361,7 +409,13 @@ impl AmazonService {
             ));
         }
 
-        self.verify_access(context, agent_external_key, connection_id, AMAZON_CAPABILITY_PURCHASE_HANDOFF).await?;
+        self.verify_access(
+            context,
+            agent_external_key,
+            connection_id,
+            AMAZON_CAPABILITY_PURCHASE_HANDOFF,
+        )
+        .await?;
 
         let tld = locale_to_tld(&norm_locale);
         let tag_query = match &request.partner_tag {
@@ -369,7 +423,12 @@ impl AmazonService {
             _ => String::new(),
         };
 
-        let handoff_url = format!("https://www.amazon.{}/dp/{}{}", tld, request.asin.trim(), tag_query);
+        let handoff_url = format!(
+            "https://www.amazon.{}/dp/{}{}",
+            tld,
+            request.asin.trim(),
+            tag_query
+        );
 
         Ok(AmazonHandoffResponse {
             provider: AMAZON_INTEGRATION_KEY.into(),
@@ -403,15 +462,15 @@ impl AmazonService {
         connection_id: Uuid,
         capability: &str,
     ) -> Result<(), AmazonError> {
-        let connection = self
-            .connections
-            .get(context, connection_id)
-            .await
-            .map_err(|e| match e {
-                ConnectionError::NotFound => AmazonError::ConnectionNotFound,
-                ConnectionError::Database(err) => AmazonError::Database(err),
-                _ => AmazonError::ConnectionNotFound,
-            })?;
+        let connection =
+            self.connections
+                .get(context, connection_id)
+                .await
+                .map_err(|e| match e {
+                    ConnectionError::NotFound => AmazonError::ConnectionNotFound,
+                    ConnectionError::Database(err) => AmazonError::Database(err),
+                    _ => AmazonError::ConnectionNotFound,
+                })?;
 
         if connection.integration_external_key != AMAZON_INTEGRATION_KEY {
             return Err(AmazonError::InvalidIntegration);
@@ -421,7 +480,10 @@ impl AmazonService {
             return Err(AmazonError::ReconnectRequired);
         }
 
-        if connection.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
+        if connection
+            .expires_at
+            .is_some_and(|exp| exp <= chrono::Utc::now())
+        {
             return Err(AmazonError::ReconnectRequired);
         }
 
@@ -431,7 +493,10 @@ impl AmazonService {
             .await
             .map_err(|e| match e {
                 CapabilityGrantError::Database(err) => AmazonError::Database(err),
-                _ => AmazonError::UnauthorizedCapability(capability.into(), agent_external_key.into()),
+                _ => AmazonError::UnauthorizedCapability(
+                    capability.into(),
+                    agent_external_key.into(),
+                ),
             })?;
 
         let has_grant = grants

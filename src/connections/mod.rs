@@ -577,6 +577,8 @@ fn legacy_state(v: &AuthorizationState) -> &'static str {
         AuthorizationState::Pending => "pending",
         AuthorizationState::Authorized => "authorized",
         AuthorizationState::Expired => "expired",
-        AuthorizationState::Revoked | AuthorizationState::Cancelled | AuthorizationState::Failed => "revoked",
+        AuthorizationState::Revoked
+        | AuthorizationState::Cancelled
+        | AuthorizationState::Failed => "revoked",
     }
 }

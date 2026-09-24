@@ -159,18 +159,12 @@ impl RecordService {
 
         match outcome {
             crate::domain::ConcurrencyOutcome::Success(rec) => Ok(rec),
-            crate::domain::ConcurrencyOutcome::Conflict => {
-                Err(RecordServiceError::VersionConflict)
-            }
+            crate::domain::ConcurrencyOutcome::Conflict => Err(RecordServiceError::VersionConflict),
             crate::domain::ConcurrencyOutcome::NotFound => Err(RecordServiceError::NotFound),
         }
     }
 
-    pub async fn get_record(
-        &self,
-        actor: &Actor,
-        id: Uuid,
-    ) -> Result<Option<Record>, sqlx::Error> {
+    pub async fn get_record(&self, actor: &Actor, id: Uuid) -> Result<Option<Record>, sqlx::Error> {
         self.repo.get_by_id(actor.user_id, id).await
     }
 

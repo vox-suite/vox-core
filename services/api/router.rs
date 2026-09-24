@@ -12,7 +12,9 @@ use crate::{
     routes::{
         auth::exchange_token,
         collections::{archive_collection, create_collection, get_collection, list_collections},
-        devices::{DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result},
+        devices::{
+            DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result,
+        },
         events::ingest_batch,
         identity::get_me,
         records::{create_record, delete_record, get_record, list_records, update_record},
@@ -29,17 +31,29 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let task_routes = Router::new()
         .route("/v1/tasks", get(list_tasks).post(create_task))
-        .route("/v1/tasks/{id}", get(get_task).patch(update_task).delete(delete_task))
+        .route(
+            "/v1/tasks/{id}",
+            get(get_task).patch(update_task).delete(delete_task),
+        )
         .with_state(state.tasks.clone());
 
     let collection_routes = Router::new()
-        .route("/v1/collections", get(list_collections).post(create_collection))
-        .route("/v1/collections/{id}", get(get_collection).delete(archive_collection))
+        .route(
+            "/v1/collections",
+            get(list_collections).post(create_collection),
+        )
+        .route(
+            "/v1/collections/{id}",
+            get(get_collection).delete(archive_collection),
+        )
         .with_state(state.collections.clone());
 
     let record_routes = Router::new()
         .route("/v1/records", get(list_records).post(create_record))
-        .route("/v1/records/{id}", get(get_record).patch(update_record).delete(delete_record))
+        .route(
+            "/v1/records/{id}",
+            get(get_record).patch(update_record).delete(delete_record),
+        )
         .with_state(state.records.clone());
 
     let schema_routes = Router::new()

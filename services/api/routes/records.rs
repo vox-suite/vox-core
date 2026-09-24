@@ -10,7 +10,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 use vox_core::{
-    application::records::{CreateRecordInput, RecordService, RecordServiceError, UpdateRecordInput},
+    application::records::{
+        CreateRecordInput, RecordService, RecordServiceError, UpdateRecordInput,
+    },
     domain::identity::Actor,
 };
 
@@ -44,9 +46,16 @@ pub async fn create_record(
         .map_err(|e| match e {
             RecordServiceError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
             RecordServiceError::InvalidSchema(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
-            RecordServiceError::SchemaNotFound => (StatusCode::BAD_REQUEST, "schema not found".to_string()),
-            RecordServiceError::CollectionNotFound => (StatusCode::BAD_REQUEST, "collection not found".to_string()),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
+            RecordServiceError::SchemaNotFound => {
+                (StatusCode::BAD_REQUEST, "schema not found".to_string())
+            }
+            RecordServiceError::CollectionNotFound => {
+                (StatusCode::BAD_REQUEST, "collection not found".to_string())
+            }
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".to_string(),
+            ),
         })?;
     Ok((StatusCode::CREATED, Json(record)))
 }
@@ -78,9 +87,14 @@ pub async fn update_record(
         .map_err(|e| match e {
             RecordServiceError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
             RecordServiceError::InvalidSchema(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
-            RecordServiceError::VersionConflict => (StatusCode::CONFLICT, "version conflict".to_string()),
+            RecordServiceError::VersionConflict => {
+                (StatusCode::CONFLICT, "version conflict".to_string())
+            }
             RecordServiceError::NotFound => (StatusCode::NOT_FOUND, "record not found".to_string()),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".to_string(),
+            ),
         })?;
     Ok(Json(record))
 }

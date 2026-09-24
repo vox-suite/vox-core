@@ -149,7 +149,10 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
         created.credential_custody,
         CredentialCustody::ExternalOperator
     );
-    assert_eq!(created.account_display_id, Some("account@example.test".into()));
+    assert_eq!(
+        created.account_display_id,
+        Some("account@example.test".into())
+    );
     let mut expired = request(AuthorizationState::Expired);
     expired.authorized_capabilities = vec![];
     let updated = service.record(&context, expired).await.unwrap();
@@ -241,7 +244,10 @@ async fn provider_verified_authorization_flow_binds_context_and_displays_account
             },
         )
         .await;
-    assert!(matches!(wrong_state_result, Err(ConnectionError::InvalidState)));
+    assert!(matches!(
+        wrong_state_result,
+        Err(ConnectionError::InvalidState)
+    ));
 
     // 4. Legitimate verified callback succeeds and records connection
     let authorized = service
@@ -258,9 +264,18 @@ async fn provider_verified_authorization_flow_binds_context_and_displays_account
         .await
         .unwrap();
 
-    assert_eq!(authorized.authorization_state, AuthorizationState::Authorized);
-    assert_eq!(authorized.credential_custody, CredentialCustody::ExternalOperator);
-    assert_eq!(authorized.account_display_id, Some("alice@example.com".into()));
+    assert_eq!(
+        authorized.authorization_state,
+        AuthorizationState::Authorized
+    );
+    assert_eq!(
+        authorized.credential_custody,
+        CredentialCustody::ExternalOperator
+    );
+    assert_eq!(
+        authorized.account_display_id,
+        Some("alice@example.com".into())
+    );
     assert_eq!(authorized.authorized_capabilities, vec!["read".to_string()]);
     assert!(authorized.expires_at.is_some());
 
@@ -277,11 +292,17 @@ async fn provider_verified_authorization_flow_binds_context_and_displays_account
             },
         )
         .await;
-    assert!(matches!(replay_result, Err(ConnectionError::SessionAlreadyConsumed)));
+    assert!(matches!(
+        replay_result,
+        Err(ConnectionError::SessionAlreadyConsumed)
+    ));
 
     // 6. List returns verified account display ID
     let listed = service.list(&context).await.unwrap();
-    let conn = listed.iter().find(|c| c.id == authorized.id).expect("found in list");
+    let conn = listed
+        .iter()
+        .find(|c| c.id == authorized.id)
+        .expect("found in list");
     assert_eq!(conn.account_display_id, Some("alice@example.com".into()));
     assert_eq!(conn.authorization_state, AuthorizationState::Authorized);
 

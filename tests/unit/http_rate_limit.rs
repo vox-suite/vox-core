@@ -6,16 +6,10 @@ fn extracts_client_ip_with_precedence_and_splitting() {
     let mut headers = HeaderMap::new();
     assert_eq!(client_ip(&headers), "127.0.0.1");
 
-    headers.insert(
-        "cf-connecting-ip",
-        HeaderValue::from_static("104.28.19.42"),
-    );
+    headers.insert("cf-connecting-ip", HeaderValue::from_static("104.28.19.42"));
     assert_eq!(client_ip(&headers), "104.28.19.42");
 
-    headers.insert(
-        "x-real-ip",
-        HeaderValue::from_static("192.0.2.1"),
-    );
+    headers.insert("x-real-ip", HeaderValue::from_static("192.0.2.1"));
     assert_eq!(client_ip(&headers), "192.0.2.1");
 
     headers.insert(
@@ -28,10 +22,7 @@ fn extracts_client_ip_with_precedence_and_splitting() {
 #[test]
 fn trims_whitespace_in_extracted_ip() {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-real-ip",
-        HeaderValue::from_static("   198.51.100.99  "),
-    );
+    headers.insert("x-real-ip", HeaderValue::from_static("   198.51.100.99  "));
     assert_eq!(client_ip(&headers), "198.51.100.99");
 }
 

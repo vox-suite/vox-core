@@ -14,7 +14,10 @@ fn pre_push_hook_runs_lint_test_and_release_build() {
         "cargo test --locked",
         "cargo build --release --locked",
     ] {
-        assert!(hook.contains(required), "missing pre-push contract: {required}");
+        assert!(
+            hook.contains(required),
+            "missing pre-push contract: {required}"
+        );
     }
 
     let lint = hook.find("cargo clippy --locked").unwrap();

@@ -15,15 +15,11 @@ use crate::{
     capability_grants::{CapabilityGrantError, CapabilityGrantService},
     connections::{AuthorizationState, ConnectionError, ConnectionService},
     db::Db,
-    execution::{
-        AdapterOutcome, ExecutionCoordinator, ExecutionError,
-        StartExecutionRequest,
-    },
+    execution::{AdapterOutcome, ExecutionCoordinator, ExecutionError, StartExecutionRequest},
     execution_policy::ExecutionIdentity,
     identity::ResolvedUserContext,
     integration_registry::{
-        CapabilityDeclaration, CapabilityEffect, IntegrationProtocol,
-        RegisterIntegrationRequest,
+        CapabilityDeclaration, CapabilityEffect, IntegrationProtocol, RegisterIntegrationRequest,
     },
 };
 use chrono::{DateTime, Utc};
@@ -269,7 +265,10 @@ impl ExpediaProviderClient for DefaultExpediaProviderClient {
         itinerary_id: &str,
         reason: &str,
     ) -> Result<ExpediaRawBookingResponse, ExpediaLodgingError> {
-        let url = format!("{}/v3/lodging/bookings/{}/cancel", self.base_url, itinerary_id);
+        let url = format!(
+            "{}/v3/lodging/bookings/{}/cancel",
+            self.base_url, itinerary_id
+        );
         let resp = self
             .http
             .post(&url)
@@ -394,7 +393,9 @@ impl ExpediaProviderClient for MockExpediaProviderClient {
                 return Ok(resp.clone());
             }
         }
-        Err(ExpediaLodgingError::ProviderError("itinerary not found".into()))
+        Err(ExpediaLodgingError::ProviderError(
+            "itinerary not found".into(),
+        ))
     }
 }
 
@@ -441,7 +442,13 @@ impl ExpediaLodgingService {
                     effect: CapabilityEffect::Read,
                     access_needs: vec!["search".into()],
                     data_recipients: vec!["api.expediagroup.com".into()],
-                    regions: vec!["US".into(), "GB".into(), "CA".into(), "AU".into(), "IN".into()],
+                    regions: vec![
+                        "US".into(),
+                        "GB".into(),
+                        "CA".into(),
+                        "AU".into(),
+                        "IN".into(),
+                    ],
                     failure_modes: vec!["rate_limited".into()],
                     optional_guarantees: json!({
                         "freshness_seconds": 60,
@@ -453,7 +460,13 @@ impl ExpediaLodgingService {
                     effect: CapabilityEffect::Write,
                     access_needs: vec!["book".into()],
                     data_recipients: vec!["api.expediagroup.com".into()],
-                    regions: vec!["US".into(), "GB".into(), "CA".into(), "AU".into(), "IN".into()],
+                    regions: vec![
+                        "US".into(),
+                        "GB".into(),
+                        "CA".into(),
+                        "AU".into(),
+                        "IN".into(),
+                    ],
                     failure_modes: vec![
                         "price_change".into(),
                         "inventory_unavailable".into(),
@@ -473,7 +486,13 @@ impl ExpediaLodgingService {
                     effect: CapabilityEffect::Write,
                     access_needs: vec!["manage".into()],
                     data_recipients: vec!["api.expediagroup.com".into()],
-                    regions: vec!["US".into(), "GB".into(), "CA".into(), "AU".into(), "IN".into()],
+                    regions: vec![
+                        "US".into(),
+                        "GB".into(),
+                        "CA".into(),
+                        "AU".into(),
+                        "IN".into(),
+                    ],
                     failure_modes: vec!["rate_limited".into(), "cancellation_penalty".into()],
                     optional_guarantees: json!({
                         "capability_level": "L3_consequential_write",
@@ -513,15 +532,15 @@ impl ExpediaLodgingService {
         }
 
         // 2. Verify connection
-        let connection = self
-            .connections
-            .get(context, connection_id)
-            .await
-            .map_err(|e| match e {
-                ConnectionError::NotFound => ExpediaLodgingError::ConnectionNotFound,
-                ConnectionError::Database(err) => ExpediaLodgingError::Database(err),
-                _ => ExpediaLodgingError::ConnectionNotFound,
-            })?;
+        let connection =
+            self.connections
+                .get(context, connection_id)
+                .await
+                .map_err(|e| match e {
+                    ConnectionError::NotFound => ExpediaLodgingError::ConnectionNotFound,
+                    ConnectionError::Database(err) => ExpediaLodgingError::Database(err),
+                    _ => ExpediaLodgingError::ConnectionNotFound,
+                })?;
 
         if connection.integration_external_key != EXPEDIA_INTEGRATION_KEY {
             return Err(ExpediaLodgingError::InvalidIntegration);
@@ -592,9 +611,9 @@ impl ExpediaLodgingService {
             )
             .await
             .map_err(|e| match e {
-                ApprovalError::Invalid => {
-                    ExpediaLodgingError::InvalidProposal("invalid proposal lifetime or details".into())
-                }
+                ApprovalError::Invalid => ExpediaLodgingError::InvalidProposal(
+                    "invalid proposal lifetime or details".into(),
+                ),
                 ApprovalError::NotFound => ExpediaLodgingError::ProposalNotFound,
                 ApprovalError::Database(err) => ExpediaLodgingError::Database(err),
                 _ => ExpediaLodgingError::InvalidProposal(e.to_string()),
@@ -726,7 +745,8 @@ impl ExpediaLodgingService {
                 // Remains in reconciling state for authoritative retrieval.
                 Ok(ExpediaBookingOutcome::Reconciling {
                     affiliate_reference_id: key.into(),
-                    message: "Network timeout; awaiting authoritative provider status confirmation".into(),
+                    message: "Network timeout; awaiting authoritative provider status confirmation"
+                        .into(),
                 })
             }
             Err(ExpediaLodgingError::RateLimited(retry)) => {

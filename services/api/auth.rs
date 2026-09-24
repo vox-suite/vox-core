@@ -3,7 +3,7 @@
 */
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
@@ -32,7 +32,10 @@ pub async fn extract_actor(
         let claims = crate::identity_token::verify_id_token(token).await?;
         let user_id = Uuid::parse_str(&claims.subject).map_err(|_| StatusCode::UNAUTHORIZED)?;
         let display_name = claims.email.as_deref().unwrap_or("Vox User");
-        let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         sqlx::query(
             "INSERT INTO users (id, status, display_name) \
              VALUES ($1, 'active', $2) \
@@ -67,7 +70,9 @@ pub async fn extract_actor(
         if !has_context {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-        tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tx.commit()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let actor = Actor::user(user_id);
         req.extensions_mut().insert(actor);

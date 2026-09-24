@@ -4,20 +4,14 @@
 use sqlx::PgPool;
 use vox_core::{
     application::{
-        collections::CollectionService,
-        devices::DeviceService,
-        records::RecordService,
-        schemas::SchemaService,
-        tasks::TaskService,
+        collections::CollectionService, devices::DeviceService, records::RecordService,
+        schemas::SchemaService, tasks::TaskService,
     },
     db::Db,
     http::AppState,
     storage::{
-        collections::CollectionRepository,
-        devices::DeviceRepository,
-        records::RecordRepository,
-        schemas::SchemaRepository,
-        tasks::TaskRepository,
+        collections::CollectionRepository, devices::DeviceRepository, records::RecordRepository,
+        schemas::SchemaRepository, tasks::TaskRepository,
     },
 };
 

@@ -1,11 +1,7 @@
 /**
 * Agent tools for task management, project binding, and execution tracking.
 */
-use crate::{
-    db::Db,
-    domain::tasks::ExecutionType,
-    identity::ResourceOwner,
-};
+use crate::{db::Db, domain::tasks::ExecutionType, identity::ResourceOwner};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -134,7 +130,9 @@ impl Tool for CreateTask {
             .fetch_one(db.pool())
             .await?;
             if !owned {
-                return Err(TaskToolError::NotFound("Project collection not found".into()));
+                return Err(TaskToolError::NotFound(
+                    "Project collection not found".into(),
+                ));
             }
             bound_collection_id = Some(pid);
         } else if let Some(pname) = args.project_name {

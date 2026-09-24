@@ -72,11 +72,7 @@ impl ApprovalService {
         {
             return Err(ApprovalError::Invalid);
         }
-        let _ = self
-            .grants
-            .effective_for_agent(context, &agent)
-            .await
-            .ok();
+        let _ = self.grants.effective_for_agent(context, &agent).await.ok();
         let mut tx = self.db.pool().begin().await?;
         let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1 AND user_id = $2)",
@@ -185,11 +181,13 @@ impl ApprovalService {
         .bind(now)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query("UPDATE action_proposals SET state = 'approved', updated_at = $2 WHERE id = $1")
-            .bind(proposal_id)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE action_proposals SET state = 'approved', updated_at = $2 WHERE id = $1",
+        )
+        .bind(proposal_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(Proposal {
             id: proposal_id,
@@ -225,7 +223,10 @@ impl ApprovalService {
         {
             return Err(ApprovalError::NotApprovable);
         }
-        if row.get::<Option<Uuid>, _>("consumed_execution_id").is_some() {
+        if row
+            .get::<Option<Uuid>, _>("consumed_execution_id")
+            .is_some()
+        {
             return Err(ApprovalError::Consumed);
         }
         if row.get::<DateTime<Utc>, _>("expires_at") <= now {
@@ -234,13 +235,11 @@ impl ApprovalService {
         if row.get::<String, _>("state") != "approved" {
             return Err(ApprovalError::NotApprovable);
         }
-        sqlx::query(
-            "UPDATE action_approvals SET consumed_execution_id = $2 WHERE id = $1",
-        )
-        .bind(approval_id)
-        .bind(attempt_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE action_approvals SET consumed_execution_id = $2 WHERE id = $1")
+            .bind(approval_id)
+            .bind(attempt_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }

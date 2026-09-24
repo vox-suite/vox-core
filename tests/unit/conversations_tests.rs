@@ -42,8 +42,7 @@ fn test_verification_state_serialization() {
     let deserialized: VerificationState = serde_json::from_str(&serialized).unwrap();
     match deserialized {
         VerificationState::AwaitingName {
-            original_user_name,
-            ..
+            original_user_name, ..
         } => {
             assert_eq!(original_user_name, "Rahul");
         }

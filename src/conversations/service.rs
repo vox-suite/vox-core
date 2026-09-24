@@ -831,7 +831,10 @@ impl ConversationService {
             let conversation_id: Uuid = row.get("id");
             let user_id: Uuid = row.get("user_id");
             let result = (ConversationId(conversation_id), UserId(user_id));
-            self.conversation_cache.write().await.insert(cache_key, result);
+            self.conversation_cache
+                .write()
+                .await
+                .insert(cache_key, result);
             return Ok(result);
         }
 
@@ -852,7 +855,10 @@ impl ConversationService {
         let stored_user: Uuid = row.get("user_id");
         tx.commit().await?;
         let result = (ConversationId(row.get("id")), UserId(stored_user));
-        self.conversation_cache.write().await.insert(cache_key, result);
+        self.conversation_cache
+            .write()
+            .await
+            .insert(cache_key, result);
         Ok(result)
     }
 

@@ -20,7 +20,10 @@ use vox_core::{
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
 };
 
-pub async fn run_worker(config: Config, cancellation: CancellationToken) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_worker(
+    config: Config,
+    cancellation: CancellationToken,
+) -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::connect(&config.database_url)
         .await
         .expect("Vox Core database is unavailable");

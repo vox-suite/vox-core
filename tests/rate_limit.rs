@@ -123,10 +123,7 @@ async fn rate_limiting_allows_requests_within_limit_and_attaches_headers() {
 
     let body_bytes = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(
-        json["error"],
-        "Too many requests. Please try again later."
-    );
+    assert_eq!(json["error"], "Too many requests. Please try again later.");
 }
 
 #[tokio::test]

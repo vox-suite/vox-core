@@ -1,3 +1,11 @@
+use axum::{
+    Json,
+    extract::{Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use serde_json::json;
 /**
 * Rate limiting middleware and IP tracking for HTTP endpoints.
 */
@@ -6,14 +14,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use axum::{
-    extract::{Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
-    middleware::Next,
-    response::{IntoResponse, Response},
-    Json,
-};
-use serde_json::json;
 
 #[derive(Clone, Debug)]
 pub struct RateLimitConfig {
@@ -51,7 +51,10 @@ pub fn client_ip(headers: &HeaderMap) -> String {
             return trimmed.to_string();
         }
     }
-    if let Some(cf_ip) = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()) {
+    if let Some(cf_ip) = headers
+        .get("cf-connecting-ip")
+        .and_then(|v| v.to_str().ok())
+    {
         let trimmed = cf_ip.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
@@ -103,10 +106,12 @@ impl RateLimiter {
             clients.retain(|_, state| state.last_seen > cutoff);
         }
 
-        let entry = clients.entry(key.to_string()).or_insert_with(|| ClientState {
-            timestamps: VecDeque::new(),
-            last_seen: now,
-        });
+        let entry = clients
+            .entry(key.to_string())
+            .or_insert_with(|| ClientState {
+                timestamps: VecDeque::new(),
+                last_seen: now,
+            });
 
         entry.last_seen = now;
 

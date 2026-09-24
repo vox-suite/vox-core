@@ -25,11 +25,11 @@ use vox_core::{
     host_trust::{HostContextRequest, HostTrustService, RegisterHostAppRequest},
     integration_registry::{IntegrationRegistry, SetIntegrationEnabledRequest},
     providers::{
-        ExpediaBookingOutcome, ExpediaLodgingError, ExpediaLodgingProposalDetails,
-        ExpediaLodgingService, MockExpediaProviderClient,
         EXPEDIA_CAPABILITY_LODGING_BOOK, EXPEDIA_CAPABILITY_LODGING_BOOK_SHORT,
         EXPEDIA_CAPABILITY_LODGING_MANAGE, EXPEDIA_CAPABILITY_LODGING_MANAGE_SHORT,
-        EXPEDIA_CAPABILITY_LODGING_SEARCH_SHORT, EXPEDIA_INTEGRATION_KEY,
+        EXPEDIA_CAPABILITY_LODGING_SEARCH_SHORT, EXPEDIA_INTEGRATION_KEY, ExpediaBookingOutcome,
+        ExpediaLodgingError, ExpediaLodgingProposalDetails, ExpediaLodgingService,
+        MockExpediaProviderClient,
     },
 };
 
@@ -138,8 +138,14 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
         .iter()
         .find(|c| c.external_key == EXPEDIA_CAPABILITY_LODGING_SEARCH_SHORT)
         .expect("lodging_search must be declared");
-    assert_eq!(search.effect, vox_core::integration_registry::CapabilityEffect::Read);
-    assert_eq!(search.optional_guarantees["capability_level"], "L1_catalog_read");
+    assert_eq!(
+        search.effect,
+        vox_core::integration_registry::CapabilityEffect::Read
+    );
+    assert_eq!(
+        search.optional_guarantees["capability_level"],
+        "L1_catalog_read"
+    );
 
     // 2. Book capability: L3 consequential write
     let book = decl
@@ -147,8 +153,14 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
         .iter()
         .find(|c| c.external_key == EXPEDIA_CAPABILITY_LODGING_BOOK_SHORT)
         .expect("lodging_book must be declared");
-    assert_eq!(book.effect, vox_core::integration_registry::CapabilityEffect::Write);
-    assert_eq!(book.optional_guarantees["capability_level"], "L3_consequential_write");
+    assert_eq!(
+        book.effect,
+        vox_core::integration_registry::CapabilityEffect::Write
+    );
+    assert_eq!(
+        book.optional_guarantees["capability_level"],
+        "L3_consequential_write"
+    );
     assert_eq!(book.optional_guarantees["idempotency_supported"], true);
     assert_eq!(book.optional_guarantees["reconciliation_supported"], true);
 
@@ -158,8 +170,14 @@ async fn integration_declaration_matches_approved_feasibility_finding() {
         .iter()
         .find(|c| c.external_key == EXPEDIA_CAPABILITY_LODGING_MANAGE_SHORT)
         .expect("lodging_manage must be declared");
-    assert_eq!(manage.effect, vox_core::integration_registry::CapabilityEffect::Write);
-    assert_eq!(manage.optional_guarantees["capability_level"], "L3_consequential_write");
+    assert_eq!(
+        manage.effect,
+        vox_core::integration_registry::CapabilityEffect::Write
+    );
+    assert_eq!(
+        manage.optional_guarantees["capability_level"],
+        "L3_consequential_write"
+    );
     assert_eq!(manage.optional_guarantees["cancellation_supported"], true);
 }
 
@@ -280,7 +298,9 @@ async fn exact_proposal_and_single_use_approval_lifecycle() {
         .approve(&context, proposal.id, proposal.details.clone(), now)
         .await
         .unwrap();
-    let approval_id = approved_proposal.approval_id.expect("approval_id must exist");
+    let approval_id = approved_proposal
+        .approval_id
+        .expect("approval_id must exist");
 
     // 4. Executing booking with valid approval succeeds
     let idempotency_key = format!("affil-ref-{}", Uuid::new_v4());
@@ -418,7 +438,12 @@ async fn distinct_provider_authentication_flow() {
 
     let idempotency_key = format!("affil-3ds-{}", Uuid::new_v4());
     let outcome = write_service
-        .execute_booking(&context, approved.approval_id.unwrap(), &idempotency_key, now)
+        .execute_booking(
+            &context,
+            approved.approval_id.unwrap(),
+            &idempotency_key,
+            now,
+        )
         .await
         .unwrap();
 
@@ -548,7 +573,12 @@ async fn authoritative_cancellation_and_refund_accounting() {
 
     let idempotency_key = format!("affil-cancel-{}", Uuid::new_v4());
     let booking = write_service
-        .execute_booking(&context, approved.approval_id.unwrap(), &idempotency_key, now)
+        .execute_booking(
+            &context,
+            approved.approval_id.unwrap(),
+            &idempotency_key,
+            now,
+        )
         .await
         .unwrap();
 
@@ -678,7 +708,12 @@ async fn timeout_and_unknown_outcome_reconciliation() {
 
     // 1. Dispatch encounters timeout -> Halts cleanly into Reconciling without failing or retrying blindly
     let outcome = write_service
-        .execute_booking(&context, approved.approval_id.unwrap(), &idempotency_key, now)
+        .execute_booking(
+            &context,
+            approved.approval_id.unwrap(),
+            &idempotency_key,
+            now,
+        )
         .await
         .unwrap();
 
@@ -944,10 +979,16 @@ async fn consequential_writes_http_endpoints_require_signed_host_assertion() {
         .method("POST")
         .uri("/v1/consequential-writes/propose")
         .header("content-type", "application/json")
-        .header("x-vox-host-credential", assertion.credential_id().to_string())
+        .header(
+            "x-vox-host-credential",
+            assertion.credential_id().to_string(),
+        )
         .header("x-vox-host-secret", assertion.secret())
         .header("x-vox-host-audience", assertion.audience())
-        .header("x-vox-host-timestamp", assertion.issued_at().timestamp().to_string())
+        .header(
+            "x-vox-host-timestamp",
+            assertion.issued_at().timestamp().to_string(),
+        )
         .header("x-vox-host-nonce", assertion.nonce().to_string())
         .header("x-vox-host-signature", assertion.signature())
         .body(Body::from(body_json.to_string()))
@@ -960,5 +1001,8 @@ async fn consequential_writes_http_endpoints_require_signed_host_assertion() {
         .await
         .unwrap();
     let resp_val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(resp_val["capability_external_key"], EXPEDIA_CAPABILITY_LODGING_BOOK);
+    assert_eq!(
+        resp_val["capability_external_key"],
+        EXPEDIA_CAPABILITY_LODGING_BOOK
+    );
 }

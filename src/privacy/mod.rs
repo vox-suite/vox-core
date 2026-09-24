@@ -1,0 +1,1000 @@
+/**
+ * Privacy, retention, deletion of platform-controlled history, and portable non-secret export/import.
+ *
+ * Implements PRD Section 11.19 (Retention and deletion) and 11.20 (Portability), satisfying E43 (vox-core#29):
+ * - FR-DAT-001/002/004/005/006/007: Declared retention and backup behavior, deletion of platform task history
+ *   with explicit disclosure of external carrier logs, remote operator logs, legal audit hold (up to 365 days),
+ *   and disaster recovery backups (up to 30 days). Local deletion is never represented as universal deletion or undo.
+ * - FR-PRT-001/002/003/004/005: Separate portable exports for config, preferences, and sensitive task/audit history.
+ *   Strictly excludes raw credentials, API secrets, passwords, active proposals, and reusable authority.
+ * - FR-PRT-006: Imported connections require renewed authorization on the destination deployment.
+ * - Historical action evidence remains fully interpretable after integration removal or deprecation.
+ */
+use crate::{db::Db, identity::ResolvedUserContext};
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::Row;
+use uuid::Uuid;
+
+pub const CANONICAL_DELETION_DISCLOSURE: &str = "Platform task entries and conversation turns are removed from active databases. \
+    External service records (e.g. Amazon, Expedia, Uber, Twilio carrier receipts), \
+    remote operator logs, legal audit hold retention (up to 365 days), and disaster recovery backups \
+    (up to 30 days) are beyond immediate platform deletion. Deleting task history does not cancel or \
+    refund completed external transactions.";
+
+pub const PREFERENCE_AUTHORITY_DISCLAIMER: &str = "User preference is advisory context only. It confers no execution authority. \
+    Provider currency, timezone, and inventory facts remain strictly authoritative.";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeclaredRetentionPolicy {
+    pub task_history_retention_days: u32,
+    pub audit_retention_days: u32,
+    pub backup_window_days: u32,
+    pub temporary_context_retention_hours: u32,
+    pub external_limitations_disclosure: String,
+}
+
+impl Default for DeclaredRetentionPolicy {
+    fn default() -> Self {
+        Self {
+            task_history_retention_days: 90,
+            audit_retention_days: 365,
+            backup_window_days: 30,
+            temporary_context_retention_hours: 24,
+            external_limitations_disclosure: CANONICAL_DELETION_DISCLOSURE.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeleteHistoryResult {
+    pub deleted_tasks_count: usize,
+    pub deleted_conversations_count: usize,
+    pub disclosure: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PruneResult {
+    pub pruned_tasks_count: usize,
+    pub pruned_conversations_count: usize,
+    pub pruned_jobs_count: usize,
+    pub retention_cutoff: DateTime<Utc>,
+    pub audit_hold_cutoff: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedAgentDefinition {
+    pub external_key: String,
+    pub display_name: String,
+    pub description: String,
+    pub requested_capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedIntegrationDeclaration {
+    pub external_key: String,
+    pub display_name: String,
+    pub protocol: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedConnectionDeclaration {
+    pub integration_key: String,
+    pub account_display_id: Option<String>,
+    pub credential_custody: String,
+    pub requires_renewed_authorization: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedConfig {
+    pub agents: Vec<ExportedAgentDefinition>,
+    pub integrations: Vec<ExportedIntegrationDeclaration>,
+    pub connections: Vec<ExportedConnectionDeclaration>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExportedUserPreference {
+    pub category: String,
+    pub preference_key: String,
+    pub value: Value,
+    pub is_sensitive: bool,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub authority_disclaimer: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedCapabilityGrant {
+    pub agent_key: String,
+    pub integration_key: String,
+    pub capability_key: String,
+    pub state: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExportedPreferences {
+    pub preferences: Vec<ExportedUserPreference>,
+    pub capability_grants: Vec<ExportedCapabilityGrant>,
+    pub disclaimer: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExportedTask {
+    pub id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExportedExecution {
+    pub id: Uuid,
+    pub capability_key: String,
+    pub state: String,
+    pub provider_reference: Option<String>,
+    pub confirmation_evidence: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExportedAuditEvent {
+    pub cursor_id: i64,
+    pub event_type: String,
+    pub occurred_at: DateTime<Utc>,
+    pub summary_details: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExportedTasks {
+    pub tasks: Vec<ExportedTask>,
+    pub executions: Vec<ExportedExecution>,
+    pub audit_events: Vec<ExportedAuditEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PortableExportBundle {
+    pub export_id: Uuid,
+    pub schema_version: String,
+    pub generated_at: DateTime<Utc>,
+    pub categories: Vec<String>,
+    pub disclosure: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<ExportedConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferences: Option<ExportedPreferences>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<ExportedTasks>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PortableExportResponse {
+    pub export_id: Uuid,
+    pub download_url: String,
+    pub categories: Vec<String>,
+    pub generated_at: DateTime<Utc>,
+    pub disclosure: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ImportResult {
+    pub imported_preferences_count: usize,
+    pub imported_connections_count: usize,
+    pub status: String,
+    pub disclosure: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct HistoricalActionEvidence {
+    pub execution_id: Uuid,
+    pub proposal_id: Option<Uuid>,
+    pub capability_external_key: String,
+    pub proposal_details: Option<Value>,
+    pub state: String,
+    pub provider_reference: Option<String>,
+    pub confirmation_evidence: Option<Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub integration_state: String,
+}
+
+#[derive(Clone)]
+pub struct PrivacyService {
+    db: Db,
+    policy: DeclaredRetentionPolicy,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PrivacyError {
+    #[error("privacy request invalid: {0}")]
+    Invalid(String),
+    #[error("export not found")]
+    NotFound,
+    #[error("unauthorized")]
+    Unauthorized,
+    #[error("prohibited export data detected: {0}")]
+    ProhibitedData(String),
+    #[error("privacy storage unavailable: {0}")]
+    Database(#[from] sqlx::Error),
+}
+
+impl PrivacyService {
+    pub fn new(db: Db, policy: Option<DeclaredRetentionPolicy>) -> Self {
+        Self {
+            db,
+            policy: policy.unwrap_or_default(),
+        }
+    }
+
+    pub fn retention_policy(&self) -> &DeclaredRetentionPolicy {
+        &self.policy
+    }
+
+    /// Deletes platform-controlled task history and conversation records for the authenticated user context.
+    /// Preserves audit records for mandatory regulatory/legal hold.
+    /// Discloses external service records, remote operators, audit hold, and 30-day backups.
+    pub async fn delete_task_history(
+        &self,
+        context: &ResolvedUserContext,
+        delete_conversations: bool,
+    ) -> Result<DeleteHistoryResult, PrivacyError> {
+        let mut tx = self.db.pool().begin().await?;
+
+        // 1. Delete associated jobs for tasks belonging to user
+        let deleted_jobs =
+            sqlx::query("DELETE FROM jobs WHERE user_id = $1 OR user_context_id = $2")
+                .bind(context.user_id.0)
+                .bind(context.id.0)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+        // 2. Delete tasks belonging to user
+        let deleted_tasks =
+            sqlx::query("DELETE FROM tasks WHERE user_id = $1 OR user_context_id = $2")
+                .bind(context.user_id.0)
+                .bind(context.id.0)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+        let mut deleted_convs = 0;
+        if delete_conversations {
+            // Delete messages in user's conversations
+            sqlx::query(
+                "DELETE FROM messages WHERE conversation_id IN (
+                    SELECT id FROM conversations WHERE user_id = $1 OR user_context_id = $2
+                )",
+            )
+            .bind(context.user_id.0)
+            .bind(context.id.0)
+            .execute(&mut *tx)
+            .await?;
+
+            // Delete conversations
+            deleted_convs =
+                sqlx::query("DELETE FROM conversations WHERE user_id = $1 OR user_context_id = $2")
+                    .bind(context.user_id.0)
+                    .bind(context.id.0)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected() as usize;
+        }
+
+        // Note: audit_events are preserved for the mandatory legal hold window (audit_retention_days).
+        // Under FR-AUD-009 & FR-DAT-006, audit events maintain evidence of actor, action, and outcome,
+        // while the user's active task entries and conversation turns are removed.
+
+        tx.commit().await?;
+
+        tracing::info!(
+            user_id = %context.user_id.0,
+            user_context_id = %context.id.0,
+            deleted_tasks,
+            deleted_jobs,
+            deleted_convs,
+            "Executed platform-controlled task history deletion"
+        );
+
+        Ok(DeleteHistoryResult {
+            deleted_tasks_count: deleted_tasks,
+            deleted_conversations_count: deleted_convs,
+            disclosure: self.policy.external_limitations_disclosure.clone(),
+        })
+    }
+
+    /// Prune tasks and jobs older than the declared retention policy cutoff.
+    /// Honors mandatory audit retention hold (does not touch audit events younger than audit_retention_days).
+    pub async fn apply_retention_prune(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<PruneResult, PrivacyError> {
+        let task_cutoff = now - Duration::days(self.policy.task_history_retention_days as i64);
+        let audit_cutoff = now - Duration::days(self.policy.audit_retention_days as i64);
+
+        let mut tx = self.db.pool().begin().await?;
+
+        // Prune completed/failed/cancelled jobs older than task_cutoff
+        let pruned_jobs =
+            sqlx::query("DELETE FROM jobs WHERE completed_at IS NOT NULL AND completed_at < $1")
+                .bind(task_cutoff)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+        // Prune completed/failed/cancelled tasks older than task_cutoff
+        let pruned_tasks = sqlx::query(
+            "DELETE FROM tasks WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < $1",
+        )
+        .bind(task_cutoff)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as usize;
+
+        // Prune inactive conversations older than task_cutoff
+        let pruned_convs = sqlx::query("DELETE FROM conversations WHERE updated_at < $1")
+            .bind(task_cutoff)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
+
+        // Prune audit events strictly older than the legal audit hold window
+        sqlx::query("DELETE FROM audit_events WHERE occurred_at < $1")
+            .bind(audit_cutoff)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        Ok(PruneResult {
+            pruned_tasks_count: pruned_tasks,
+            pruned_conversations_count: pruned_convs,
+            pruned_jobs_count: pruned_jobs,
+            retention_cutoff: task_cutoff,
+            audit_hold_cutoff: audit_cutoff,
+        })
+    }
+
+    /// Generates a documented portable export bundle for the selected categories.
+    /// Strictly excludes credentials, API tokens, passwords, active action proposals, and active approvals.
+    pub async fn generate_portable_export(
+        &self,
+        context: &ResolvedUserContext,
+        categories: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<PortableExportBundle, PrivacyError> {
+        if categories.is_empty() {
+            return Err(PrivacyError::Invalid(
+                "at least one category required".into(),
+            ));
+        }
+
+        let export_id = Uuid::new_v4();
+        let mut bundle = PortableExportBundle {
+            export_id,
+            schema_version: "1.0".to_string(),
+            generated_at: now,
+            categories: categories.to_vec(),
+            disclosure: self.policy.external_limitations_disclosure.clone(),
+            config: None,
+            preferences: None,
+            tasks: None,
+        };
+
+        for cat in categories {
+            match cat.as_str() {
+                "config" => {
+                    let config = self.export_config(context).await?;
+                    bundle.config = Some(config);
+                }
+                "preferences" => {
+                    let preferences = self.export_preferences(context).await?;
+                    bundle.preferences = Some(preferences);
+                }
+                "tasks" => {
+                    let tasks = self.export_tasks(context).await?;
+                    bundle.tasks = Some(tasks);
+                }
+                other => {
+                    return Err(PrivacyError::Invalid(format!("unknown category: {other}")));
+                }
+            }
+        }
+
+        // Run automated canary scan: ensure no secrets, passwords, tokens, or active approvals leaked
+        let serialized = serde_json::to_value(&bundle)
+            .map_err(|e| PrivacyError::Invalid(format!("serialization error: {e}")))?;
+        Self::scan_for_prohibited_content(&serialized)?;
+
+        // Store export bundle metadata in database so it can be downloaded via get_export
+        let bundle_json = serde_json::to_string(&bundle)
+            .map_err(|e| PrivacyError::Invalid(format!("export encoding error: {e}")))?;
+
+        // Ensure table exists for caching generated exports
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS portable_exports (
+                id UUID PRIMARY KEY,
+                user_context_id UUID NOT NULL,
+                categories TEXT[] NOT NULL,
+                bundle_data JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                expires_at TIMESTAMPTZ NOT NULL
+            )",
+        )
+        .execute(self.db.pool())
+        .await?;
+
+        let expires_at = now + Duration::hours(24);
+        sqlx::query(
+            "INSERT INTO portable_exports (id, user_context_id, categories, bundle_data, created_at, expires_at)
+             VALUES ($1, $2, $3, $4::jsonb, $5, $6)",
+        )
+        .bind(export_id)
+        .bind(context.id.0)
+        .bind(categories)
+        .bind(&bundle_json)
+        .bind(now)
+        .bind(expires_at)
+        .execute(self.db.pool())
+        .await?;
+
+        Ok(bundle)
+    }
+
+    pub async fn get_export(
+        &self,
+        context: &ResolvedUserContext,
+        export_id: Uuid,
+    ) -> Result<PortableExportBundle, PrivacyError> {
+        let row = sqlx::query(
+            "SELECT bundle_data FROM portable_exports WHERE id = $1 AND user_context_id = $2 AND expires_at > now()",
+        )
+        .bind(export_id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(PrivacyError::NotFound)?;
+
+        let bundle_data: Value = row.get("bundle_data");
+        serde_json::from_value(bundle_data)
+            .map_err(|_| PrivacyError::Invalid("invalid export format".into()))
+    }
+
+    /// Imports portable preferences and configuration.
+    /// FR-PRT-006: All imported connections require fresh authorization on destination deployment.
+    /// Credentials and active approvals are strictly prohibited.
+    pub async fn import_portable_data(
+        &self,
+        context: &ResolvedUserContext,
+        bundle: &PortableExportBundle,
+    ) -> Result<ImportResult, PrivacyError> {
+        let raw_value = serde_json::to_value(bundle)
+            .map_err(|e| PrivacyError::Invalid(format!("parse error: {e}")))?;
+        Self::scan_for_prohibited_content(&raw_value)?;
+
+        let mut tx = self.db.pool().begin().await?;
+        let now = Utc::now();
+        let mut imported_prefs = 0;
+        let mut imported_conns = 0;
+
+        // 1. Import preferences if present
+        if let Some(ref prefs) = bundle.preferences {
+            for p in &prefs.preferences {
+                let is_sensitive = p.is_sensitive;
+                let confirmed_at = if is_sensitive { Some(now) } else { None };
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO user_preferences (
+                        user_context_id, category, preference_key, value, is_sensitive, confirmed_at, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                    ON CONFLICT (user_context_id, preference_key) DO UPDATE SET
+                        category = EXCLUDED.category,
+                        value = EXCLUDED.value,
+                        is_sensitive = EXCLUDED.is_sensitive,
+                        confirmed_at = EXCLUDED.confirmed_at,
+                        updated_at = EXCLUDED.updated_at
+                    "#,
+                )
+                .bind(context.id.0)
+                .bind(&p.category)
+                .bind(&p.preference_key)
+                .bind(&p.value)
+                .bind(is_sensitive)
+                .bind(confirmed_at)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+                imported_prefs += 1;
+            }
+        }
+
+        // 2. Import connections if present (FR-PRT-006: force authorization_state = 'pending' / requiring renewed authorization)
+        if let Some(ref cfg) = bundle.config {
+            for c in &cfg.connections {
+                // Find integration definition id by key
+                let integration_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM integration_definitions WHERE external_key = $1 LIMIT 1",
+                )
+                .bind(&c.integration_key)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+                if let Some(int_id) = integration_id {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO external_connections (
+                            user_context_id, integration_definition_id, account_display_id,
+                            credential_custody, authorization_state, authorized_capabilities, created_at
+                        ) VALUES ($1, $2, $3, $4, 'pending', '[]'::jsonb, $5)
+                        ON CONFLICT DO NOTHING
+                        "#,
+                    )
+                    .bind(context.id.0)
+                    .bind(int_id)
+                    .bind(&c.account_display_id)
+                    .bind(&c.credential_custody)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                    imported_conns += 1;
+                }
+            }
+        }
+
+        tx.commit().await?;
+
+        Ok(ImportResult {
+            imported_preferences_count: imported_prefs,
+            imported_connections_count: imported_conns,
+            status: "Imported successfully. All imported connections require fresh user authorization before use.".to_string(),
+            disclosure: self.policy.external_limitations_disclosure.clone(),
+        })
+    }
+
+    /// Returns historical action evidence for a completed or past execution,
+    /// proving evidence remains completely interpretable after an integration or extension is removed.
+    pub async fn get_historical_action_evidence(
+        &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+    ) -> Result<HistoricalActionEvidence, PrivacyError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                e.id AS execution_id,
+                e.action_proposal_id,
+                e.state,
+                e.provider_reference,
+                e.confirmation_evidence,
+                e.created_at,
+                e.updated_at,
+                p.capability,
+                p.details AS proposal_details
+            FROM executions e
+            LEFT JOIN action_proposals p ON p.id = e.action_proposal_id
+            WHERE e.id = $1 AND (e.user_id = $2 OR e.user_context_id = $3)
+            "#,
+        )
+        .bind(execution_id)
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(PrivacyError::NotFound)?;
+
+        let capability: String = row.get("capability");
+        let proposal_details: Option<Value> = row.get("proposal_details");
+
+        // Inspect lifecycle state of integration if known
+        let integration_state = if let Some(ref details) = proposal_details {
+            if let Some(ext_id_str) = details.get("remote_extension_id").and_then(|v| v.as_str()) {
+                if let Ok(ext_id) = Uuid::parse_str(ext_id_str) {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT lifecycle_state FROM remote_extensions WHERE id = $1",
+                    )
+                    .bind(ext_id)
+                    .fetch_optional(self.db.pool())
+                    .await?
+                    .unwrap_or_else(|| "removed".to_string())
+                } else {
+                    "historical".to_string()
+                }
+            } else {
+                "historical".to_string()
+            }
+        } else {
+            "historical".to_string()
+        };
+
+        Ok(HistoricalActionEvidence {
+            execution_id,
+            proposal_id: row.get("action_proposal_id"),
+            capability_external_key: capability,
+            proposal_details,
+            state: row.get("state"),
+            provider_reference: row.get("provider_reference"),
+            confirmation_evidence: row.get("confirmation_evidence"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+            integration_state,
+        })
+    }
+
+    // Helper functions for building partitioned exports
+    async fn export_config(
+        &self,
+        context: &ResolvedUserContext,
+    ) -> Result<ExportedConfig, PrivacyError> {
+        // 1. Agent definitions
+        let agent_rows = sqlx::query(
+            "SELECT external_key, display_name, purpose FROM agent_definitions WHERE enabled = true",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let agents = agent_rows
+            .into_iter()
+            .map(|r| ExportedAgentDefinition {
+                external_key: r.get("external_key"),
+                display_name: r.get("display_name"),
+                description: r.get("purpose"),
+                requested_capabilities: vec![],
+            })
+            .collect();
+
+        // 2. Integration declarations (declarations only - no secrets)
+        let int_rows = sqlx::query(
+            "SELECT external_key, display_name, protocol FROM integration_definitions WHERE enabled = true",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let integrations = int_rows
+            .into_iter()
+            .map(|r| ExportedIntegrationDeclaration {
+                external_key: r.get("external_key"),
+                display_name: r.get("display_name"),
+                protocol: r.get("protocol"),
+                capabilities: vec![],
+            })
+            .collect();
+
+        // 3. User connections (account references only - strictly NO credentials)
+        let conn_rows = sqlx::query(
+            r#"
+            SELECT i.external_key, c.account_display_id, c.credential_custody
+            FROM external_connections c
+            JOIN integration_definitions i ON i.id = c.integration_definition_id
+            WHERE c.user_context_id = $1
+            "#,
+        )
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let connections = conn_rows
+            .into_iter()
+            .map(|r| ExportedConnectionDeclaration {
+                integration_key: r.get("external_key"),
+                account_display_id: r.get("account_display_id"),
+                credential_custody: r.get("credential_custody"),
+                requires_renewed_authorization: true,
+            })
+            .collect();
+
+        Ok(ExportedConfig {
+            agents,
+            integrations,
+            connections,
+        })
+    }
+
+    async fn export_preferences(
+        &self,
+        context: &ResolvedUserContext,
+    ) -> Result<ExportedPreferences, PrivacyError> {
+        let pref_rows = sqlx::query(
+            r#"
+            SELECT category, preference_key, value, is_sensitive, confirmed_at
+            FROM user_preferences
+            WHERE user_context_id = $1
+            ORDER BY category ASC, preference_key ASC
+            "#,
+        )
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let preferences = pref_rows
+            .into_iter()
+            .map(|r| ExportedUserPreference {
+                category: r.get("category"),
+                preference_key: r.get("preference_key"),
+                value: r.get("value"),
+                is_sensitive: r.get("is_sensitive"),
+                confirmed_at: r.get("confirmed_at"),
+                authority_disclaimer: PREFERENCE_AUTHORITY_DISCLAIMER.to_string(),
+            })
+            .collect();
+
+        let grant_rows = sqlx::query(
+            r#"
+            SELECT a.external_key AS agent_key, i.external_key AS integration_key,
+                   c.external_key AS capability_key, g.state
+            FROM agent_capability_grants g
+            JOIN agent_definitions a ON a.id = g.agent_definition_id
+            JOIN integration_capability_declarations c ON c.id = g.integration_capability_declaration_id
+            JOIN integration_definitions i ON i.id = c.integration_definition_id
+            WHERE g.user_context_id = $1
+            "#,
+        )
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let capability_grants = grant_rows
+            .into_iter()
+            .map(|r| ExportedCapabilityGrant {
+                agent_key: r.get("agent_key"),
+                integration_key: r.get("integration_key"),
+                capability_key: r.get("capability_key"),
+                state: r.get("state"),
+            })
+            .collect();
+
+        Ok(ExportedPreferences {
+            preferences,
+            capability_grants,
+            disclaimer: PREFERENCE_AUTHORITY_DISCLAIMER.to_string(),
+        })
+    }
+
+    async fn export_tasks(
+        &self,
+        context: &ResolvedUserContext,
+    ) -> Result<ExportedTasks, PrivacyError> {
+        let task_rows = sqlx::query(
+            "SELECT id, title, status, created_at FROM tasks WHERE user_id = $1 OR user_context_id = $2 ORDER BY created_at DESC LIMIT 500",
+        )
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let tasks = task_rows
+            .into_iter()
+            .map(|r| ExportedTask {
+                id: r.get("id"),
+                title: r.get("title"),
+                status: r.get("status"),
+                created_at: r.get("created_at"),
+            })
+            .collect();
+
+        let exec_rows = sqlx::query(
+            r#"
+            SELECT e.id, p.capability, e.state, e.provider_reference, e.confirmation_evidence, e.created_at
+            FROM executions e
+            LEFT JOIN action_proposals p ON p.id = e.action_proposal_id
+            WHERE e.user_id = $1 OR e.user_context_id = $2
+            ORDER BY e.created_at DESC LIMIT 500
+            "#,
+        )
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let executions = exec_rows
+            .into_iter()
+            .map(|r| ExportedExecution {
+                id: r.get("id"),
+                capability_key: r.get::<Option<String>, _>("capability").unwrap_or_default(),
+                state: r.get("state"),
+                provider_reference: r.get("provider_reference"),
+                confirmation_evidence: r.get("confirmation_evidence"),
+                created_at: r.get("created_at"),
+            })
+            .collect();
+
+        let audit_rows = sqlx::query(
+            "SELECT cursor_id, event_type, occurred_at, details FROM audit_events WHERE user_id = $1 OR user_context_id = $2 ORDER BY cursor_id DESC LIMIT 500",
+        )
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let audit_events = audit_rows
+            .into_iter()
+            .map(|r| ExportedAuditEvent {
+                cursor_id: r.get("cursor_id"),
+                event_type: r.get("event_type"),
+                occurred_at: r.get("occurred_at"),
+                summary_details: r.get("details"),
+            })
+            .collect();
+
+        Ok(ExportedTasks {
+            tasks,
+            executions,
+            audit_events,
+        })
+    }
+
+    /// Recursive canary scan preventing credentials, secret tokens, passwords, or active approvals from escaping.
+    pub fn scan_for_prohibited_content(value: &Value) -> Result<(), PrivacyError> {
+        match value {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    let lower = k.to_ascii_lowercase();
+                    // Prohibited key patterns
+                    if lower.contains("secret")
+                        || lower.contains("password")
+                        || lower.contains("token")
+                        || (lower.contains("credential") && k != "credential_custody")
+                        || lower.contains("private_key")
+                        || lower.contains("session_id")
+                        || (lower.contains("approval") && !lower.contains("summary"))
+                    {
+                        return Err(PrivacyError::ProhibitedData(format!(
+                            "prohibited key '{k}' detected in export"
+                        )));
+                    }
+                    Self::scan_for_prohibited_content(v)?;
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    Self::scan_for_prohibited_content(v)?;
+                }
+            }
+            Value::String(s) => {
+                let lower = s.to_ascii_lowercase();
+                if lower.starts_with("bearer ")
+                    || lower.starts_with("sk_live_")
+                    || lower.starts_with("eyj")
+                {
+                    return Err(PrivacyError::ProhibitedData(
+                        "credential or token value detected in export payload".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn retention_policy_defaults_match_prd_and_disclose_limits() {
+        let policy = DeclaredRetentionPolicy::default();
+        assert_eq!(policy.task_history_retention_days, 90);
+        assert_eq!(policy.audit_retention_days, 365);
+        assert_eq!(policy.backup_window_days, 30);
+        assert_eq!(policy.temporary_context_retention_hours, 24);
+
+        assert!(policy.external_limitations_disclosure.contains("365 days"));
+        assert!(policy.external_limitations_disclosure.contains("30 days"));
+        assert!(
+            policy
+                .external_limitations_disclosure
+                .contains("does not cancel or refund")
+        );
+        assert!(
+            policy
+                .external_limitations_disclosure
+                .contains("remote operator logs")
+        );
+    }
+
+    #[test]
+    fn preference_disclaimer_confers_no_authority() {
+        assert!(PREFERENCE_AUTHORITY_DISCLAIMER.contains("confers no execution authority"));
+        assert!(PREFERENCE_AUTHORITY_DISCLAIMER.contains("strictly authoritative"));
+    }
+
+    #[test]
+    fn canary_scan_rejects_credential_like_keys_and_tokens() {
+        // 1. Secret keys
+        let secret_payload = json!({
+            "config": {
+                "api_secret": "my-secret"
+            }
+        });
+        assert!(PrivacyService::scan_for_prohibited_content(&secret_payload).is_err());
+
+        // 2. Passwords
+        let password_payload = json!({
+            "user": {
+                "password": "supersecretpassword"
+            }
+        });
+        assert!(PrivacyService::scan_for_prohibited_content(&password_payload).is_err());
+
+        // 3. Tokens
+        let token_payload = json!({
+            "connection": {
+                "access_token": "abc123"
+            }
+        });
+        assert!(PrivacyService::scan_for_prohibited_content(&token_payload).is_err());
+
+        // 4. Bearer tokens in strings
+        let bearer_payload = json!({
+            "header": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        });
+        assert!(PrivacyService::scan_for_prohibited_content(&bearer_payload).is_err());
+
+        // 5. Active approvals (cannot be exported/replayed)
+        let approval_payload = json!({
+            "approval_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        });
+        assert!(PrivacyService::scan_for_prohibited_content(&approval_payload).is_err());
+    }
+
+    #[test]
+    fn canary_scan_allows_clean_non_secret_portable_manifest() {
+        let clean_payload = json!({
+            "export_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+            "schema_version": "1.0",
+            "categories": ["config", "preferences"],
+            "disclosure": CANONICAL_DELETION_DISCLOSURE,
+            "config": {
+                "agents": [
+                    {
+                        "external_key": "general",
+                        "display_name": "General Assistant",
+                        "description": "Helpful assistant",
+                        "requested_capabilities": []
+                    }
+                ],
+                "integrations": [
+                    {
+                        "external_key": "uber",
+                        "display_name": "Uber",
+                        "protocol": "direct",
+                        "capabilities": ["estimate"]
+                    }
+                ],
+                "connections": [
+                    {
+                        "integration_key": "uber",
+                        "account_display_id": "user@example.com",
+                        "credential_custody": "platform_held",
+                        "requires_renewed_authorization": true
+                    }
+                ]
+            },
+            "preferences": {
+                "preferences": [
+                    {
+                        "category": "locale",
+                        "preference_key": "language",
+                        "value": "en-US",
+                        "is_sensitive": false,
+                        "confirmed_at": null,
+                        "authority_disclaimer": PREFERENCE_AUTHORITY_DISCLAIMER
+                    }
+                ],
+                "capability_grants": [
+                    {
+                        "agent_key": "general",
+                        "integration_key": "uber",
+                        "capability_key": "estimate",
+                        "state": "enabled"
+                    }
+                ],
+                "disclaimer": PREFERENCE_AUTHORITY_DISCLAIMER
+            }
+        });
+
+        assert!(PrivacyService::scan_for_prohibited_content(&clean_payload).is_ok());
+    }
+}
