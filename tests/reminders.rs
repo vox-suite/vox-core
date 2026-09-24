@@ -446,9 +446,52 @@ async fn http_reminder_endpoints_require_signed_host_assertions() {
         .body(Body::from(json!({ "host_context": host_req }).to_string()))
         .unwrap();
 
-    let cancel_resp = app.oneshot(cancel_req).await.unwrap();
+    let cancel_resp = app.clone().oneshot(cancel_req).await.unwrap();
     assert_eq!(cancel_resp.status(), StatusCode::OK);
     let cancel_bytes = axum::body::to_bytes(cancel_resp.into_body(), usize::MAX).await.unwrap();
     let cancel_val: serde_json::Value = serde_json::from_slice(&cancel_bytes).unwrap();
     assert_eq!(cancel_val["status"], "cancelled");
+
+    // Report delivery callback via HTTP
+    let callback_assertion = host_app
+        .credential
+        .sign_context_request(&host_req, Utc::now(), Uuid::new_v4())
+        .unwrap();
+
+    let callback_req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/reminders/{reminder_id}/delivery-callback"))
+        .header("content-type", "application/json")
+        .header(
+            "x-vox-host-credential",
+            callback_assertion.credential_id().to_string(),
+        )
+        .header("x-vox-host-secret", callback_assertion.secret())
+        .header("x-vox-host-audience", callback_assertion.audience())
+        .header(
+            "x-vox-host-timestamp",
+            callback_assertion.issued_at().timestamp().to_string(),
+        )
+        .header("x-vox-host-nonce", callback_assertion.nonce().to_string())
+        .header("x-vox-host-signature", callback_assertion.signature())
+        .body(Body::from(
+            json!({
+                "host_context": host_req,
+                "status": "delivered_to_channel",
+                "channel": "phone",
+                "destination": "+14155552671",
+                "provider_receipt_id": "CA1234567890abcdef",
+                "failure_reason": null,
+                "attempted_at": Utc::now().to_rfc3339()
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let callback_resp = app.oneshot(callback_req).await.unwrap();
+    assert_eq!(callback_resp.status(), StatusCode::CREATED);
+    let cb_bytes = axum::body::to_bytes(callback_resp.into_body(), usize::MAX).await.unwrap();
+    let cb_val: serde_json::Value = serde_json::from_slice(&cb_bytes).unwrap();
+    assert_eq!(cb_val["status"], "delivered_to_channel");
+    assert_eq!(cb_val["provider_receipt_id"], "CA1234567890abcdef");
 }

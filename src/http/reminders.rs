@@ -5,7 +5,8 @@ use super::{AppState, host_apps::assertion_from_headers};
 use crate::{
     host_trust::HostContextRequest,
     reminders::{
-        CreateReminderRequest, ReminderError, ReminderScheduleKind,
+        CreateReminderRequest, RecordDeliveryRequest, ReminderDeliveryStatus, ReminderError,
+        ReminderScheduleKind,
     },
 };
 use axum::{
@@ -259,6 +260,71 @@ pub async fn get_reminder_deliveries(
 
     match service.get_deliveries(&context, id).await {
         Ok(deliveries) => (StatusCode::OK, Json(deliveries)).into_response(),
+        Err(ReminderError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(ReminderError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RecordDeliveryApiRequest {
+    pub host_context: HostContextRequest,
+    pub status: ReminderDeliveryStatus,
+    pub channel: String,
+    pub destination: String,
+    pub provider_receipt_id: Option<String>,
+    pub failure_reason: Option<String>,
+    pub attempted_at: Option<DateTime<Utc>>,
+}
+
+pub async fn record_reminder_delivery(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<RecordDeliveryApiRequest>,
+) -> Response {
+    let Some(service) = state.reminders.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Some(trust) = state.host_trust.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let assertion = match assertion_from_headers(&headers) {
+        Ok(a) => a,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    let context = match trust
+        .resolve_authenticated_context(&assertion, &request.host_context, origin, Utc::now())
+        .await
+    {
+        Ok(c) => c,
+        Err(crate::host_trust::HostTrustError::InvalidRequest) => {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        Err(
+            crate::host_trust::HostTrustError::Database(_)
+            | crate::host_trust::HostTrustError::Identity(_),
+        ) => {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    let attempted_at = request.attempted_at.unwrap_or_else(Utc::now);
+
+    let domain_req = RecordDeliveryRequest {
+        reminder_id: id,
+        status: request.status,
+        channel: request.channel,
+        destination: request.destination,
+        provider_receipt_id: request.provider_receipt_id,
+        failure_reason: request.failure_reason,
+        attempted_at,
+    };
+
+    match service.record_delivery(&context, domain_req).await {
+        Ok(delivery) => (StatusCode::CREATED, Json(delivery)).into_response(),
         Err(ReminderError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(ReminderError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),

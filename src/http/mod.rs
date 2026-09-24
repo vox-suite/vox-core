@@ -461,6 +461,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/reminders/{id}/deliveries",
             post(reminders::get_reminder_deliveries),
         )
+        .route(
+            "/v1/reminders/{id}/delivery-callback",
+            post(reminders::record_reminder_delivery),
+        )
         .route("/v1/executions", post(execution::start))
         .route("/v1/executions/{id}", post(execution::get))
         .route("/v1/status-events", post(status::list))

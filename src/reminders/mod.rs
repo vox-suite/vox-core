@@ -286,6 +286,17 @@ pub fn compute_next_calendar(
     Ok(next_local.with_timezone(&Utc))
 }
 
+#[derive(Debug, Clone)]
+pub struct RecordDeliveryRequest {
+    pub reminder_id: Uuid,
+    pub status: ReminderDeliveryStatus,
+    pub channel: String,
+    pub destination: String,
+    pub provider_receipt_id: Option<String>,
+    pub failure_reason: Option<String>,
+    pub attempted_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub struct ReminderService {
     db: Db,
@@ -492,6 +503,71 @@ impl ReminderService {
         .await?;
 
         Ok(deliveries)
+    }
+
+    /// Records an external channel delivery outcome (e.g. from Bridge or provider callback).
+    pub async fn record_delivery(
+        &self,
+        context: &ResolvedUserContext,
+        request: RecordDeliveryRequest,
+    ) -> Result<ReminderDelivery, ReminderError> {
+        let reminder = self.get(context, request.reminder_id).await?;
+
+        let delivery = sqlx::query_as::<_, ReminderDelivery>(
+            r#"
+            INSERT INTO reminder_deliveries (
+                reminder_id, scheduled_for, attempted_at, status, channel, destination,
+                provider_receipt_id, failure_reason
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING *
+            "#,
+        )
+        .bind(reminder.id)
+        .bind(reminder.next_trigger_at.unwrap_or(request.attempted_at))
+        .bind(request.attempted_at)
+        .bind(request.status.as_str())
+        .bind(&request.channel)
+        .bind(&request.destination)
+        .bind(&request.provider_receipt_id)
+        .bind(&request.failure_reason)
+        .fetch_one(self.db.pool())
+        .await?;
+
+        // Update reminder state
+        match request.status {
+            ReminderDeliveryStatus::DeliveredToChannel => {
+                if reminder.schedule_kind == ReminderScheduleKind::OneTime.as_str() {
+                    sqlx::query(
+                        r#"
+                        UPDATE reminders
+                        SET status = 'delivered_to_channel', delivered_at = $1, last_attempt_at = $1, updated_at = now()
+                        WHERE id = $2
+                        "#,
+                    )
+                    .bind(request.attempted_at)
+                    .bind(reminder.id)
+                    .execute(self.db.pool())
+                    .await?;
+                }
+            }
+            ReminderDeliveryStatus::Failed => {
+                sqlx::query(
+                    r#"
+                    UPDATE reminders
+                    SET last_attempt_at = $1, failure_reason = $2, updated_at = now()
+                    WHERE id = $3
+                    "#,
+                )
+                .bind(request.attempted_at)
+                .bind(&request.failure_reason)
+                .bind(reminder.id)
+                .execute(self.db.pool())
+                .await?;
+            }
+            _ => {}
+        }
+
+        Ok(delivery)
     }
 }
 
