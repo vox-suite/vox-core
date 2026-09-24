@@ -5,6 +5,9 @@ fn webhook_endpoint_requires_plain_https() {
     assert!(webhook_endpoint("http://host.example/status").is_err());
     assert!(webhook_endpoint("https://user@host.example/status").is_err());
     assert!(webhook_endpoint("https://127.0.0.1/status").is_err());
+    assert!(webhook_endpoint("https://0.0.0.0/status").is_err());
+    assert!(webhook_endpoint("https://100.64.0.1/status").is_err());
+    assert!(webhook_endpoint("https://[::1]/status").is_err());
     assert!(webhook_endpoint("https://localhost/status").is_err());
 }
 #[test]

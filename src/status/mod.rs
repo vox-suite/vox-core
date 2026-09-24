@@ -12,7 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::{net::IpAddr, sync::Arc, time::Duration};
-use url::Url;
+use url::{Host, Url};
 use uuid::Uuid;
 
 mod secrets;
@@ -462,23 +462,29 @@ impl WebhookTransport for PublicHttpsWebhookTransport {
     async fn post(&self, request: WebhookRequest) -> Option<u16> {
         webhook_endpoint(&request.endpoint).ok()?;
         let url = Url::parse(&request.endpoint).ok()?;
-        let host = url.host_str()?;
+        let host = url.host()?;
         let port = url.port_or_known_default()?;
-        let address = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::lookup_host((host, port)),
-        )
-        .await
-        .ok()?
-        .ok()?
-        .find(|address| public_ip(address.ip()))?;
-        let client = reqwest::Client::builder()
+        let mut client = reqwest::Client::builder()
             .no_proxy()
-            .resolve(host, address)
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
-            .build()
-            .ok()?;
+            .timeout(Duration::from_secs(10));
+        match host {
+            Host::Domain(domain) => {
+                let address = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::net::lookup_host((domain, port)),
+                )
+                .await
+                .ok()?
+                .ok()?
+                .find(|address| public_ip(address.ip()))?;
+                client = client.resolve(domain, address);
+            }
+            Host::Ipv4(ip) if public_ip(IpAddr::V4(ip)) => {}
+            Host::Ipv6(ip) if public_ip(IpAddr::V6(ip)) => {}
+            _ => return None,
+        }
+        let client = client.build().ok()?;
         client
             .post(request.endpoint)
             .header("X-Vox-Signature-Version", "v1")
@@ -707,12 +713,10 @@ fn webhook_endpoint(value: &str) -> Result<String, StatusError> {
     if parsed.scheme() != "https"
         || !parsed.username().is_empty()
         || parsed.password().is_some()
-        || parsed.host_str().is_none_or(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(|ip| match ip {
-                    IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-                    IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),
-                })
+        || parsed.host().is_none_or(|host| match host {
+            Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+            Host::Ipv4(ip) => !public_ip(IpAddr::V4(ip)),
+            Host::Ipv6(ip) => !public_ip(IpAddr::V6(ip)),
         })
     {
         return Err(StatusError::Invalid);
