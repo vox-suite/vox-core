@@ -264,3 +264,195 @@ async fn cross_context_isolation_prevents_unauthorized_deletion_and_export() {
         .await;
     assert!(stranger_fetch.is_err());
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn historical_action_evidence_remains_interpretable_after_integration_removed() {
+    let db = setup().await;
+    let (deployment_key, owner, _, _) = host(&db, "hist-user").await;
+    let now = Utc::now();
+
+    let registry = vox_core::integration_registry::IntegrationRegistry::new(db.clone());
+    registry
+        .register(vox_core::integration_registry::RegisterIntegrationRequest {
+            deployment_external_key: deployment_key.clone(),
+            external_key: "ephemeral_svc".into(),
+            protocol: vox_core::integration_registry::IntegrationProtocol::Direct,
+            display_name: "Ephemeral Service".into(),
+            declaration_version: 1,
+            capabilities: vec![vox_core::integration_registry::CapabilityDeclaration {
+                external_key: "action".into(),
+                effect: vox_core::integration_registry::CapabilityEffect::Write,
+                access_needs: vec![],
+                data_recipients: vec![],
+                regions: vec![],
+                failure_modes: vec![],
+                optional_guarantees: serde_json::json!({}),
+            }],
+        })
+        .await
+        .unwrap();
+    registry
+        .set_enabled(vox_core::integration_registry::SetIntegrationEnabledRequest {
+            deployment_external_key: deployment_key.clone(),
+            external_key: "ephemeral_svc".into(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+
+    let agents = vox_core::agent_registry::AgentRegistry::new(db.clone());
+    agents
+        .register(vox_core::agent_registry::RegisterAgentDefinitionRequest {
+            deployment_external_key: deployment_key.clone(),
+            external_key: "bot".into(),
+            purpose: "actions".into(),
+            requested_capability_categories: vec!["ephemeral_svc.action".into()],
+        })
+        .await
+        .unwrap();
+    agents
+        .select(vox_core::agent_registry::SelectAgentRequest {
+            deployment_external_key: deployment_key.clone(),
+            agent_external_key: "bot".into(),
+            model_configuration: vox_core::agent_registry::ModelConfigurationRequest {
+                model_adapter: "test".into(),
+                model: "model-e".into(),
+                configuration: serde_json::json!({}),
+            },
+        })
+        .await
+        .unwrap();
+
+    let connections = vox_core::connections::ConnectionService::new(db.clone());
+    let connection = connections
+        .record(
+            &owner,
+            vox_core::connections::AuthorizeConnectionRequest {
+                integration_external_key: "ephemeral_svc".into(),
+                external_account_reference: "acct_eph_1".into(),
+                account_display_id: None,
+                credential_custody: vox_core::connections::CredentialCustody::ExternalOperator,
+                authorization_state: vox_core::connections::AuthorizationState::Authorized,
+                authorized_capabilities: vec!["ephemeral_svc.action".into()],
+                expires_at: Some(now + chrono::Duration::hours(1)),
+                failure_code: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    vox_core::capability_grants::CapabilityGrantService::new(db.clone())
+        .grant(
+            &owner,
+            vox_core::capability_grants::CreateGrantRequest {
+                agent_external_key: "bot".into(),
+                connection_id: connection.id,
+                capability_external_key: "ephemeral_svc.action".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let task = DurableTaskService::new(db.clone())
+        .start(
+            &owner,
+            StartTaskRequest {
+                title: "Run ephemeral action".into(),
+                instruction: "Execute".into(),
+                agent_external_key: Some("bot".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let proposals = vox_core::approvals::ApprovalService::new(db.clone());
+    let proposal = proposals
+        .propose(
+            &owner,
+            vox_core::approvals::CreateProposalRequest {
+                task_id: task.id,
+                task_run_id: task.run_id,
+                agent_external_key: "bot".into(),
+                capability_external_key: "ephemeral_svc.action".into(),
+                details: serde_json::json!({
+                    "execution": vox_core::execution_policy::ExecutionIdentity {
+                        provider_external_key: "ephemeral_svc".into(),
+                        model_identifier: "model-e".into(),
+                        account_reference: "acct_eph_1".into(),
+                        connection_id: connection.id,
+                        price_amount_minor: 100,
+                        price_currency: "USD".into(),
+                    }
+                }),
+                expires_at: now + chrono::Duration::minutes(10),
+                replaces_proposal_id: None,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    let approval = proposals
+        .approve(&owner, proposal.id, proposal.details, now)
+        .await
+        .unwrap();
+
+    let coordinator = vox_core::execution::ExecutionCoordinator::new(db.clone());
+    let execution = coordinator
+        .start(
+            &owner,
+            vox_core::execution::StartExecutionRequest {
+                approval_id: approval.approval_id.unwrap(),
+                idempotency_key: format!("hist-exec-{}", Uuid::new_v4()),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    coordinator
+        .record_outcome(
+            &owner,
+            execution.id,
+            vox_core::execution::AdapterOutcome::Succeeded {
+                provider_reference: "prov-ref-hist-1".into(),
+                evidence: serde_json::json!({
+                    "receipt_number": "rcpt-hist-123",
+                    "status": "confirmed"
+                }),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    registry
+        .set_enabled(vox_core::integration_registry::SetIntegrationEnabledRequest {
+            deployment_external_key: deployment_key,
+            external_key: "ephemeral_svc".into(),
+            enabled: false,
+        })
+        .await
+        .unwrap();
+
+    let privacy = PrivacyService::new(db.clone(), None);
+    let export = privacy
+        .generate_portable_export(&owner, &["tasks".into()], now)
+        .await
+        .unwrap();
+
+    let tasks_export = export.tasks.expect("tasks must be included");
+    let recorded_exec = tasks_export
+        .executions
+        .iter()
+        .find(|e| e.id == execution.id)
+        .expect("historical execution must be found in export");
+
+    assert_eq!(recorded_exec.state, "succeeded");
+    assert_eq!(recorded_exec.provider_reference.as_deref(), Some("prov-ref-hist-1"));
+    assert_eq!(
+        recorded_exec.confirmation_evidence.as_ref().unwrap()["receipt_number"],
+        "rcpt-hist-123"
+    );
+}
