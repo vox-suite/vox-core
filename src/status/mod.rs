@@ -358,6 +358,7 @@ impl StatusService {
         let account_hash = hex::encode(Sha256::digest(
             trimmed(&incoming.external_account_reference, 512).ok_or(StatusError::Invalid)?,
         ));
+        let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
             "SELECT e.user_id, e.provider_reference, uc.id AS context_id, \
                     uc.deployment_id, uc.host_app_id, uc.organization_id, uc.host_user_id \
@@ -367,12 +368,13 @@ impl StatusService {
              JOIN user_contexts uc ON uc.id = e.user_context_id AND uc.user_id = e.user_id \
              JOIN integration_definitions i ON i.deployment_id = uc.deployment_id \
                AND i.external_key = c.provider_key AND i.state = 'enabled' \
-             WHERE e.id = $1 AND c.provider_key = $2 AND c.external_account_hash = $3",
+             WHERE e.id = $1 AND c.provider_key = $2 AND c.external_account_hash = $3
+             FOR UPDATE OF e FOR SHARE OF c, i",
         )
         .bind(incoming.execution_id)
         .bind(provider_key)
         .bind(&account_hash)
-        .fetch_optional(self.db.pool())
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(StatusError::NotFound)?;
         let bound_reference: Option<String> = row.get("provider_reference");
@@ -392,7 +394,6 @@ impl StatusService {
                 host_user_id: row.get("host_user_id"),
             },
         };
-        let mut tx = self.db.pool().begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO verified_integration_events
              (integration_external_key,external_account_hash,provider_event_id,execution_id)

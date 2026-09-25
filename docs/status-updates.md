@@ -65,13 +65,15 @@ state rather than treating a hint as authority.
 
 ## Provider-originated events
 
-There is no generic public “event callback” API. An enabled registered
-integration adapter verifies the provider request, constructs a
-`VerifiedIntegrationEvent`, and sends it through the internal
-`IntegrationExternalEventVerifier` boundary. Core then checks the exact
-existing execution, integration, enabled registration, connection, and user
-context; it persists the provider event’s replay identity before applying the
-normalized outcome through `ExecutionCoordinator`.
+There is no generic public “event callback” API. A provider adapter must
+verify the raw request before constructing a `VerifiedIntegrationEvent` and
+calling `StatusService::apply_verified_external_event`. This module defines
+the `IntegrationExternalEventVerifier` contract but does not wire a production
+provider verifier. Core checks the exact existing execution, integration,
+enabled registration, connection, and user context in one transaction; it
+persists the provider event’s replay identity before applying the normalized
+outcome through `ExecutionCoordinator`. Provider-specific ingestion and
+reordered-event acceptance remain open E25 work.
 
 Provider events cannot create a task, run, proposal, approval, grant,
 connection, or follow-up execution. Consequential follow-up remains subject to
