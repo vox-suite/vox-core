@@ -246,16 +246,34 @@ mod tests {
         let hub = DeviceHub::new();
         let (user, device) = (Uuid::new_v4(), Uuid::new_v4());
         let (t1, t2) = (Uuid::new_v4(), Uuid::new_v4());
-        assert_eq!(hub.confirm_command(user, device, "ls", t1), Confirmation::Proposed);
-        assert_eq!(hub.confirm_command(user, device, "ls", t1), Confirmation::AwaitingUser);
+        assert_eq!(
+            hub.confirm_command(user, device, "ls", t1),
+            Confirmation::Proposed
+        );
+        assert_eq!(
+            hub.confirm_command(user, device, "ls", t1),
+            Confirmation::AwaitingUser
+        );
         // A different command replaces the proposal instead of confirming.
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t2), Confirmation::Proposed);
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t2), Confirmation::AwaitingUser);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t2),
+            Confirmation::Proposed
+        );
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t2),
+            Confirmation::AwaitingUser
+        );
         assert!(hub.has_pending_command(user));
         let t3 = Uuid::new_v4();
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t3), Confirmation::Confirmed);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t3),
+            Confirmation::Confirmed
+        );
         assert!(!hub.has_pending_command(user));
         // Consumed: running it again needs a fresh confirmation.
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t3), Confirmation::Proposed);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t3),
+            Confirmation::Proposed
+        );
     }
 }

@@ -165,9 +165,7 @@ impl Tool for OpenTerminal {
         let device = resolve_device(db, self.user_id.0, args.device_hint.as_deref()).await?;
         let link = device_link(&self.hub, &device)?;
 
-        let response = link
-            .request("open_shell", json!({}), OPEN_TIMEOUT)
-            .await?;
+        let response = link.request("open_shell", json!({}), OPEN_TIMEOUT).await?;
         if let Some(err) = response_error(&response) {
             return Err(TerminalToolError::DeviceUnavailable(err));
         }
@@ -270,7 +268,11 @@ impl Tool for RunTerminalCommand {
         let link = device_link(&self.hub, &device)?;
 
         let mut response = link
-            .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
+            .request(
+                "run_command",
+                json!({ "command": command }),
+                COMMAND_TIMEOUT,
+            )
             .await;
 
         // Auto-open terminal session if none was open yet
@@ -279,7 +281,11 @@ impl Tool for RunTerminalCommand {
         {
             let _ = link.request("open_shell", json!({}), OPEN_TIMEOUT).await;
             response = link
-                .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
+                .request(
+                    "run_command",
+                    json!({ "command": command }),
+                    COMMAND_TIMEOUT,
+                )
                 .await;
         }
         let response = match response {
