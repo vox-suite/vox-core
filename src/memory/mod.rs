@@ -122,6 +122,15 @@ impl MemoryService {
         Ok(value)
     }
 
+    /// Re-derive the minimal Redis record (name + channel index) for a user
+    /// from Postgres. Call this after any write that reassigns a
+    /// `channel_identities` row (e.g. merging accounts on phone link) so the
+    /// `vox:channel:*` index doesn't keep pointing at the previous owner
+    /// until the next hourly reconciliation sweep.
+    pub async fn refresh_minimal_user(&self, user_id: UserId) -> Result<(), sqlx::Error> {
+        self.write_minimal_user(user_id, None).await
+    }
+
     async fn write_minimal_user(
         &self,
         user_id: UserId,

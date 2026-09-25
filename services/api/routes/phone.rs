@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 use vox_core::domain::identity::Actor;
+use vox_core::identity::UserId;
+use vox_core::memory::MemoryService;
+
+#[derive(Clone)]
+pub struct PhoneApiState {
+    pub pool: PgPool,
+    pub memory: MemoryService,
+}
 
 const MERGE_TABLES: &[&str] = &[
     "auth_identities",
@@ -38,9 +46,10 @@ pub struct LinkPhoneResponse {
 
 pub async fn link_phone(
     Extension(actor): Extension<Actor>,
-    State(pool): State<PgPool>,
+    State(state): State<PhoneApiState>,
     Json(payload): Json<LinkPhoneRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    let pool = &state.pool;
     let normalized: String = payload
         .phone_number
         .chars()
@@ -100,6 +109,16 @@ pub async fn link_phone(
     tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !matches!(existing_owner, Some(owner) if owner == actor.user_id) {
+        // The phone -> user Redis index is keyed by (channel, external_id), so
+        // refreshing the new owner overwrites any stale mapping left by a
+        // previous linked/anonymous owner without needing to touch their record.
+        let _ = state
+            .memory
+            .refresh_minimal_user(UserId(actor.user_id))
+            .await;
+    }
 
     Ok(Json(LinkPhoneResponse {
         user_id: actor.user_id,

@@ -54,8 +54,13 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
-    let mut legacy_state =
-        AppState::with_memory_and_jev(db.clone(), agent, memory, config.service_token, jev_client);
+    let mut legacy_state = AppState::with_memory_and_jev(
+        db.clone(),
+        agent,
+        memory.clone(),
+        config.service_token,
+        jev_client,
+    );
     if let Some(admin) = vox_core::http::admin::RedisAdmin::from_token_with_url(
         config.redis_url.as_deref().or(Some("redis://redis:6379")),
         std::env::var("VOX_ADMIN_TOKEN").ok(),
@@ -64,7 +69,7 @@ async fn main() {
     {
         legacy_state = legacy_state.with_admin(admin);
     }
-    let api_state = ApiState::new(legacy_state, db, device_hub);
+    let api_state = ApiState::new(legacy_state, db, device_hub, memory);
     let app = build_api_router(api_state);
 
     tracing::info!("Vox Core API listening on {}", config.bind_address);

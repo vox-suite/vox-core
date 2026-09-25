@@ -78,7 +78,7 @@ impl MemoryService {
             let delay = match result {
                 Ok(Ok(count)) => {
                     tracing::info!(count, "Synced minimal users to Redis");
-                    Duration::from_secs(86400)
+                    Duration::from_secs(3600)
                 }
                 _ => {
                     tracing::warn!("Minimal user cache sync failed; retrying in one minute");

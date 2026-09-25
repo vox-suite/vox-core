@@ -92,6 +92,8 @@ pub async fn run_worker(
         worker_id,
     );
 
+    tokio::spawn(memory.run_greeting_sync(cancellation.clone()));
+
     worker.run(cancellation).await?;
     Ok(())
 }

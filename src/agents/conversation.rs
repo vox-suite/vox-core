@@ -183,6 +183,10 @@ impl ConversationAgent {
                 client
                     .agent(&self.model)
                     .preamble(preamble)
+                    .tool(tools::profile::UpdateUserInfo::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                    ))
                     .default_max_turns(2)
                     .build()
             } else if is_voice {
@@ -193,6 +197,10 @@ impl ConversationAgent {
                         .tool(tools::web_search::WebSearch::new(
                             self.http.clone(),
                             self.exa_api_key.clone(),
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -206,6 +214,10 @@ impl ConversationAgent {
                         .tool(tools::google_maps::GetRoute::new(
                             self.http.clone(),
                             self.google_maps_api_key.clone(),
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -260,6 +272,10 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                        ))
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Device => client
@@ -275,6 +291,10 @@ impl ConversationAgent {
                             prompt.user_id,
                             self.device_hub.clone().unwrap_or_default(),
                             turn,
+                        ))
+                        .tool(tools::profile::UpdateUserInfo::new(
+                            self.db.clone(),
+                            prompt.user_id,
                         ))
                         .default_max_turns(6)
                         .build(),

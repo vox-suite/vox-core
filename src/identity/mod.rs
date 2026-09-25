@@ -285,12 +285,20 @@ impl IdentityService {
     pub async fn resolve(&self, identity: &ChannelIdentity) -> Result<UserId, sqlx::Error> {
         let channel = identity.channel.trim();
         let external_id = identity.external_id.trim();
+        // "phone" is stored digits-only (see services/api/routes/phone.rs link_phone)
+        // so an inbound call's "+"-prefixed E.164 id must be normalized the same
+        // way before it can ever match a number linked from the desktop/web app.
+        let stored_id = if channel == "phone" {
+            Self::normalize_phone(external_id)
+        } else {
+            external_id.to_string()
+        };
 
         if let Some(id) = sqlx::query_scalar::<_, Uuid>(
             "SELECT user_id FROM channel_identities WHERE channel = $1 AND normalized_external_id = $2 AND revoked_at IS NULL",
         )
         .bind(channel)
-        .bind(external_id)
+        .bind(&stored_id)
         .fetch_optional(self.db.pool())
         .await?
         {
@@ -326,7 +334,7 @@ impl IdentityService {
                     )
                     .bind(user_id)
                     .bind(channel)
-                    .bind(external_id)
+                    .bind(&stored_id)
                     .execute(&mut *tx)
                     .await?;
 
@@ -362,7 +370,7 @@ impl IdentityService {
         )
         .bind(new_user)
         .bind(channel)
-        .bind(external_id)
+        .bind(&stored_id)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -377,7 +385,7 @@ impl IdentityService {
                 "SELECT user_id FROM channel_identities WHERE channel = $1 AND normalized_external_id = $2 AND revoked_at IS NULL",
             )
             .bind(channel)
-            .bind(external_id)
+            .bind(&stored_id)
             .fetch_one(&mut *tx)
             .await?
         };

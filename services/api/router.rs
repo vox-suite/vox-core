@@ -18,7 +18,7 @@ use crate::{
         },
         events::ingest_batch,
         identity::get_me,
-        phone::link_phone,
+        phone::{PhoneApiState, link_phone},
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name},
         tasks::{create_task, delete_task, get_task, list_tasks, update_task},
@@ -92,7 +92,10 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let phone_routes = Router::new()
         .route("/v1/me/phone", post(link_phone))
-        .with_state(state.pool.clone());
+        .with_state(PhoneApiState {
+            pool: state.pool.clone(),
+            memory: state.memory.clone(),
+        });
 
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 

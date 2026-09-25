@@ -1,8 +1,25 @@
 /**
  * Canonical Redis key helpers for Vox Core.
  *
- * Redis holds only rebuildable, non-secret projections. PostgreSQL remains
- * authoritative. Host-app assertion nonces stay in-process memory (not Redis).
+ * Contract:
+ * - Redis holds only two key families (below), both rebuildable projections
+ *   of Postgres. Postgres is always authoritative; Redis is a read
+ *   optimization only. Nothing is ever written to Redis first.
+ * - No key carries a TTL. Entries live until explicitly overwritten or
+ *   deleted (`replace_users`'s SCAN+DEL, or a fresh SET on the same key).
+ *   This is deliberate cache-aside, not expiring cache — correctness
+ *   depends on every Postgres write that can change a user's name or
+ *   channel ownership also driving a Redis write (see `MemoryService`:
+ *   `set_user_name`, `refresh`, `refresh_minimal_user`, and the get_user_name
+ *   write-through-on-miss path).
+ * - Freshness is layered: (1) synchronous write-through on the mutations
+ *   above, (2) one-shot full rebuild at API process boot
+ *   (`services/api/main.rs`), (3) an hourly full clear+rebuild from Postgres
+ *   run by the worker (`MemoryService::run_greeting_sync`,
+ *   `src/memory/greetings.rs`) as a reconciliation backstop for drift the
+ *   write-through paths miss.
+ * - Host-app assertion nonces stay in-process memory (not Redis).
+ * - No secrets: values are a display name and channel identifiers only.
  */
 use crate::identity::UserId;
 use uuid::Uuid;
