@@ -2,7 +2,7 @@ name: vox
 
 services:
   redis:
-    image: redis:8-alpine
+    image: redis:8.2-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     restart: unless-stopped
     volumes:
