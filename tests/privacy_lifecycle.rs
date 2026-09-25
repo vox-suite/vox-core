@@ -293,11 +293,13 @@ async fn historical_action_evidence_remains_interpretable_after_integration_remo
         .await
         .unwrap();
     registry
-        .set_enabled(vox_core::integration_registry::SetIntegrationEnabledRequest {
-            deployment_external_key: deployment_key.clone(),
-            external_key: "ephemeral_svc".into(),
-            enabled: true,
-        })
+        .set_enabled(
+            vox_core::integration_registry::SetIntegrationEnabledRequest {
+                deployment_external_key: deployment_key.clone(),
+                external_key: "ephemeral_svc".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
 
@@ -428,11 +430,13 @@ async fn historical_action_evidence_remains_interpretable_after_integration_remo
         .unwrap();
 
     registry
-        .set_enabled(vox_core::integration_registry::SetIntegrationEnabledRequest {
-            deployment_external_key: deployment_key,
-            external_key: "ephemeral_svc".into(),
-            enabled: false,
-        })
+        .set_enabled(
+            vox_core::integration_registry::SetIntegrationEnabledRequest {
+                deployment_external_key: deployment_key,
+                external_key: "ephemeral_svc".into(),
+                enabled: false,
+            },
+        )
         .await
         .unwrap();
 
@@ -450,7 +454,10 @@ async fn historical_action_evidence_remains_interpretable_after_integration_remo
         .expect("historical execution must be found in export");
 
     assert_eq!(recorded_exec.state, "succeeded");
-    assert_eq!(recorded_exec.provider_reference.as_deref(), Some("prov-ref-hist-1"));
+    assert_eq!(
+        recorded_exec.provider_reference.as_deref(),
+        Some("prov-ref-hist-1")
+    );
     assert_eq!(
         recorded_exec.confirmation_evidence.as_ref().unwrap()["receipt_number"],
         "rcpt-hist-123"
