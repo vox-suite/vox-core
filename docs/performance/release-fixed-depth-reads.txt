@@ -1,0 +1,17 @@
+samples_per_concurrency=10000
+endpoint=get concurrency=1 ok=10000 errors=0 p50_ms=4.13 p75_ms=4.22 p90_ms=4.33 p95_ms=4.43 p99_ms=4.92 p99_9_ms=6.67 max_ms=11.76
+phase=get concurrency=1 queue_rows_before=97809 wall_ms=41759.65
+endpoint=status concurrency=1 ok=10000 errors=0 p50_ms=0.42 p75_ms=0.44 p90_ms=0.46 p95_ms=0.48 p99_ms=0.52 p99_9_ms=0.99 max_ms=1.38
+phase=status concurrency=1 queue_rows_before=97809 wall_ms=4401.54
+endpoint=get concurrency=10 ok=10000 errors=0 p50_ms=5.98 p75_ms=6.20 p90_ms=6.32 p95_ms=6.39 p99_ms=6.51 p99_9_ms=6.79 max_ms=6.85
+phase=get concurrency=10 queue_rows_before=97809 wall_ms=6154.40
+endpoint=status concurrency=10 ok=10000 errors=0 p50_ms=1.47 p75_ms=1.53 p90_ms=1.61 p95_ms=1.67 p99_ms=2.34 p99_9_ms=2.55 max_ms=2.61
+phase=status concurrency=10 queue_rows_before=97809 wall_ms=1608.50
+endpoint=get concurrency=50 ok=10000 errors=0 p50_ms=20.65 p75_ms=25.45 p90_ms=28.77 p95_ms=29.48 p99_ms=30.53 p99_9_ms=31.25 max_ms=31.36
+phase=get concurrency=50 queue_rows_before=97809 wall_ms=5814.79
+endpoint=status concurrency=50 ok=10000 errors=0 p50_ms=6.87 p75_ms=7.15 p90_ms=7.34 p95_ms=7.46 p99_ms=8.17 p99_9_ms=10.69 max_ms=10.85
+phase=status concurrency=50 queue_rows_before=97809 wall_ms=1516.02
+endpoint=get concurrency=100 ok=10000 errors=0 p50_ms=36.51 p75_ms=46.45 p90_ms=53.26 p95_ms=54.94 p99_ms=56.30 p99_9_ms=62.28 max_ms=67.02
+phase=get concurrency=100 queue_rows_before=97809 wall_ms=5549.67
+endpoint=status concurrency=100 ok=10000 errors=0 p50_ms=13.14 p75_ms=13.71 p90_ms=14.07 p95_ms=14.26 p99_ms=15.18 p99_9_ms=16.73 max_ms=16.91
+phase=status concurrency=100 queue_rows_before=97809 wall_ms=1456.05

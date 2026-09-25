@@ -1,0 +1,33 @@
+
+thread 'tokio-rt-worker' (789620) panicked at src/db/jobs.rs:78:47:
+called `Result::unwrap()` on an `Err` value: ColumnDecode { index: "\"payload_reference_id\"", source: UnexpectedNullError }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+handoff job_payload_reference_null=true claim_result=panic
+samples_per_concurrency=10000
+endpoint=stage_auth concurrency=1 ok=1000 errors=0 p50_ms=0.67 p75_ms=0.69 p90_ms=0.71 p95_ms=0.73 p99_ms=0.88 p99_9_ms=insufficient_n max_ms=1.12
+endpoint=stage_create concurrency=1 ok=1000 errors=0 p50_ms=0.45 p75_ms=0.50 p90_ms=0.62 p95_ms=0.64 p99_ms=0.71 p99_9_ms=insufficient_n max_ms=3.04
+endpoint=stage_get concurrency=1 ok=1000 errors=0 p50_ms=1.84 p75_ms=1.90 p90_ms=1.96 p95_ms=2.00 p99_ms=2.15 p99_9_ms=insufficient_n max_ms=2.86
+endpoint=get concurrency=1 ok=10000 errors=0 p50_ms=2.67 p75_ms=2.74 p90_ms=2.84 p95_ms=2.93 p99_ms=3.07 p99_9_ms=3.53 max_ms=4.53
+phase=get concurrency=1 queue_rows_before=57808 wall_ms=27018.20
+endpoint=status concurrency=1 ok=10000 errors=0 p50_ms=0.41 p75_ms=0.42 p90_ms=0.44 p95_ms=0.47 p99_ms=0.59 p99_9_ms=0.97 max_ms=2.75
+phase=status concurrency=1 queue_rows_before=57808 wall_ms=4259.18
+endpoint=submit concurrency=1 ok=10000 errors=0 p50_ms=0.62 p75_ms=0.65 p90_ms=0.67 p95_ms=0.69 p99_ms=0.74 p99_9_ms=1.07 max_ms=2.82
+phase=submit concurrency=1 queue_rows_before=57808 wall_ms=6407.42
+endpoint=get concurrency=10 ok=10000 errors=0 p50_ms=4.80 p75_ms=5.01 p90_ms=5.16 p95_ms=5.23 p99_ms=5.34 p99_9_ms=5.93 max_ms=6.44
+phase=get concurrency=10 queue_rows_before=67808 wall_ms=5008.75
+endpoint=status concurrency=10 ok=10000 errors=0 p50_ms=1.42 p75_ms=1.48 p90_ms=1.55 p95_ms=1.61 p99_ms=2.26 p99_9_ms=2.57 max_ms=3.53
+phase=status concurrency=10 queue_rows_before=67808 wall_ms=1554.03
+endpoint=submit concurrency=10 ok=10000 errors=0 p50_ms=2.53 p75_ms=3.02 p90_ms=3.31 p95_ms=3.46 p99_ms=3.94 p99_9_ms=5.81 max_ms=6.83
+phase=submit concurrency=10 queue_rows_before=67808 wall_ms=3464.31
+endpoint=get concurrency=50 ok=10000 errors=0 p50_ms=17.47 p75_ms=21.73 p90_ms=24.20 p95_ms=25.07 p99_ms=25.84 p99_9_ms=27.50 max_ms=28.89
+phase=get concurrency=50 queue_rows_before=77808 wall_ms=4934.34
+endpoint=status concurrency=50 ok=10000 errors=0 p50_ms=6.64 p75_ms=6.92 p90_ms=7.11 p95_ms=7.21 p99_ms=7.87 p99_9_ms=10.12 max_ms=10.29
+phase=status concurrency=50 queue_rows_before=77808 wall_ms=1470.82
+endpoint=submit concurrency=50 ok=10000 errors=0 p50_ms=11.33 p75_ms=13.75 p90_ms=15.15 p95_ms=15.65 p99_ms=17.00 p99_9_ms=18.69 max_ms=19.88
+phase=submit concurrency=50 queue_rows_before=77808 wall_ms=3244.48
+endpoint=get concurrency=100 ok=10000 errors=0 p50_ms=34.56 p75_ms=43.73 p90_ms=50.08 p95_ms=51.62 p99_ms=52.28 p99_9_ms=54.65 max_ms=54.96
+phase=get concurrency=100 queue_rows_before=87808 wall_ms=5210.15
+endpoint=status concurrency=100 ok=10000 errors=0 p50_ms=79.24 p75_ms=108.22 p90_ms=125.73 p95_ms=131.21 p99_ms=136.44 p99_9_ms=152.23 max_ms=161.90
+phase=status concurrency=100 queue_rows_before=87808 wall_ms=12725.81
+endpoint=submit concurrency=100 ok=10000 errors=0 p50_ms=22.40 p75_ms=27.20 p90_ms=30.05 p95_ms=31.07 p99_ms=37.15 p99_9_ms=53.45 max_ms=55.56
+phase=submit concurrency=100 queue_rows_before=87808 wall_ms=3243.05
