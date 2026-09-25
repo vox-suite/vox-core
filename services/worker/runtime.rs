@@ -5,7 +5,10 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vox_core::{
-    agents::{event_planner::GeminiEventPlanner, summarizer::GeminiSummarizer},
+    agents::{
+        event_planner::GeminiEventPlanner, sms_extractor::GeminiSmsExtractor,
+        summarizer::GeminiSummarizer,
+    },
     bridge_client::BridgeClient,
     config::Config,
     db::{Db, jobs::JobRepository},
@@ -16,6 +19,7 @@ use vox_core::{
     },
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
+    sms_ingestion::handler::SmsBatchHandler,
     status::{EncryptedWebhookSecretStore, StatusService},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
@@ -80,6 +84,8 @@ pub async fn run_worker(
     let mut task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
     task_executor = task_executor.with_outbound(outbound);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
+    let sms_extractor = Arc::new(GeminiSmsExtractor::new(&config));
+    let sms_batches = SmsBatchHandler::new(db.clone(), sms_extractor);
 
     let worker_id = Uuid::new_v4().to_string();
     let status_handle = if let Some(key) = config.status_webhook_key.as_deref() {
@@ -118,6 +124,7 @@ pub async fn run_worker(
         summaries,
         task_executor,
         wa_sweeper,
+        sms_batches,
         worker_id,
     );
 

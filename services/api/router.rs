@@ -22,7 +22,9 @@ use crate::{
         phone::{PhoneApiState, link_phone},
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name},
+        sms::submit_batch,
         tasks::{create_task, delete_task, get_task, list_tasks, update_task},
+        timeline::get_timeline,
     },
     state::ApiState,
 };
@@ -63,6 +65,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/schemas", post(create_schema_version))
         .route("/v1/schemas/{namespace}/{name}", get(get_schema_by_name))
         .with_state(state.schemas.clone());
+
+    let timeline_routes = Router::new()
+        .route("/v1/timeline", get(get_timeline))
+        .with_state(state.timeline.clone());
+
+    let sms_routes = Router::new()
+        .route("/v1/sms/batches", post(submit_batch))
+        .with_state(state.sms_ingestion.clone());
 
     let device_api_state = DeviceApiState {
         devices: state.devices.clone(),
@@ -110,6 +120,8 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(collection_routes)
         .merge(record_routes)
         .merge(schema_routes)
+        .merge(timeline_routes)
+        .merge(sms_routes)
         .merge(device_routes)
         .merge(device_socket_routes)
         .merge(event_routes)

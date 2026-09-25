@@ -11,10 +11,12 @@ use vox_core::{
     http::AppState,
     memory::MemoryService,
     realtime::{DeviceHub, UserEventHub},
+    sms_ingestion::SmsIngestionService,
     storage::{
         collections::CollectionRepository, devices::DeviceRepository, records::RecordRepository,
         schemas::SchemaRepository, tasks::TaskRepository,
     },
+    timeline::TimelineService,
 };
 
 #[derive(Clone)]
@@ -29,6 +31,8 @@ pub struct ApiState {
     pub device_hub: DeviceHub,
     pub memory: MemoryService,
     pub user_events: UserEventHub,
+    pub timeline: TimelineService,
+    pub sms_ingestion: SmsIngestionService,
 }
 
 impl ApiState {
@@ -51,6 +55,8 @@ impl ApiState {
         let records = RecordService::new(rec_repo, schema_repo.clone(), coll_repo);
         let schemas = SchemaService::new(schema_repo);
         let devices = DeviceService::new(device_repo);
+        let timeline = TimelineService::new(db.clone());
+        let sms_ingestion = SmsIngestionService::new(db.clone());
 
         Self {
             legacy,
@@ -63,6 +69,8 @@ impl ApiState {
             device_hub,
             memory,
             user_events,
+            timeline,
+            sms_ingestion,
         }
     }
 }
