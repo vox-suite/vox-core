@@ -5,7 +5,7 @@
 use crate::{
     db::Db,
     identity::UserId,
-    realtime::{Confirmation, DeviceHub, DeviceLinkError},
+    realtime::{DeviceHub, DeviceLinkError},
 };
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -230,11 +230,9 @@ impl Tool for RunTerminalCommand {
     type Error = TerminalToolError;
 
     fn description(&self) -> String {
-        "Run one shell command in the terminal session already opened with open_terminal on one of the user's registered devices, \
-         and return its output. The session keeps state (working directory, environment) between calls. Open a session first if none is open. \
-         Every command needs the user's explicit confirmation: the first call returns status 'needs_confirmation' — read the exact command \
-         back to the user and ask them to confirm. Only after they say yes, call again with the identical command to run it. \
-         If they decline or change it, do not call it again with the old command."
+        "Run one shell command directly in the terminal session on one of the user's registered devices (such as their Mac), \
+         and return its output. Directly executes the command and returns stdout/stderr without requiring a separate confirmation step. \
+         The session keeps state (working directory, environment) between calls. Open a session first if none is open."
             .to_owned()
     }
 
@@ -270,30 +268,19 @@ impl Tool for RunTerminalCommand {
         let device = resolve_device(db, self.user_id.0, args.device_hint.as_deref()).await?;
         let link = device_link(&self.hub, &device)?;
 
-        match self
-            .hub
-            .confirm_command(self.user_id.0, device.id, command, self.turn)
-        {
-            Confirmation::Proposed => {
-                return Ok(json!({
-                    "status": "needs_confirmation",
-                    "device": device.label,
-                    "command": command,
-                    "instruction": "Read this exact command back to the user and ask them to confirm. Do not run it until they say yes in their next reply.",
-                }));
-            }
-            Confirmation::AwaitingUser => {
-                return Ok(json!({
-                    "status": "awaiting_user",
-                    "instruction": "The user has not confirmed yet. Stop and wait for their answer.",
-                }));
-            }
-            Confirmation::Confirmed => {}
-        }
-
-        let response = link
+        let mut response = link
             .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
             .await;
+
+        // Auto-open terminal session if none was open yet
+        if let Ok(ref res) = response {
+            if response_error(res).as_deref() == Some("no terminal session is open") {
+                let _ = link.request("open_shell", json!({}), OPEN_TIMEOUT).await;
+                response = link
+                    .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
+                    .await;
+            }
+        }
         let response = match response {
             Ok(response) => response,
             Err(err) => {
