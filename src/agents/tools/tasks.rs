@@ -1,7 +1,9 @@
 /**
 * Agent tools for task management, project binding, and execution tracking.
 */
-use crate::{db::Db, domain::tasks::ExecutionType, identity::ResourceOwner};
+use crate::{
+    db::Db, domain::tasks::ExecutionType, identity::ResourceOwner, realtime::UserEventHub,
+};
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,11 +43,16 @@ pub struct CreateTaskArgs {
 pub struct CreateTask {
     db: Option<Db>,
     owner: ResourceOwner,
+    user_events: UserEventHub,
 }
 
 impl CreateTask {
-    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
-        Self { db, owner }
+    pub fn new(db: Option<Db>, owner: ResourceOwner, user_events: UserEventHub) -> Self {
+        Self {
+            db,
+            owner,
+            user_events,
+        }
     }
 }
 
@@ -194,6 +201,11 @@ impl Tool for CreateTask {
         .bind(due_at_parsed)
         .fetch_one(db.pool())
         .await?;
+
+        self.user_events.notify(
+            self.owner.user_id.0,
+            json!({"type": "task_created", "task_id": task_id.to_string()}),
+        );
 
         Ok(json!({
             "status": "created",
@@ -487,11 +499,16 @@ pub struct UpdateTaskArgs {
 pub struct UpdateTask {
     db: Option<Db>,
     owner: ResourceOwner,
+    user_events: UserEventHub,
 }
 
 impl UpdateTask {
-    pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
-        Self { db, owner }
+    pub fn new(db: Option<Db>, owner: ResourceOwner, user_events: UserEventHub) -> Self {
+        Self {
+            db,
+            owner,
+            user_events,
+        }
     }
 }
 
@@ -572,6 +589,11 @@ impl Tool for UpdateTask {
         if res.rows_affected() == 0 {
             return Err(TaskToolError::NotFound(format!("Task {} not found", tid)));
         }
+
+        self.user_events.notify(
+            self.owner.user_id.0,
+            json!({"type": "task_updated", "task_id": tid.to_string()}),
+        );
 
         Ok(json!({
             "status": "updated",

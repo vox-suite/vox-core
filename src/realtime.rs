@@ -227,6 +227,63 @@ impl DeviceHub {
     }
 }
 
+/// Registry of live per-user "your data changed" WebSocket connections.
+/// Unlike [`DeviceHub`], this isn't gated behind device-control consent —
+/// any signed-in user gets a connection — and it never expects a reply: a
+/// notification just tells the client something changed so it can refetch
+/// over the normal REST API. Best-effort only: if the user has no live
+/// connection, a notify is silently dropped and the client picks up the
+/// change next time it polls or reconnects.
+type UserConnection = (u64, mpsc::UnboundedSender<String>);
+
+#[derive(Clone, Default)]
+pub struct UserEventHub {
+    conns: Arc<Mutex<HashMap<Uuid, UserConnection>>>,
+    next_generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl UserEventHub {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a newly connected client for `user_id`, returning the
+    /// connection generation (pass it back to `unregister`) and the receiver
+    /// of outgoing frames. A reconnect replaces the previous link.
+    pub fn register(&self, user_id: Uuid) -> (u64, mpsc::UnboundedReceiver<String>) {
+        let generation = self
+            .next_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.conns
+            .lock()
+            .expect("user event hub lock poisoned")
+            .insert(user_id, (generation, tx));
+        (generation, rx)
+    }
+
+    /// Removes the link only if it is still the one `generation` registered,
+    /// so a stale socket closing never drops a newer reconnect.
+    pub fn unregister(&self, user_id: Uuid, generation: u64) {
+        let mut conns = self.conns.lock().expect("user event hub lock poisoned");
+        if conns.get(&user_id).map(|(g, _)| *g) == Some(generation) {
+            conns.remove(&user_id);
+        }
+    }
+
+    /// Tells `user_id`'s connected client (if any) that something changed.
+    pub fn notify(&self, user_id: Uuid, event: Value) {
+        if let Some((_, tx)) = self
+            .conns
+            .lock()
+            .expect("user event hub lock poisoned")
+            .get(&user_id)
+        {
+            let _ = tx.send(event.to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,16 +303,34 @@ mod tests {
         let hub = DeviceHub::new();
         let (user, device) = (Uuid::new_v4(), Uuid::new_v4());
         let (t1, t2) = (Uuid::new_v4(), Uuid::new_v4());
-        assert_eq!(hub.confirm_command(user, device, "ls", t1), Confirmation::Proposed);
-        assert_eq!(hub.confirm_command(user, device, "ls", t1), Confirmation::AwaitingUser);
+        assert_eq!(
+            hub.confirm_command(user, device, "ls", t1),
+            Confirmation::Proposed
+        );
+        assert_eq!(
+            hub.confirm_command(user, device, "ls", t1),
+            Confirmation::AwaitingUser
+        );
         // A different command replaces the proposal instead of confirming.
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t2), Confirmation::Proposed);
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t2), Confirmation::AwaitingUser);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t2),
+            Confirmation::Proposed
+        );
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t2),
+            Confirmation::AwaitingUser
+        );
         assert!(hub.has_pending_command(user));
         let t3 = Uuid::new_v4();
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t3), Confirmation::Confirmed);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t3),
+            Confirmation::Confirmed
+        );
         assert!(!hub.has_pending_command(user));
         // Consumed: running it again needs a fresh confirmation.
-        assert_eq!(hub.confirm_command(user, device, "rm -rf ~", t3), Confirmation::Proposed);
+        assert_eq!(
+            hub.confirm_command(user, device, "rm -rf ~", t3),
+            Confirmation::Proposed
+        );
     }
 }

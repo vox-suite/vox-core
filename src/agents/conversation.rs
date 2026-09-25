@@ -3,7 +3,7 @@
 */
 use super::{AgentError, tools};
 use crate::outbound::OutboundCallService;
-use crate::realtime::DeviceHub;
+use crate::realtime::{DeviceHub, UserEventHub};
 use crate::{
     config::Config,
     db::Db,
@@ -56,6 +56,7 @@ pub struct ConversationAgent {
     tool_router: Option<crate::jev::ToolRouter>,
     tts_provider: String,
     device_hub: Option<DeviceHub>,
+    user_events: Option<UserEventHub>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -93,6 +94,7 @@ impl ConversationAgent {
             tool_router,
             tts_provider: config.tts_provider.clone(),
             device_hub: None,
+            user_events: None,
         })
     }
 
@@ -123,6 +125,11 @@ impl ConversationAgent {
 
     pub fn with_device_hub(mut self, hub: DeviceHub) -> Self {
         self.device_hub = Some(hub);
+        self
+    }
+
+    pub fn with_user_events(mut self, hub: UserEventHub) -> Self {
+        self.user_events = Some(hub);
         self
     }
 
@@ -224,10 +231,18 @@ impl ConversationAgent {
                     crate::jev::ToolDomain::TasksAndRecords => client
                         .agent(&self.model)
                         .preamble(preamble)
-                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::CreateTask::new(
+                            self.db.clone(),
+                            prompt.owner,
+                            self.user_events.clone().unwrap_or_default(),
+                        ))
                         .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                         .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
-                        .tool(tools::tasks::UpdateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::UpdateTask::new(
+                            self.db.clone(),
+                            prompt.owner,
+                            self.user_events.clone().unwrap_or_default(),
+                        ))
                         .tool(tools::projects::CreateProject::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -321,7 +336,11 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                        .tool(tools::tasks::CreateTask::new(
+                            self.db.clone(),
+                            prompt.owner,
+                            self.user_events.clone().unwrap_or_default(),
+                        ))
                         .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                         .tool(tools::calls::ScheduleOutboundCall::new(
                             self.db.clone(),
@@ -384,10 +403,18 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::tasks::CreateTask::new(self.db.clone(), prompt.owner))
+                    .tool(tools::tasks::CreateTask::new(
+                        self.db.clone(),
+                        prompt.owner,
+                        self.user_events.clone().unwrap_or_default(),
+                    ))
                     .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
                     .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
-                    .tool(tools::tasks::UpdateTask::new(self.db.clone(), prompt.owner))
+                    .tool(tools::tasks::UpdateTask::new(
+                        self.db.clone(),
+                        prompt.owner,
+                        self.user_events.clone().unwrap_or_default(),
+                    ))
                     .tool(tools::calls::ScheduleOutboundCall::new(
                         self.db.clone(),
                         self.outbound.clone(),

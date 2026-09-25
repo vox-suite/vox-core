@@ -18,6 +18,7 @@ use vox_core::{
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
     db::Db,
     identity::{ChannelIdentity, IdentityService},
+    realtime::UserEventHub,
     schedules::{
         CreateScheduleRequest, ScheduleKind, UpdateScheduleRequest, service::ScheduleError,
         service::ScheduleService,
@@ -207,7 +208,7 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
     .fetch_one(db.pool())
     .await
     .unwrap();
-    let cross_owner_project = CreateTask::new(Some(db.clone()), alice)
+    let cross_owner_project = CreateTask::new(Some(db.clone()), alice, UserEventHub::default())
         .call(
             &mut context,
             CreateTaskArgs {
@@ -225,7 +226,7 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
         Err(TaskToolError::NotFound(_))
     ));
 
-    let created = CreateTask::new(Some(db.clone()), alice)
+    let created = CreateTask::new(Some(db.clone()), alice, UserEventHub::default())
         .call(
             &mut context,
             CreateTaskArgs {
@@ -265,7 +266,7 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
         .await;
     assert!(matches!(bob_get, Err(TaskToolError::NotFound(_))));
 
-    let bob_update = UpdateTask::new(Some(db.clone()), bob)
+    let bob_update = UpdateTask::new(Some(db.clone()), bob, UserEventHub::default())
         .call(
             &mut context,
             UpdateTaskArgs {
@@ -278,7 +279,7 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
         .await;
     assert!(matches!(bob_update, Err(TaskToolError::NotFound(_))));
 
-    UpdateTask::new(Some(db.clone()), alice)
+    UpdateTask::new(Some(db.clone()), alice, UserEventHub::default())
         .call(
             &mut context,
             UpdateTaskArgs {

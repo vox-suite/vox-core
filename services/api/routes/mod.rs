@@ -7,6 +7,7 @@ pub mod device_socket;
 pub mod devices;
 pub mod events;
 pub mod identity;
+pub mod live;
 pub mod phone;
 pub mod records;
 pub mod schemas;
