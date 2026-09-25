@@ -16,6 +16,7 @@ pub struct Config {
     pub jev_base_url: String,
     pub jev_enabled: bool,
     pub tts_provider: String,
+    pub status_webhook_key: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -55,6 +56,8 @@ impl Config {
             jev_base_url,
             jev_enabled,
             tts_provider,
+            status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 }

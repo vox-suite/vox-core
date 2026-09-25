@@ -71,6 +71,11 @@ async fn main() {
     {
         legacy_state = legacy_state.with_admin(admin);
     }
+    if let Some(key) = config.status_webhook_key.as_deref() {
+        let secrets = vox_core::status::EncryptedWebhookSecretStore::from_hex_key(db.clone(), key)
+            .expect("VOX_STATUS_WEBHOOK_KEY must be a 32-byte hex key");
+        legacy_state = legacy_state.with_status_secret_store(Arc::new(secrets));
+    }
     let api_state = ApiState::new(legacy_state, db, device_hub, memory, user_events);
     let app = build_api_router(api_state);
 

@@ -30,11 +30,7 @@ pub async fn live_socket(
 
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
-async fn handle_socket(
-    socket: WebSocket,
-    state: LiveApiState,
-    user_id: uuid::Uuid,
-) {
+async fn handle_socket(socket: WebSocket, state: LiveApiState, user_id: uuid::Uuid) {
     tracing::info!(%user_id, "Live socket connected");
     let (generation, mut outgoing) = state.hub.register(user_id);
     let (mut sender, mut receiver) = socket.split();
