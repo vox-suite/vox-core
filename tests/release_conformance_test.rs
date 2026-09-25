@@ -363,3 +363,56 @@ fn test_preference_authority_disclaimer_invariant() {
         "Provider currency, timezone, and inventory facts remain strictly authoritative"
     ));
 }
+
+#[test]
+fn test_credential_scanner_verifies_model_context_and_audit_traces() {
+    // 1. Model context with injected secrets is rejected
+    let tainted_model_context = json!({
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Book hotel with sk_live_998877665544332211"}
+        ]
+    });
+    assert!(
+        PrivacyService::scan_for_prohibited_content(&tainted_model_context).is_err(),
+        "Model context containing API keys must be rejected"
+    );
+
+    // 2. Audit evidence details with leaked session_id or tokens is rejected
+    let tainted_audit_evidence = json!({
+        "event_type": "execution.completed",
+        "details": {
+            "session_id": "sess_live_12345",
+            "provider": "expedia"
+        }
+    });
+    assert!(
+        PrivacyService::scan_for_prohibited_content(&tainted_audit_evidence).is_err(),
+        "Audit evidence containing session_id must be rejected"
+    );
+
+    // 3. Clean audit evidence and sanitized model context passes scan
+    let clean_model_context = json!({
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Find hotels in Seattle for next weekend."}
+        ]
+    });
+    assert!(
+        PrivacyService::scan_for_prohibited_content(&clean_model_context).is_ok(),
+        "Clean model context must pass scanning"
+    );
+
+    let clean_audit_evidence = json!({
+        "event_type": "execution.completed",
+        "details": {
+            "action": "book_lodging",
+            "provider": "expedia",
+            "status": "succeeded"
+        }
+    });
+    assert!(
+        PrivacyService::scan_for_prohibited_content(&clean_audit_evidence).is_ok(),
+        "Clean audit evidence must pass scanning"
+    );
+}
