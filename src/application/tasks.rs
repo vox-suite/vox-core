@@ -10,6 +10,7 @@ use crate::{
         identity::Actor,
         tasks::{Task, TaskStatus},
     },
+    realtime::UserEventHub,
     storage::{collections::CollectionRepository, tasks::TaskRepository},
 };
 
@@ -50,11 +51,20 @@ pub struct UpdateTaskInput {
 pub struct TaskService {
     repo: TaskRepository,
     collections: CollectionRepository,
+    user_events: UserEventHub,
 }
 
 impl TaskService {
-    pub fn new(repo: TaskRepository, collections: CollectionRepository) -> Self {
-        Self { repo, collections }
+    pub fn new(
+        repo: TaskRepository,
+        collections: CollectionRepository,
+        user_events: UserEventHub,
+    ) -> Self {
+        Self {
+            repo,
+            collections,
+            user_events,
+        }
     }
 
     pub async fn create_task(
@@ -69,7 +79,8 @@ impl TaskService {
             }
         }
 
-        self.repo
+        let task = self
+            .repo
             .create(
                 actor.user_id,
                 input.collection_id,
@@ -79,7 +90,12 @@ impl TaskService {
                 input.due_at,
             )
             .await
-            .map_err(TaskServiceError::from)
+            .map_err(TaskServiceError::from)?;
+        self.user_events.notify(
+            actor.user_id,
+            serde_json::json!({"type": "task_created", "task_id": task.id}),
+        );
+        Ok(task)
     }
 
     pub async fn update_task(
@@ -105,7 +121,13 @@ impl TaskService {
             .await?;
 
         match outcome {
-            crate::domain::ConcurrencyOutcome::Success(task) => Ok(task),
+            crate::domain::ConcurrencyOutcome::Success(task) => {
+                self.user_events.notify(
+                    actor.user_id,
+                    serde_json::json!({"type": "task_updated", "task_id": task.id}),
+                );
+                Ok(task)
+            }
             crate::domain::ConcurrencyOutcome::Conflict => Err(TaskServiceError::VersionConflict),
             crate::domain::ConcurrencyOutcome::NotFound => Err(TaskServiceError::NotFound),
         }

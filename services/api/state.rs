@@ -10,7 +10,7 @@ use vox_core::{
     db::Db,
     http::AppState,
     memory::MemoryService,
-    realtime::DeviceHub,
+    realtime::{DeviceHub, UserEventHub},
     storage::{
         collections::CollectionRepository, devices::DeviceRepository, records::RecordRepository,
         schemas::SchemaRepository, tasks::TaskRepository,
@@ -28,10 +28,17 @@ pub struct ApiState {
     pub devices: DeviceService,
     pub device_hub: DeviceHub,
     pub memory: MemoryService,
+    pub user_events: UserEventHub,
 }
 
 impl ApiState {
-    pub fn new(legacy: AppState, db: Db, device_hub: DeviceHub, memory: MemoryService) -> Self {
+    pub fn new(
+        legacy: AppState,
+        db: Db,
+        device_hub: DeviceHub,
+        memory: MemoryService,
+        user_events: UserEventHub,
+    ) -> Self {
         let pool = db.pool().clone();
         let coll_repo = CollectionRepository::new(pool.clone());
         let task_repo = TaskRepository::new(pool.clone());
@@ -39,7 +46,7 @@ impl ApiState {
         let schema_repo = SchemaRepository::new(pool.clone());
         let device_repo = DeviceRepository::new(pool.clone());
 
-        let tasks = TaskService::new(task_repo, coll_repo.clone());
+        let tasks = TaskService::new(task_repo, coll_repo.clone(), user_events.clone());
         let collections = CollectionService::new(coll_repo.clone());
         let records = RecordService::new(rec_repo, schema_repo.clone(), coll_repo);
         let schemas = SchemaService::new(schema_repo);
@@ -55,6 +62,7 @@ impl ApiState {
             devices,
             device_hub,
             memory,
+            user_events,
         }
     }
 }
