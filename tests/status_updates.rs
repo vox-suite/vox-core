@@ -597,11 +597,13 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
         .await
         .unwrap();
     registry
-        .set_enabled(vox_core::integration_registry::SetIntegrationEnabledRequest {
-            deployment_external_key: deployment_key.clone(),
-            external_key: "payment_gw".into(),
-            enabled: true,
-        })
+        .set_enabled(
+            vox_core::integration_registry::SetIntegrationEnabledRequest {
+                deployment_external_key: deployment_key.clone(),
+                external_key: "payment_gw".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
 
@@ -733,11 +735,12 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
         .await
         .unwrap();
 
-    let initial_task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
-        .bind(owner.user_id.0)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+    let initial_task_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
+            .bind(owner.user_id.0)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
 
     let status = StatusService::new(db.clone());
     let event = vox_core::status::VerifiedIntegrationEvent {
@@ -775,10 +778,12 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
             evidence: serde_json::json!({}),
         },
     };
-    assert!(status
-        .apply_verified_external_event(&coordinator, mismatched_event, now)
-        .await
-        .is_err());
+    assert!(
+        status
+            .apply_verified_external_event(&coordinator, mismatched_event, now)
+            .await
+            .is_err()
+    );
 
     let final_task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
         .bind(owner.user_id.0)
