@@ -94,7 +94,7 @@ Query parameters:
 - `cursor`: unsigned 64-bit SCAN cursor represented as a string; default `0`.
 - `key`: inspect one UTF-8 key, maximum 1,024 bytes, without control characters. If provided, returns an atomic bounded value preview and metadata instead of a key listing.
 
-Redis 7+ is required for `EVAL_RO`. The existing Redis 8 service is compatible. SCAN uses a count hint of 100. Connections are reused and reconnect; admin operations have a four-second deadline and at most eight concurrent requests per API instance. String previews stop at 64 KiB. Collection string data has a total 64 KiB budget and 2 KiB per-value limit.
+Redis 7+ is required for `EVAL_RO`. Redis 8.2 LTS is the recommended engine and fully supported. SCAN uses a count hint of 100. Connections are reused and reconnect; admin operations have a four-second deadline and at most eight concurrent requests per API instance. String previews stop at 64 KiB. Collection string data has a total 64 KiB budget and 2 KiB per-value limit.
 
 `PUT` replaces an existing string, list, hash, set or sorted set from a typed JSON value while preserving its remaining expiry. It rejects missing keys, type changes, empty collections, oversized values and unsupported types. `DELETE` removes one explicitly named key. Streams remain preview-only. Arbitrary Redis commands and key creation are not exposed.
 
