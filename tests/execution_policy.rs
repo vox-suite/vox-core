@@ -415,3 +415,56 @@ async fn spending_limit_blocks_an_approved_exact_execution_without_becoming_auth
             .is_err()
     );
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn transactional_rollback_releases_quota_reservation() {
+    let db = setup().await;
+    let (deployment, owner) = context(&db).await;
+    let connection = prepare(&db, &deployment, &owner).await;
+    let now = Utc::now();
+    let policies = ExecutionPolicyService::new(db.clone());
+    policies
+        .set_operational_quota(
+            &owner,
+            OperationalQuotaRequest {
+                provider_external_key: "calendar".into(),
+                model_identifier: "model-a".into(),
+                account_reference: "account-a".into(),
+                connection_id: connection.id,
+                max_attempts: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let (approval_id, execution) = approved_request(&db, &owner, connection, now).await;
+
+    let mut tx = db.pool().begin().await.unwrap();
+    let decision = policies
+        .evaluate_in_transaction(
+            &owner,
+            ExecutionRequest {
+                approval_id,
+                attempt_id: Uuid::new_v4(),
+                execution: execution.clone(),
+            },
+            now,
+            &mut tx,
+        )
+        .await;
+    assert!(decision.is_ok());
+    tx.rollback().await.unwrap();
+
+    let retry_decision = policies
+        .evaluate(
+            &owner,
+            ExecutionRequest {
+                approval_id,
+                attempt_id: Uuid::new_v4(),
+                execution,
+            },
+            now,
+        )
+        .await;
+    assert!(retry_decision.is_ok());
+}
