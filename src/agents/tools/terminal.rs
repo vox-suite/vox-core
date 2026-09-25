@@ -194,6 +194,7 @@ pub struct RunTerminalCommand {
     hub: DeviceHub,
     /// Identifies the agent turn this tool instance belongs to; a command is
     /// only run when it was proposed in an earlier turn (see `confirm_command`).
+    #[allow(dead_code)]
     turn: Uuid,
 }
 
@@ -273,13 +274,13 @@ impl Tool for RunTerminalCommand {
             .await;
 
         // Auto-open terminal session if none was open yet
-        if let Ok(ref res) = response {
-            if response_error(res).as_deref() == Some("no terminal session is open") {
-                let _ = link.request("open_shell", json!({}), OPEN_TIMEOUT).await;
-                response = link
-                    .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
-                    .await;
-            }
+        if let Ok(ref res) = response
+            && response_error(res).as_deref() == Some("no terminal session is open")
+        {
+            let _ = link.request("open_shell", json!({}), OPEN_TIMEOUT).await;
+            response = link
+                .request("run_command", json!({ "command": command }), COMMAND_TIMEOUT)
+                .await;
         }
         let response = match response {
             Ok(response) => response,
