@@ -12,6 +12,7 @@ pub struct Config {
     pub exa_api_key: String,
     pub google_maps_api_key: Option<String>,
     pub bridge_url: Option<String>,
+    pub core_api_url: Option<String>,
     pub jev_api_key: Option<String>,
     pub jev_base_url: String,
     pub jev_enabled: bool,
@@ -52,6 +53,7 @@ impl Config {
             google_maps_api_key: get("GOOGLE_MAPS_API_KEY")
                 .filter(|value| !value.trim().is_empty()),
             bridge_url: get("VOX_BRIDGE_URL").filter(|value| !value.trim().is_empty()),
+            core_api_url: get("VOX_CORE_API_URL").filter(|value| !value.trim().is_empty()),
             jev_api_key,
             jev_base_url,
             jev_enabled,

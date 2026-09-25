@@ -11,6 +11,7 @@ use vox_core::{
     },
     bridge_client::BridgeClient,
     config::Config,
+    core_api_client::{CoreApiClient, DeviceDispatcher},
     db::{Db, jobs::JobRepository},
     events::handler::EventHandler,
     memory::{
@@ -19,7 +20,7 @@ use vox_core::{
     },
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
-    sms_ingestion::handler::SmsBatchHandler,
+    sms_ingestion::{handler::SmsBatchHandler, retention::SmsRetentionSweeper},
     status::{EncryptedWebhookSecretStore, StatusService},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
@@ -85,7 +86,13 @@ pub async fn run_worker(
     task_executor = task_executor.with_outbound(outbound);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
     let sms_extractor = Arc::new(GeminiSmsExtractor::new(&config));
-    let sms_batches = SmsBatchHandler::new(db.clone(), sms_extractor);
+    let device_dispatcher = config.core_api_url.as_ref().and_then(|url| {
+        CoreApiClient::new(url.clone(), config.service_token.clone())
+            .ok()
+            .map(|c| Arc::new(c) as Arc<dyn DeviceDispatcher>)
+    });
+    let sms_batches = SmsBatchHandler::new(db.clone(), sms_extractor, device_dispatcher);
+    let sms_retention = SmsRetentionSweeper::new(db.clone());
 
     let worker_id = Uuid::new_v4().to_string();
     let status_handle = if let Some(key) = config.status_webhook_key.as_deref() {
@@ -125,6 +132,7 @@ pub async fn run_worker(
         task_executor,
         wa_sweeper,
         sms_batches,
+        sms_retention,
         worker_id,
     );
 

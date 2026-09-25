@@ -10,7 +10,7 @@ use crate::{
     events::{EventId, handler::EventHandler},
     jobs::JobKind,
     schedules::{ScheduleId, handler::ScheduleHandler, ticker::ScheduleTicker},
-    sms_ingestion::handler::SmsBatchHandler,
+    sms_ingestion::{handler::SmsBatchHandler, retention::SmsRetentionSweeper},
     summaries::handler::SummaryHandler,
 };
 use chrono::{Duration, Utc};
@@ -27,6 +27,7 @@ pub struct Worker {
     task_executor: Option<TaskExecutorHandler>,
     wa_sweeper: Option<WhatsAppSweeper>,
     sms_batches: Option<SmsBatchHandler>,
+    sms_retention: Option<SmsRetentionSweeper>,
     worker_id: String,
 }
 
@@ -41,6 +42,7 @@ impl Worker {
             task_executor: None,
             wa_sweeper: None,
             sms_batches: None,
+            sms_retention: None,
             worker_id,
         }
     }
@@ -55,6 +57,7 @@ impl Worker {
         task_executor: TaskExecutorHandler,
         wa_sweeper: WhatsAppSweeper,
         sms_batches: SmsBatchHandler,
+        sms_retention: SmsRetentionSweeper,
         worker_id: String,
     ) -> Self {
         Self {
@@ -66,6 +69,7 @@ impl Worker {
             task_executor: Some(task_executor),
             wa_sweeper: Some(wa_sweeper),
             sms_batches: Some(sms_batches),
+            sms_retention: Some(sms_retention),
             worker_id,
         }
     }
@@ -95,6 +99,12 @@ impl Worker {
             && let Err(error) = sweeper.sweep_inactive_conversations().await
         {
             tracing::warn!(%error, "whatsapp sweeper failed");
+        }
+
+        if let Some(sweeper) = &self.sms_retention
+            && let Err(error) = sweeper.purge_expired().await
+        {
+            tracing::warn!(%error, "sms retention sweeper failed");
         }
 
         let jobs = self

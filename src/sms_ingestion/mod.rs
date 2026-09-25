@@ -1,10 +1,12 @@
 pub mod handler;
+pub mod retention;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    consent::{ConsentError, ConsentService, DataSource},
     db::{Db, jobs::JobRepository},
     jobs::JobKind,
 };
@@ -20,22 +22,28 @@ pub struct SmsMessage {
 pub enum SmsIngestionError {
     #[error("batch must contain at least one message")]
     Empty,
+    #[error("sms data sharing consent has not been granted")]
+    ConsentRequired,
     #[error("sms batch storage unavailable")]
     Database(#[from] sqlx::Error),
     #[error("job queue unavailable")]
     Job(#[from] crate::db::jobs::JobError),
+    #[error("consent storage unavailable")]
+    Consent(#[from] ConsentError),
 }
 
 #[derive(Clone)]
 pub struct SmsIngestionService {
     db: Db,
     jobs: JobRepository,
+    consent: ConsentService,
 }
 
 impl SmsIngestionService {
     pub fn new(db: Db) -> Self {
         let jobs = JobRepository::new(db.clone());
-        Self { db, jobs }
+        let consent = ConsentService::new(db.clone());
+        Self { db, jobs, consent }
     }
 
     pub async fn submit_batch(
@@ -45,6 +53,9 @@ impl SmsIngestionService {
     ) -> Result<Uuid, SmsIngestionError> {
         if messages.is_empty() {
             return Err(SmsIngestionError::Empty);
+        }
+        if !self.consent.is_granted(user_id, DataSource::Sms).await? {
+            return Err(SmsIngestionError::ConsentRequired);
         }
 
         let payload = serde_json::to_value(&messages).unwrap_or_else(|_| serde_json::json!([]));

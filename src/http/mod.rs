@@ -233,6 +233,10 @@ impl AppState {
         self
     }
 
+    pub fn service_token(&self) -> &str {
+        &self.service_token
+    }
+
     pub fn rate_limiter(&self) -> &rate_limit::RateLimiter {
         &self.rate_limiter
     }

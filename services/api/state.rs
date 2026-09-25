@@ -7,8 +7,10 @@ use vox_core::{
         collections::CollectionService, devices::DeviceService, records::RecordService,
         schemas::SchemaService, tasks::TaskService,
     },
+    consent::ConsentService,
     db::Db,
     http::AppState,
+    location_ingestion::LocationIngestionService,
     memory::MemoryService,
     realtime::{DeviceHub, UserEventHub},
     sms_ingestion::SmsIngestionService,
@@ -33,6 +35,8 @@ pub struct ApiState {
     pub user_events: UserEventHub,
     pub timeline: TimelineService,
     pub sms_ingestion: SmsIngestionService,
+    pub location_ingestion: LocationIngestionService,
+    pub consent: ConsentService,
 }
 
 impl ApiState {
@@ -57,6 +61,8 @@ impl ApiState {
         let devices = DeviceService::new(device_repo);
         let timeline = TimelineService::new(db.clone());
         let sms_ingestion = SmsIngestionService::new(db.clone());
+        let location_ingestion = LocationIngestionService::new(db.clone());
+        let consent = ConsentService::new(db.clone());
 
         Self {
             legacy,
@@ -71,6 +77,8 @@ impl ApiState {
             user_events,
             timeline,
             sms_ingestion,
+            location_ingestion,
+            consent,
         }
     }
 }

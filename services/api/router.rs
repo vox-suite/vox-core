@@ -18,11 +18,16 @@ use crate::{
         },
         events::ingest_batch,
         identity::get_me,
+        internal::dispatch_device_request,
         live::{LiveApiState, live_socket},
+        location::{
+            get_consent as get_location_consent, grant_consent as grant_location_consent,
+            revoke_consent as revoke_location_consent, submit_segments,
+        },
         phone::{PhoneApiState, link_phone},
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name},
-        sms::submit_batch,
+        sms::{get_consent, grant_consent, revoke_consent, submit_batch},
         tasks::{create_task, delete_task, get_task, list_tasks, update_task},
         timeline::get_timeline,
     },
@@ -74,6 +79,26 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/sms/batches", post(submit_batch))
         .with_state(state.sms_ingestion.clone());
 
+    let sms_consent_routes = Router::new()
+        .route(
+            "/v1/sms/consent",
+            get(get_consent).post(grant_consent).delete(revoke_consent),
+        )
+        .with_state(state.consent.clone());
+
+    let location_routes = Router::new()
+        .route("/v1/location/segments", post(submit_segments))
+        .with_state(state.location_ingestion.clone());
+
+    let location_consent_routes = Router::new()
+        .route(
+            "/v1/location/consent",
+            get(get_location_consent)
+                .post(grant_location_consent)
+                .delete(revoke_location_consent),
+        )
+        .with_state(state.consent.clone());
+
     let device_api_state = DeviceApiState {
         devices: state.devices.clone(),
         pool: state.pool.clone(),
@@ -116,12 +141,22 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
+    let internal_routes = Router::new()
+        .route(
+            "/internal/v1/devices/dispatch",
+            post(dispatch_device_request),
+        )
+        .with_state(state.clone());
+
     let protected_routes = task_routes
         .merge(collection_routes)
         .merge(record_routes)
         .merge(schema_routes)
         .merge(timeline_routes)
         .merge(sms_routes)
+        .merge(sms_consent_routes)
+        .merge(location_routes)
+        .merge(location_consent_routes)
         .merge(device_routes)
         .merge(device_socket_routes)
         .merge(event_routes)
@@ -138,5 +173,6 @@ pub fn build_api_router(state: ApiState) -> Router {
     base_legacy_router
         .merge(openapi_route)
         .merge(auth_routes)
+        .merge(internal_routes)
         .merge(protected_routes)
 }

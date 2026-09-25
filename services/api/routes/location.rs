@@ -3,32 +3,29 @@ use serde::Deserialize;
 use vox_core::{
     consent::{ConsentError, ConsentService, DataSource},
     domain::identity::Actor,
-    sms_ingestion::{SmsIngestionError, SmsIngestionService, SmsMessage},
+    location_ingestion::{LocationIngestionError, LocationIngestionService, LocationSegment},
 };
 
 #[derive(Deserialize)]
-pub struct SubmitSmsBatchRequest {
-    pub messages: Vec<SmsMessage>,
+pub struct SubmitLocationSegmentsRequest {
+    pub segments: Vec<LocationSegment>,
 }
 
-pub async fn submit_batch(
-    State(service): State<SmsIngestionService>,
+pub async fn submit_segments(
+    State(service): State<LocationIngestionService>,
     Extension(actor): Extension<Actor>,
-    Json(body): Json<SubmitSmsBatchRequest>,
+    Json(body): Json<SubmitLocationSegmentsRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let batch_id = service
-        .submit_batch(actor.user_id, body.messages)
+    let ids = service
+        .submit_segments(actor.user_id, body.segments)
         .await
         .map_err(|err| match err {
-            SmsIngestionError::Empty => StatusCode::BAD_REQUEST,
-            SmsIngestionError::ConsentRequired => StatusCode::FORBIDDEN,
+            LocationIngestionError::InvalidSegment => StatusCode::BAD_REQUEST,
+            LocationIngestionError::ConsentRequired => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "batch_id": batch_id })),
-    ))
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "ids": ids }))))
 }
 
 pub async fn get_consent(
@@ -36,7 +33,7 @@ pub async fn get_consent(
     Extension(actor): Extension<Actor>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let status = service
-        .status(actor.user_id, DataSource::Sms)
+        .status(actor.user_id, DataSource::Location)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(status))
@@ -53,7 +50,7 @@ pub async fn grant_consent(
     Json(body): Json<GrantConsentRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let status = service
-        .grant(actor.user_id, DataSource::Sms, body.retention_days)
+        .grant(actor.user_id, DataSource::Location, body.retention_days)
         .await
         .map_err(|err| match err {
             ConsentError::InvalidRetention => StatusCode::BAD_REQUEST,
@@ -67,7 +64,7 @@ pub async fn revoke_consent(
     Extension(actor): Extension<Actor>,
 ) -> Result<impl IntoResponse, StatusCode> {
     service
-        .revoke(actor.user_id, DataSource::Sms)
+        .revoke(actor.user_id, DataSource::Location)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)

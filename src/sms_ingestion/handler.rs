@@ -4,7 +4,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    agents::sms_extractor::{SmsExtracting, SmsPrompt},
+    agents::sms_extractor::{ExtractedSmsEvent, SmsExtracting, SmsPrompt},
+    core_api_client::{DeviceDispatcher, DispatchDeviceRequest},
     db::Db,
     sms_ingestion::SmsMessage,
 };
@@ -21,11 +22,20 @@ pub enum SmsBatchHandlerError {
 pub struct SmsBatchHandler {
     db: Db,
     extractor: Arc<dyn SmsExtracting>,
+    device_dispatcher: Option<Arc<dyn DeviceDispatcher>>,
 }
 
 impl SmsBatchHandler {
-    pub fn new(db: Db, extractor: Arc<dyn SmsExtracting>) -> Self {
-        Self { db, extractor }
+    pub fn new(
+        db: Db,
+        extractor: Arc<dyn SmsExtracting>,
+        device_dispatcher: Option<Arc<dyn DeviceDispatcher>>,
+    ) -> Self {
+        Self {
+            db,
+            extractor,
+            device_dispatcher,
+        }
     }
 
     pub async fn handle(&self, batch_id: Uuid) -> Result<(), SmsBatchHandlerError> {
@@ -49,16 +59,8 @@ impl SmsBatchHandler {
                 continue;
             }
 
-            let extracted = match self
-                .extractor
-                .extract(SmsPrompt {
-                    sender: message.sender.clone(),
-                    body: message.body.clone(),
-                })
-                .await
-            {
-                Ok(event) => event,
-                Err(_) => continue,
+            let Some(extracted) = self.classify(user_id, &message).await else {
+                continue;
             };
 
             if !extracted.relevant || extracted.category == "otp" {
@@ -85,6 +87,36 @@ impl SmsBatchHandler {
             .await?;
 
         Ok(())
+    }
+
+    /// Prefers a connected local-LLM-capable device for this user (via the
+    /// core API's device hub) and falls back to the cloud extractor on any
+    /// failure — no device registered, not currently connected, timed out,
+    /// or a malformed response. The user never sees the difference; this is
+    /// purely a where-it-runs choice.
+    async fn classify(&self, user_id: Uuid, message: &SmsMessage) -> Option<ExtractedSmsEvent> {
+        if let Some(dispatcher) = &self.device_dispatcher {
+            let request = DispatchDeviceRequest {
+                user_id,
+                capability: "local_llm".to_string(),
+                kind: "classify_sms".to_string(),
+                params: serde_json::json!({ "sender": message.sender, "body": message.body }),
+                timeout_secs: 30,
+            };
+            if let Ok(value) = dispatcher.dispatch(request).await
+                && let Ok(event) = serde_json::from_value::<ExtractedSmsEvent>(value)
+            {
+                return Some(event);
+            }
+        }
+
+        self.extractor
+            .extract(SmsPrompt {
+                sender: message.sender.clone(),
+                body: message.body.clone(),
+            })
+            .await
+            .ok()
     }
 }
 
