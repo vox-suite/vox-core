@@ -668,6 +668,24 @@ impl ExpediaLodgingService {
         .await?;
 
         let details: Value = row.get("details");
+
+        if execution.state == "succeeded"
+            && let Some(evidence) = &execution.confirmation_evidence
+        {
+            return Ok(ExpediaBookingOutcome::Succeeded {
+                itinerary_id: evidence["itinerary_id"].as_str().unwrap_or_default().into(),
+                confirmation_reference: evidence["confirmation_reference"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                booking_status: evidence["status"]
+                    .as_str()
+                    .unwrap_or_else(|| evidence["booking_status"].as_str().unwrap_or("booked"))
+                    .into(),
+                total_price_amount_minor: details["total_price_amount_minor"].as_i64().unwrap_or(0),
+                price_currency: details["price_currency"].as_str().unwrap_or("USD").into(),
+            });
+        }
         let raw_req = ExpediaRawBookingRequest {
             affiliate_reference_id: key.into(),
             property_id: details["property_id"].as_str().unwrap_or("").into(),
