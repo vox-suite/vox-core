@@ -122,17 +122,19 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
     let handler = SummaryHandler::with_memory(db.clone(), Arc::new(Summarizer), memory);
     handler.handle(response.conversation_id).await.unwrap();
     handler.handle(response.conversation_id).await.unwrap();
-    let summaries: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id = $1 AND summary_version > 0")
+    let summaries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversations WHERE id = $1 AND summary_version > 0",
+    )
+    .bind(response.conversation_id.0)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let conv_user_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT user_id FROM conversations WHERE id = $1")
             .bind(response.conversation_id.0)
             .fetch_one(db.pool())
             .await
             .unwrap();
-    let conv_user_id: uuid::Uuid = sqlx::query_scalar("SELECT user_id FROM conversations WHERE id = $1")
-        .bind(response.conversation_id.0)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
     let facts: Value = sqlx::query_scalar("SELECT profile_facts FROM users WHERE id = $1")
         .bind(conv_user_id)
         .fetch_one(db.pool())
