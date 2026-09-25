@@ -16,7 +16,7 @@ impl WhatsAppSweeper {
 
     pub async fn sweep_inactive_conversations(&self) -> Result<usize, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT c.id FROM conversations c \
+            "SELECT c.id, c.user_id, c.user_context_id FROM conversations c \
              WHERE c.channel = 'whatsapp' AND c.state = 'active' \
              AND ( \
                  SELECT COALESCE(MAX(m.created_at), c.created_at) \
@@ -30,6 +30,8 @@ impl WhatsAppSweeper {
         let mut completed_count = 0;
         for row in rows {
             let conv_id: Uuid = row.get("id");
+            let user_id: Option<Uuid> = row.get("user_id");
+            let user_context_id: Option<Uuid> = row.get("user_context_id");
             let mut tx = self.db.pool().begin().await?;
 
             sqlx::query(
@@ -42,11 +44,15 @@ impl WhatsAppSweeper {
             .await?;
 
             sqlx::query(
-                "INSERT INTO jobs (kind, payload_reference_id) \
-                 VALUES ('summarize_conversation', $1) \
-                 ON CONFLICT DO NOTHING",
+                "INSERT INTO jobs (kind, payload_reference_id, user_id, user_context_id) \
+                 SELECT 'summarize_conversation', $1, $2, $3 \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM jobs WHERE kind = 'summarize_conversation' AND payload_reference_id = $1 \
+                 )",
             )
             .bind(conv_id)
+            .bind(user_id)
+            .bind(user_context_id)
             .execute(&mut *tx)
             .await?;
 

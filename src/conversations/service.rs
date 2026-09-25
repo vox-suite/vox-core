@@ -775,9 +775,15 @@ impl ConversationService {
 
         if changed == 1 {
             sqlx::query(
-                "INSERT INTO jobs (kind, payload_reference_id) VALUES ('summarize_conversation', $1)",
+                "INSERT INTO jobs (kind, payload_reference_id, user_id, user_context_id) \
+                 SELECT 'summarize_conversation', $1, $2, $3 \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM jobs WHERE kind = 'summarize_conversation' AND payload_reference_id = $1 \
+                 )",
             )
             .bind(conversation_id)
+            .bind(owner.user_id.0)
+            .bind(owner.user_context_id.0)
             .execute(&mut *tx)
             .await?;
         }

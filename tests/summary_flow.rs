@@ -107,25 +107,36 @@ async fn completion_and_summary_are_idempotent_when_redis_is_unavailable() {
     );
     first.unwrap();
     second.unwrap();
-    let jobs: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM jobs WHERE kind = 'summarize_conversation' AND payload_reference_id = $1",
+    let (jobs, has_context): (i64, bool) = sqlx::query_as(
+        "SELECT count(*), bool_and(user_context_id IS NOT NULL AND user_id IS NOT NULL) \
+         FROM jobs WHERE kind = 'summarize_conversation' AND payload_reference_id = $1",
     )
     .bind(response.conversation_id.0)
     .fetch_one(db.pool())
     .await
     .unwrap();
     assert_eq!(jobs, 1);
+    assert!(has_context);
 
     let memory = MemoryService::new(db.clone(), Some(Arc::new(FailingCache)));
     let handler = SummaryHandler::with_memory(db.clone(), Arc::new(Summarizer), memory);
     handler.handle(response.conversation_id).await.unwrap();
     handler.handle(response.conversation_id).await.unwrap();
-    let summaries: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM conversations WHERE summary_version > 0")
+    let summaries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversations WHERE id = $1 AND summary_version > 0",
+    )
+    .bind(response.conversation_id.0)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    let conv_user_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT user_id FROM conversations WHERE id = $1")
+            .bind(response.conversation_id.0)
             .fetch_one(db.pool())
             .await
             .unwrap();
-    let facts: Value = sqlx::query_scalar("SELECT profile_facts FROM users LIMIT 1")
+    let facts: Value = sqlx::query_scalar("SELECT profile_facts FROM users WHERE id = $1")
+        .bind(conv_user_id)
         .fetch_one(db.pool())
         .await
         .unwrap();
