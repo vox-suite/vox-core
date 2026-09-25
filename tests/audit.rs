@@ -89,3 +89,59 @@ async fn task_transitions_are_immutable_and_context_scoped() {
         .unwrap();
     assert!(stranger_events.is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn operator_access_is_recorded_and_sensitive_keys_are_rejected() {
+    let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let audit = AuditService::new(db);
+
+    // Privileged operator access is recorded
+    let op_ref = format!("op-user-{}", Uuid::new_v4());
+    audit
+        .record_operator_access(
+            &op_ref,
+            "audit.operator_query",
+            serde_json::json!({"reason": "troubleshooting", "session_id": "sess-1"}),
+        )
+        .await
+        .unwrap();
+
+    let events = audit
+        .list(AuditQuery {
+            after: None,
+            limit: Some(100),
+            user_context_id: None,
+            aggregate_id: None,
+            execution_id: None,
+        })
+        .await
+        .unwrap();
+
+    let found = events
+        .iter()
+        .find(|e| e.actor_type == op_ref && e.event_type == "audit.operator_query");
+    assert!(found.is_some(), "Operator audit event must be present");
+
+    // Sensitive keys (credentials, secrets, tokens, passwords, reasoning) must be rejected
+    for bad_key in [
+        "token",
+        "credential",
+        "secret",
+        "password",
+        "reasoning",
+        "payload",
+    ] {
+        let bad_details = serde_json::json!({ bad_key: "sensitive_value" });
+        assert!(
+            audit
+                .record_operator_access(&op_ref, "audit.operator_query", bad_details)
+                .await
+                .is_err(),
+            "Expected sensitive key {bad_key} to be rejected"
+        );
+    }
+}
