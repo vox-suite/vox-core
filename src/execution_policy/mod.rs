@@ -159,7 +159,7 @@ impl ExecutionPolicyService {
         Ok(decision)
     }
 
-    pub(crate) async fn evaluate_in_transaction(
+    pub async fn evaluate_in_transaction(
         &self,
         context: &ResolvedUserContext,
         request: ExecutionRequest,
