@@ -127,7 +127,14 @@ async fn operator_access_is_recorded_and_sensitive_keys_are_rejected() {
     assert!(found.is_some(), "Operator audit event must be present");
 
     // Sensitive keys (credentials, secrets, tokens, passwords, reasoning) must be rejected
-    for bad_key in ["token", "credential", "secret", "password", "reasoning", "payload"] {
+    for bad_key in [
+        "token",
+        "credential",
+        "secret",
+        "password",
+        "reasoning",
+        "payload",
+    ] {
         let bad_details = serde_json::json!({ bad_key: "sensitive_value" });
         assert!(
             audit
