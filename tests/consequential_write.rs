@@ -324,6 +324,25 @@ async fn exact_proposal_and_single_use_approval_lifecycle() {
         other => panic!("Expected Succeeded outcome, got {other:?}"),
     }
 
+    // 4b. Idempotent duplicate delivery with identical idempotency key returns original Succeeded outcome
+    let duplicate_outcome = write_service
+        .execute_booking(&context, approval_id, &idempotency_key, now)
+        .await
+        .unwrap();
+    match duplicate_outcome {
+        ExpediaBookingOutcome::Succeeded {
+            itinerary_id,
+            booking_status,
+            total_price_amount_minor,
+            ..
+        } => {
+            assert!(!itinerary_id.is_empty());
+            assert_eq!(booking_status, "booked");
+            assert_eq!(total_price_amount_minor, 75_000);
+        }
+        other => panic!("Expected Succeeded outcome on duplicate delivery, got {other:?}"),
+    }
+
     // 5. Attempting to re-execute with the same consumed approval fails closed
     let second_key = format!("affil-ref-{}", Uuid::new_v4());
     let replay_err = write_service
