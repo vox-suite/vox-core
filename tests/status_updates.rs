@@ -544,3 +544,251 @@ async fn in_flight_rotation_retries_with_the_committed_new_secret() {
         hex::encode(mac.finalize().into_bytes())
     );
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn external_events_update_existing_action_without_creating_autonomous_tasks() {
+    let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let trust = HostTrustService::new(db.clone());
+    let deployment_key = format!("status-ext-{}", Uuid::new_v4());
+    let host = trust
+        .register_host_app(RegisterHostAppRequest {
+            deployment_external_key: deployment_key.clone(),
+            host_app_external_key: "status-host".into(),
+            allowed_origins: vec![],
+        })
+        .await
+        .unwrap();
+    let request = HostContextRequest {
+        host_user_id: "status-user".into(),
+        organization_external_key: None,
+    };
+    let now = Utc::now();
+    let assertion = host
+        .credential
+        .sign_context_request(&request, now, Uuid::new_v4())
+        .unwrap();
+    let owner = trust
+        .resolve_authenticated_context(&assertion, &request, None, now)
+        .await
+        .unwrap();
+
+    let registry = vox_core::integration_registry::IntegrationRegistry::new(db.clone());
+    registry
+        .register(vox_core::integration_registry::RegisterIntegrationRequest {
+            deployment_external_key: deployment_key.clone(),
+            external_key: "payment_gw".into(),
+            protocol: vox_core::integration_registry::IntegrationProtocol::Direct,
+            display_name: "Payment Gateway".into(),
+            declaration_version: 1,
+            capabilities: vec![vox_core::integration_registry::CapabilityDeclaration {
+                external_key: "charge".into(),
+                effect: vox_core::integration_registry::CapabilityEffect::Write,
+                access_needs: vec![],
+                data_recipients: vec![],
+                regions: vec![],
+                failure_modes: vec![],
+                optional_guarantees: serde_json::json!({}),
+            }],
+        })
+        .await
+        .unwrap();
+    registry
+        .set_enabled(
+            vox_core::integration_registry::SetIntegrationEnabledRequest {
+                deployment_external_key: deployment_key.clone(),
+                external_key: "payment_gw".into(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let agents = vox_core::agent_registry::AgentRegistry::new(db.clone());
+    agents
+        .register(vox_core::agent_registry::RegisterAgentDefinitionRequest {
+            deployment_external_key: deployment_key.clone(),
+            external_key: "cashier".into(),
+            purpose: "processes charges".into(),
+            requested_capability_categories: vec!["payment_gw.charge".into()],
+        })
+        .await
+        .unwrap();
+    agents
+        .select(vox_core::agent_registry::SelectAgentRequest {
+            deployment_external_key: deployment_key.clone(),
+            agent_external_key: "cashier".into(),
+            model_configuration: vox_core::agent_registry::ModelConfigurationRequest {
+                model_adapter: "test".into(),
+                model: "model-p".into(),
+                configuration: serde_json::json!({}),
+            },
+        })
+        .await
+        .unwrap();
+
+    let connections = vox_core::connections::ConnectionService::new(db.clone());
+    let connection = connections
+        .record(
+            &owner,
+            vox_core::connections::AuthorizeConnectionRequest {
+                integration_external_key: "payment_gw".into(),
+                external_account_reference: "acct_live_123".into(),
+                account_display_id: None,
+                credential_custody: vox_core::connections::CredentialCustody::ExternalOperator,
+                authorization_state: vox_core::connections::AuthorizationState::Authorized,
+                authorized_capabilities: vec!["payment_gw.charge".into()],
+                expires_at: Some(now + chrono::Duration::hours(1)),
+                failure_code: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    vox_core::capability_grants::CapabilityGrantService::new(db.clone())
+        .grant(
+            &owner,
+            vox_core::capability_grants::CreateGrantRequest {
+                agent_external_key: "cashier".into(),
+                connection_id: connection.id,
+                capability_external_key: "payment_gw.charge".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let task = DurableTaskService::new(db.clone())
+        .start(
+            &owner,
+            StartTaskRequest {
+                title: "Process payment".into(),
+                instruction: "Charge account".into(),
+                agent_external_key: Some("cashier".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let execution_identity = vox_core::execution_policy::ExecutionIdentity {
+        provider_external_key: "payment_gw".into(),
+        model_identifier: "model-p".into(),
+        account_reference: "acct_live_123".into(),
+        connection_id: connection.id,
+        price_amount_minor: 5_000,
+        price_currency: "USD".into(),
+    };
+
+    let proposals = vox_core::approvals::ApprovalService::new(db.clone());
+    let proposal = proposals
+        .propose(
+            &owner,
+            vox_core::approvals::CreateProposalRequest {
+                task_id: task.id,
+                task_run_id: task.run_id,
+                agent_external_key: "cashier".into(),
+                capability_external_key: "payment_gw.charge".into(),
+                details: serde_json::json!({
+                    "charge_id": "ch_initial",
+                    "execution": execution_identity,
+                }),
+                expires_at: now + chrono::Duration::minutes(10),
+                replaces_proposal_id: None,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    let approval = proposals
+        .approve(&owner, proposal.id, proposal.details, now)
+        .await
+        .unwrap();
+    let approval_id = approval.approval_id.unwrap();
+
+    let coordinator = vox_core::execution::ExecutionCoordinator::new(db.clone());
+    let idempotency_key = format!("exec-charge-{}", Uuid::new_v4());
+    let execution = coordinator
+        .start(
+            &owner,
+            vox_core::execution::StartExecutionRequest {
+                approval_id,
+                idempotency_key: idempotency_key.clone(),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    let prov_ref = "ch_provider_ref_999";
+    coordinator
+        .record_outcome(
+            &owner,
+            execution.id,
+            vox_core::execution::AdapterOutcome::Reconciling {
+                provider_reference: Some(prov_ref.into()),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+
+    let initial_task_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
+            .bind(owner.user_id.0)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+
+    let status = StatusService::new(db.clone());
+    let event = vox_core::status::VerifiedIntegrationEvent {
+        integration_external_key: "payment_gw".into(),
+        execution_id: execution.id,
+        provider_event_id: "evt_webhook_1001".into(),
+        external_account_reference: "acct_live_123".into(),
+        outcome: vox_core::execution::AdapterOutcome::Succeeded {
+            provider_reference: prov_ref.into(),
+            evidence: serde_json::json!({"charge_status": "succeeded", "receipt_number": "rcpt_1001"}),
+        },
+    };
+
+    let updated_exec = status
+        .apply_verified_external_event(&coordinator, event.clone(), now)
+        .await
+        .unwrap();
+    assert_eq!(updated_exec.state, "succeeded");
+    assert_eq!(updated_exec.provider_reference.as_deref(), Some(prov_ref));
+
+    let replayed_exec = status
+        .apply_verified_external_event(&coordinator, event, now)
+        .await
+        .unwrap();
+    assert_eq!(replayed_exec.id, execution.id);
+    assert_eq!(replayed_exec.state, "succeeded");
+
+    let mismatched_event = vox_core::status::VerifiedIntegrationEvent {
+        integration_external_key: "payment_gw".into(),
+        execution_id: execution.id,
+        provider_event_id: "evt_webhook_1002".into(),
+        external_account_reference: "acct_wrong".into(),
+        outcome: vox_core::execution::AdapterOutcome::Succeeded {
+            provider_reference: prov_ref.into(),
+            evidence: serde_json::json!({}),
+        },
+    };
+    assert!(
+        status
+            .apply_verified_external_event(&coordinator, mismatched_event, now)
+            .await
+            .is_err()
+    );
+
+    let final_task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
+        .bind(owner.user_id.0)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(initial_task_count, final_task_count);
+}
