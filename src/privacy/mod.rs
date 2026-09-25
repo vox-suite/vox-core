@@ -842,13 +842,15 @@ impl PrivacyService {
                 let lower = s.to_ascii_lowercase();
                 if lower.contains("sk_live_")
                     || lower.contains("vox_sk_")
+                    || lower.contains("bearer ")
                     || lower.contains("-----begin")
                     || lower.contains("private key-----")
                     || lower
-                        .split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';')
+                        .split(|c: char| {
+                            c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';'
+                        })
                         .any(|word| {
-                            word.starts_with("bearer ")
-                                || word.starts_with("sk-")
+                            word.starts_with("sk-")
                                 || word.starts_with("eyj")
                                 || word.starts_with("key-")
                         })
