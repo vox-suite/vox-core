@@ -840,14 +840,18 @@ impl PrivacyService {
             }
             Value::String(s) => {
                 let lower = s.to_ascii_lowercase();
-                if lower.starts_with("bearer ")
-                    || lower.starts_with("sk_live_")
-                    || lower.starts_with("sk-")
-                    || lower.starts_with("vox_sk_")
-                    || lower.starts_with("key-")
-                    || lower.starts_with("eyj")
+                if lower.contains("sk_live_")
+                    || lower.contains("vox_sk_")
                     || lower.contains("-----begin")
                     || lower.contains("private key-----")
+                    || lower
+                        .split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';')
+                        .any(|word| {
+                            word.starts_with("bearer ")
+                                || word.starts_with("sk-")
+                                || word.starts_with("eyj")
+                                || word.starts_with("key-")
+                        })
                 {
                     return Err(PrivacyError::ProhibitedData(
                         "credential or token value detected in export payload".into(),
