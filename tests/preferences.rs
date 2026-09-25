@@ -152,6 +152,13 @@ async fn sensitive_preferences_require_confirmation_before_save_or_replacement()
     assert_eq!(confirmed_res.preference_key, "home_address");
     assert!(confirmed_res.is_sensitive);
     assert!(confirmed_res.confirmed_at.is_some());
+    assert!(
+        service
+            .effective_for_agent(&owner, "agent", &["sensitive_personal".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     // 3. Replacing an existing sensitive preference without confirmation fails
     let unconfirmed_replace = service

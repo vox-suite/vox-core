@@ -44,6 +44,8 @@ pub enum ApprovalError {
     Expired,
     #[error("proposal cannot be approved")]
     NotApprovable,
+    #[error("agent lacks a grant for the proposed connection and capability")]
+    UnauthorizedCapability,
     #[error("approval was already consumed")]
     Consumed,
     #[error("approval storage unavailable")]
@@ -72,7 +74,28 @@ impl ApprovalService {
         {
             return Err(ApprovalError::Invalid);
         }
-        let _ = self.grants.effective_for_agent(context, &agent).await.ok();
+        let connection_id = r
+            .details
+            .get("execution")
+            .and_then(|v| v.get("connection_id"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .ok_or(ApprovalError::Invalid)?;
+        let grants = self
+            .grants
+            .effective_for_agent(context, &agent)
+            .await
+            .map_err(|e| match e {
+                crate::capability_grants::CapabilityGrantError::Database(err) => {
+                    ApprovalError::Database(err)
+                }
+                _ => ApprovalError::UnauthorizedCapability,
+            })?;
+        if !grants.iter().any(|grant| {
+            grant.connection_id == connection_id && grant.capability_external_key == capability
+        }) {
+            return Err(ApprovalError::UnauthorizedCapability);
+        }
         let mut tx = self.db.pool().begin().await?;
         let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1 AND user_id = $2)",
@@ -84,12 +107,6 @@ impl ApprovalService {
         if !task_belongs_to_context {
             return Err(ApprovalError::NotFound);
         }
-        let connection_id = r
-            .details
-            .get("execution")
-            .and_then(|v| v.get("connection_id"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| Uuid::parse_str(s).ok());
         if let Some(previous) = r.replaces_proposal_id {
             let changed = sqlx::query(
                 "UPDATE action_proposals SET state = 'rejected', updated_at = $3 \
@@ -115,7 +132,7 @@ impl ApprovalService {
         .bind(r.task_id)
         .bind(r.task_run_id)
         .bind(&agent)
-        .bind(connection_id)
+        .bind(Some(connection_id))
         .bind(&capability)
         .bind(&details)
         .bind(&details_hash)

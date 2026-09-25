@@ -1,0 +1,22 @@
+# Strix review of merged pull requests
+
+Reviewed the 43 merged pull requests in `vox-suite/vox-core` through #76 on 2026-09-25. Three other closed pull requests (#53, #54, and #55) were not merged and are outside this inventory. Strix commented on 23 merged pull requests. Its review summary reported no security issues on #51, #52, #60, #62, #64, #66, #67, #68, #69, #70, #71, #72, #73, #74, and #76. The other 20 merged pull requests had no Strix comment.
+
+The table records every distinct security finding in the eight remaining Strix summary comments. Strix also posted a boilerplate review notification for each finding review. The three short follow-up suggestions in #59 and #63 are recorded below.
+
+| Pull request and Strix comment | Finding | Assessment on `main` before this PR |
+| --- | --- | --- |
+| [#75](https://github.com/vox-suite/vox-core/pull/75#discussion_r4101121846) | Bearer-token predicate was unreachable after splitting on whitespace. | Valid, already fixed on `main`: the scanner checks `lower.contains("bearer ")`, and its existing tests cover bearer values. |
+| [#65](https://github.com/vox-suite/vox-core/pull/65#discussion_r4089585637) | Retention prune lacked authentication. | Valid, already fixed on `main`: the route requires the service token; release conformance tests exercise rejection of missing and wrong tokens. |
+| [#63](https://github.com/vox-suite/vox-core/pull/63#discussion_r4086200258) | Unbounded reminder interval can overflow `DateTime`; unbounded retry count can exhaust resources. | Valid. This PR uses checked date arithmetic and rejects retry counts outside 0–10. |
+| [#61](https://github.com/vox-suite/vox-core/pull/61#discussion_r4085742512) | Cancellation accepted an arbitrary itinerary ID with only a manage grant. | Valid. This PR requires a confirmed booking for the same user and connection before contacting Expedia. The agent still needs a current manage grant for that connection. |
+| [#59, context](https://github.com/vox-suite/vox-core/pull/59#discussion_r4085237342) | Nested internal fields and array parameters bypassed minimization; empty `access_needs` allowed all parameters. | Valid. This PR denies undeclared top-level parameters, strips internal fields recursively, and never forwards non-object arguments. |
+| [#59, response](https://github.com/vox-suite/vox-core/pull/59#discussion_r4085237387) | Response redaction missed credential values, several sensitive key names, and error messages. | Valid. This PR redacts detected credential values and keys, treats raw provider error text as unsafe, and applies the same boundary to execute and reconcile. Arbitrary opaque secrets in otherwise ordinary data values cannot be identified reliably without a provider schema. |
+| [#58](https://github.com/vox-suite/vox-core/pull/58#discussion_r4084461610) | Renewing consent could change quarantined or removed extensions to installed. | Valid. This PR rejects renewal for both terminal states before writing consent. |
+| [#57](https://github.com/vox-suite/vox-core/pull/57#discussion_r4083869750) | Sensitive saved preferences appeared in the agent-facing effective-preferences result. | Valid. This PR excludes `is_sensitive` rows from that query. |
+| [#56, summary](https://github.com/vox-suite/vox-core/pull/56) | Asymmetric ID-token verification derived the trusted Supabase issuer and JWKS endpoint from the unverified token. | Valid. This PR requires a configured Supabase URL for asymmetric verification. |
+| [#56, summary](https://github.com/vox-suite/vox-core/pull/56) | Action proposal creation ignored the capability-grant lookup result. | Valid. This PR requires an effective grant for the exact agent, capability, and connection and fails closed on lookup errors. |
+
+Additional Strix comments: [#63](https://github.com/vox-suite/vox-core/pull/63#discussion_r4086200284) suggested clamping `max_retries`; this PR rejects out-of-range input instead. [#59](https://github.com/vox-suite/vox-core/pull/59#discussion_r4085237409) asked to redact reconciliation error messages, and [#59](https://github.com/vox-suite/vox-core/pull/59#discussion_r4085237423) asked to inspect string values; both are covered by the response fix.
+
+The review summaries are snapshots of the commits Strix analyzed. In particular, #75's summary warned that later commits were not reviewed. The assessment above was made against the current `main` source, not inferred from Strix's open/resolved labels.

@@ -942,7 +942,7 @@ async fn test_fuzzing_and_malformed_protocol_resilience() {
             effect: ExtensionEffect::Read,
             consequential: false,
             data_recipients: vec![],
-            access_needs: vec![],
+            access_needs: vec!["huge".into()],
             optional_guarantees: json!({}),
         },
     };

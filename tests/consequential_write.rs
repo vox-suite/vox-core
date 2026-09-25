@@ -609,6 +609,22 @@ async fn authoritative_cancellation_and_refund_accounting() {
         other => panic!("Expected Succeeded, got {other:?}"),
     };
 
+    // A manage grant alone cannot target a booking not recorded for this
+    // user and connection.
+    let unrelated = write_service
+        .cancel_booking(
+            &context,
+            "saathi",
+            connection.id,
+            "another-users-itinerary",
+            "Unauthorized cancellation attempt",
+        )
+        .await;
+    assert!(matches!(
+        unrelated,
+        Err(ExpediaLodgingError::ProposalNotFound)
+    ));
+
     // 1. Authoritative cancellation
     let cancel_res = write_service
         .cancel_booking(

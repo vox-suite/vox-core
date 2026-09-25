@@ -816,6 +816,26 @@ impl ExpediaLodgingService {
             ));
         }
 
+        // A manage grant authorizes this connection, not every itinerary known to
+        // the provider. Only a booking confirmed for this user and connection may
+        // be cancelled through Core.
+        let owns_booking = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM executions e \
+             JOIN action_proposals p ON p.id = e.proposal_id \
+             WHERE e.user_id = $1 AND p.user_id = $1 AND p.connection_id = $2 \
+             AND p.capability = $3 \
+             AND e.state = 'succeeded' AND e.provider_reference = $4)",
+        )
+        .bind(context.user_id.0)
+        .bind(connection_id)
+        .bind(EXPEDIA_CAPABILITY_LODGING_BOOK)
+        .bind(itinerary_id)
+        .fetch_one(self.db.pool())
+        .await?;
+        if !owns_booking {
+            return Err(ExpediaLodgingError::ProposalNotFound);
+        }
+
         let resp = self.client.cancel_booking(itinerary_id, reason).await?;
 
         Ok(ExpediaCancellationResult {

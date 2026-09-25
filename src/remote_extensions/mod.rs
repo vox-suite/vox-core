@@ -689,6 +689,12 @@ impl RemoteExtensionService {
         if version != current_version {
             return Err(RemoteExtensionError::Invalid);
         }
+        if lifecycle_state == "quarantined" {
+            return Err(RemoteExtensionError::Quarantined);
+        }
+        if lifecycle_state == "removed" {
+            return Err(RemoteExtensionError::NotActive(LifecycleState::Removed));
+        }
 
         sqlx::query(
             "UPDATE remote_extension_versions \
