@@ -18,6 +18,9 @@ pub struct Config {
     pub jev_enabled: bool,
     pub tts_provider: String,
     pub status_webhook_key: Option<String>,
+    /// Local Playwright helper for amazon.in shopping; unset disables it.
+    pub amazon_shopper_url: Option<String>,
+    pub amazon_shopper_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -59,6 +62,9 @@ impl Config {
             jev_enabled,
             tts_provider,
             status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
+                .filter(|value| !value.trim().is_empty()),
+            amazon_shopper_url: get("AMAZON_SHOPPER_URL").filter(|value| !value.trim().is_empty()),
+            amazon_shopper_token: get("AMAZON_SHOPPER_TOKEN")
                 .filter(|value| !value.trim().is_empty()),
         })
     }
