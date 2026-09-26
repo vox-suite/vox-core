@@ -10,7 +10,7 @@ use url::{Host, Url};
 /// Resolve immediately before dispatch and pin the accepted address in reqwest.
 /// This prevents a public DNS name from switching to a private address between
 /// catalog validation and the actual HTTP connection.
-pub(super) async fn client_for_endpoint(
+pub(crate) async fn client_for_endpoint(
     endpoint: &str,
     timeout: Duration,
     allow_local_for_testing: bool,

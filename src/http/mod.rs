@@ -7,6 +7,7 @@ pub mod approvals;
 pub mod audit;
 pub mod auth;
 pub mod capability_grants;
+pub mod connected_apps;
 pub mod connected_reads;
 pub mod connections;
 pub mod consequential_writes;
@@ -68,6 +69,7 @@ pub struct AppState {
     pub(crate) privacy: Option<Arc<crate::privacy::PrivacyService>>,
     pub(crate) reminders: Option<Arc<crate::reminders::ReminderService>>,
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
+    pub(crate) connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     pub(crate) skills: Option<Arc<crate::skills::SkillService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
@@ -102,6 +104,7 @@ impl AppState {
             privacy: None,
             reminders: None,
             remote_extensions: None,
+            connected_apps: None,
             skills: None,
             status: None,
             uber_read: None,
@@ -187,6 +190,7 @@ impl AppState {
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
+            connected_apps: None,
             skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
@@ -292,6 +296,7 @@ impl AppState {
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
+            connected_apps: None,
             skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
@@ -382,6 +387,14 @@ impl AppState {
         identity_adapters: crate::identity_adapters::IdentityAdapterService,
     ) -> Self {
         self.identity_adapters = Some(Arc::new(identity_adapters));
+        self
+    }
+
+    pub fn with_connected_apps(
+        mut self,
+        service: Arc<crate::connected_apps::ConnectedAppsService>,
+    ) -> Self {
+        self.connected_apps = Some(service);
         self
     }
 
@@ -601,6 +614,15 @@ pub fn router(state: AppState) -> Router {
             post(skills::set_agent_enabled),
         )
         .route("/v1/remote-extensions/list", post(remote_extensions::list))
+        .route(
+            "/v1/remote-extensions/{id}/authorize",
+            post(connected_apps::authorize),
+        )
+        .route(
+            "/v1/connected-apps/callback",
+            post(connected_apps::callback),
+        )
+        .route("/v1/connected-apps/status", post(connected_apps::status))
         .route(
             "/v1/remote-extensions/{id}",
             post(remote_extensions::get)

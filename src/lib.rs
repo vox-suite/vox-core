@@ -10,6 +10,7 @@ pub mod bridge_client;
 pub mod capability_grants;
 pub mod config;
 pub mod conformance;
+pub mod connected_apps;
 pub mod connections;
 pub mod consent;
 pub mod conversations;

@@ -21,6 +21,13 @@ pub struct Config {
     /// Local Playwright helper for amazon.in shopping; unset disables it.
     pub amazon_shopper_url: Option<String>,
     pub amazon_shopper_token: Option<String>,
+    /// 32-byte hex key that encrypts connected-app OAuth tokens at rest.
+    pub credential_key: Option<String>,
+    /// Exact redirect URIs hosts may use for connected-app OAuth callbacks.
+    pub mcp_oauth_redirect_uris: Vec<String>,
+    /// JSON map of MCP endpoint host -> OAuth client, for apps without
+    /// dynamic client registration.
+    pub mcp_oauth_clients: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -65,6 +72,18 @@ impl Config {
                 .filter(|value| !value.trim().is_empty()),
             amazon_shopper_url: get("AMAZON_SHOPPER_URL").filter(|value| !value.trim().is_empty()),
             amazon_shopper_token: get("AMAZON_SHOPPER_TOKEN")
+                .filter(|value| !value.trim().is_empty()),
+            credential_key: get("VOX_CREDENTIAL_KEY").filter(|value| !value.trim().is_empty()),
+            mcp_oauth_redirect_uris: get("VOX_MCP_OAUTH_REDIRECT_URIS")
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(|uri| uri.trim().to_string())
+                        .filter(|uri| !uri.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            mcp_oauth_clients: get("VOX_MCP_OAUTH_CLIENTS")
                 .filter(|value| !value.trim().is_empty()),
         })
     }

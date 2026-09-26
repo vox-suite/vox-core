@@ -64,6 +64,7 @@ pub struct ConversationAgent {
     user_events: Option<UserEventHub>,
     shopper: Option<ShopperClient>,
     shopper_sessions: ShopperSessions,
+    connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -109,6 +110,7 @@ impl ConversationAgent {
             user_events: None,
             shopper,
             shopper_sessions: ShopperSessions::new(),
+            connected_apps: None,
         })
     }
 
@@ -123,6 +125,9 @@ impl ConversationAgent {
             db.clone(),
             bridge_client,
         )));
+        agent.connected_apps = Some(Arc::new(
+            crate::connected_apps::ConnectedAppsService::from_config(db.clone(), config),
+        ));
         agent.db = Some(db);
         Ok(agent)
     }
@@ -212,6 +217,15 @@ impl ConversationAgent {
             crate::jev::ToolDomain::All
         };
 
+        // Tools from apps the user connected (Swiggy, Notion, ...), offered
+        // alongside whichever built-in domain the router picked.
+        let connected_tools = match (&self.connected_apps, is_call_opening) {
+            (Some(apps), false) => {
+                crate::connected_apps::tools::agent_tools(apps, prompt.user_id, turn).await
+            }
+            _ => Vec::new(),
+        };
+
         tracing::Span::current().record("vox.tool_domain", tracing::field::debug(routed_domain));
         // Names the agent after the tool set each branch gives it, so traces
         // show which one ran.
@@ -249,6 +263,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
+                    .dynamic_tools(connected_tools.clone())
                     .default_max_turns(6)
                     .build()
             } else if let Some(shopper) = self
@@ -278,6 +293,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
+                    .dynamic_tools(connected_tools.clone())
                     .default_max_turns(6)
                     .build()
             } else if is_voice {
@@ -292,6 +308,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Maps => new_agent("maps")
@@ -308,6 +325,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::TasksAndRecords => new_agent("tasks-and-records")
@@ -358,6 +376,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => new_agent("calendar")
@@ -371,6 +390,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Device => new_agent("device")
@@ -379,6 +399,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     _ => new_agent("voice-general")
@@ -427,6 +448,7 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
+                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                 }
@@ -511,6 +533,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
+                    .dynamic_tools(connected_tools.clone())
                     .default_max_turns(10)
                     .build()
             };

@@ -56,6 +56,10 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
+    let connected_apps = Arc::new(vox_core::connected_apps::ConnectedAppsService::from_config(
+        db.clone(),
+        &config,
+    ));
     let mut legacy_state = AppState::with_memory_and_jev(
         db.clone(),
         agent,
@@ -63,6 +67,7 @@ async fn main() {
         config.service_token,
         jev_client,
     );
+    legacy_state = legacy_state.with_connected_apps(connected_apps);
     if let Some(admin) = vox_core::http::admin::RedisAdmin::from_token_with_url(
         config.redis_url.as_deref().or(Some("redis://redis:6379")),
         std::env::var("VOX_ADMIN_TOKEN").ok(),

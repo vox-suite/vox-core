@@ -208,7 +208,14 @@ pub async fn remove(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    reply(service.remove(&c, id).await, StatusCode::OK)
+    let removed = service.remove(&c, id).await;
+    if removed.is_ok()
+        && let Some(apps) = s.connected_apps.as_ref()
+        && let Err(err) = apps.forget(id).await
+    {
+        tracing::error!(%err, extension_id = %id, "failed to delete connected app credentials");
+    }
+    reply(removed, StatusCode::OK)
 }
 
 fn reply(r: Result<RemoteExtension, RemoteExtensionError>, ok: StatusCode) -> Response {
@@ -236,7 +243,7 @@ fn reply_error(e: RemoteExtensionError) -> Response {
     }
 }
 
-async fn context(
+pub(super) async fn context(
     trust: Option<&HostTrustService>,
     headers: &HeaderMap,
     request: HostContextRequest,
