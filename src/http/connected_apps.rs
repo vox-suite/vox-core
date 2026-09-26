@@ -101,7 +101,11 @@ fn error(e: ConnectedAppError) -> Response {
         }
         ConnectedAppError::Unauthorized => (StatusCode::BAD_GATEWAY, "provider_rejected"),
         ConnectedAppError::Expired => (StatusCode::GONE, "authorization_expired"),
-        ConnectedAppError::Provider(_) => (StatusCode::BAD_GATEWAY, "provider_error"),
+        ConnectedAppError::Provider(_)
+        | ConnectedAppError::SessionExpired
+        | ConnectedAppError::UnknownTool => (StatusCode::BAD_GATEWAY, "provider_error"),
+        ConnectedAppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "provider_error"),
+        ConnectedAppError::NoPendingAction => (StatusCode::GONE, "not_found"),
         ConnectedAppError::Extension(_) => (StatusCode::CONFLICT, "extension_state"),
         ConnectedAppError::Crypto | ConnectedAppError::Database(_) => {
             (StatusCode::SERVICE_UNAVAILABLE, "unavailable")

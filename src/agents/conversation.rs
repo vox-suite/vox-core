@@ -219,12 +219,30 @@ impl ConversationAgent {
 
         // Tools from apps the user connected (Swiggy, Notion, ...), offered
         // alongside whichever built-in domain the router picked.
-        let connected_tools = match (&self.connected_apps, is_call_opening) {
+        let connected = match (&self.connected_apps, is_call_opening) {
             (Some(apps), false) => {
-                crate::connected_apps::tools::agent_tools(apps, prompt.user_id, turn).await
+                let history: Vec<&str> = prompt
+                    .recent_messages
+                    .iter()
+                    .rev()
+                    .take(6)
+                    .map(|m| m.text.as_str())
+                    .collect();
+                crate::connected_apps::tools::toolset(
+                    apps,
+                    crate::connected_apps::tools::TurnContext {
+                        user_id: prompt.user_id,
+                        turn,
+                        message: &prompt.user_text,
+                        history,
+                        voice: is_voice,
+                    },
+                )
+                .await
             }
-            _ => Vec::new(),
+            _ => Default::default(),
         };
+        let connected_tools = connected.tools;
 
         tracing::Span::current().record("vox.tool_domain", tracing::field::debug(routed_domain));
         // Names the agent after the tool set each branch gives it, so traces
@@ -563,13 +581,14 @@ impl ConversationAgent {
             String::new()
         };
         let current_time = chrono::Utc::now().to_rfc3339();
+        let turn_state = format!("{shopping_state}{}", connected.note);
         let input = format!(
             "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}{}\nUser message:\n{}{}{}",
             current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
-            shopping_state,
+            turn_state,
             prompt.user_text,
             filler_instruction,
             onboarding_instruction
