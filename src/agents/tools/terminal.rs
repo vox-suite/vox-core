@@ -41,13 +41,9 @@ impl From<DeviceLinkError> for TerminalToolError {
 pub(crate) struct DeviceRow {
     pub(crate) id: Uuid,
     pub(crate) label: String,
-    #[allow(dead_code)]
     pub(crate) platform: String,
 }
 
-/// Resolves which of the user's registered devices a device-control tool
-/// should target. Shared by every tool that talks to a device over
-/// [`DeviceHub`] (terminal control, resolving a GitHub issue, ...).
 pub(crate) async fn resolve_device(
     db: &Db,
     user_id: Uuid,

@@ -354,6 +354,13 @@ impl ConversationAgent {
                             self.device_hub.clone().unwrap_or_default(),
                             turn,
                         ))
+                        .tool(tools::github::ResolveGithubIssue::new(
+                            self.db.clone(),
+                            prompt.user_id,
+                            prompt.owner,
+                            self.device_hub.clone().unwrap_or_default(),
+                            self.outbound.clone(),
+                        ))
                         .tool(tools::profile::UpdateUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -502,6 +509,13 @@ impl ConversationAgent {
                         prompt.user_id,
                         self.device_hub.clone().unwrap_or_default(),
                         turn,
+                    ))
+                    .tool(tools::github::ResolveGithubIssue::new(
+                        self.db.clone(),
+                        prompt.user_id,
+                        prompt.owner,
+                        self.device_hub.clone().unwrap_or_default(),
+                        self.outbound.clone(),
                     ))
                     .default_max_turns(10)
                     .build()

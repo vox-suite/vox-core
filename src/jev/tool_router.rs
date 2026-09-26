@@ -61,7 +61,7 @@ impl ToolRouter {
             (
                 "device",
                 Some(
-                    "Opening a terminal, running a shell command, or checking status on the user's registered computer or device (e.g. their Mac, laptop)",
+                    "Opening a terminal, running a shell command, checking status, or resolving a GitHub issue (opening a pull request) on the user's registered computer or device (e.g. their Mac, laptop)",
                 ),
             ),
             (
