@@ -39,6 +39,7 @@ const state = {
   step: 'idle' as Step,
   total: null as string | null,
   restartWarned: false,
+  asinWarned: false,
   query: null as string | null,
   results: [] as { asin: string; title: string; price: string | null }[],
   /** The ASIN the agent opened; choosing a colour can switch the page to a sibling ASIN. */
@@ -86,10 +87,19 @@ function describeState(): string {
  * finishing in the background; `retry` is the tool to repeat after the user
  * finishes a verification page.
  */
-export async function describe(running: string | null, retry: string | null): Promise<string> {
-  if (running === 'amazon_checkout')
+export async function describe(
+  running: { tool: string; body: Record<string, unknown> } | null,
+  retry: string | null,
+): Promise<string> {
+  // Name the exact call to repeat: the agent only remembers what was said, so
+  // without the ASIN or query here it would guess (and invent) one.
+  if (running?.tool === 'amazon_checkout')
     return `Checkout is loading in the browser for ${productName()}. On the user's next message call amazon_checkout again; do not search again.`;
-  if (running) return `${running} is still running in the browser; on the user's next message call it again instead of starting over.`;
+  if (running?.tool === 'amazon_open_product')
+    return `The product page for ASIN ${String(running.body.asin)} is still loading. On the user's next message call amazon_open_product with asin "${String(running.body.asin)}" again; do not search again.`;
+  if (running?.tool === 'amazon_search')
+    return `The search for "${String(running.body.query)}" is still loading. On the user's next message call amazon_search with the same query again.`;
+  if (running) return `${running.tool} is still running in the browser with ${JSON.stringify(running.body)}; on the user's next message call it again with the same input instead of starting over.`;
   if (state.blocker)
     return `Amazon is showing a ${state.blocker.replace('_', ' ')} page in the browser that the user must finish by hand. When they say it's done, call ${retry ?? 'the same tool'} again.`;
   if (state.step === 'idle' && !state.notice && onCheckoutPage(await getPage()))
@@ -228,7 +238,7 @@ function readProduct(page: Page): Promise<Product> {
         .replace(/_/g, ' ')
         .replace(/^\w/, (c) => c.toUpperCase());
 
-    const title = first(['#productTitle']);
+    const title = first(['#productTitle', '#title']);
     const price = first([
       '#corePriceDisplay_desktop_feature_div .priceToPay .a-offscreen',
       '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',
@@ -447,6 +457,7 @@ export async function search(query: string): Promise<Result> {
     step: results.length ? 'results' : 'idle',
     total: null,
     restartWarned: false,
+    asinWarned: false,
     query,
     results: results.map(({ asin, title, price }) => ({ asin, title, price })),
     openedAsin: null,
@@ -476,30 +487,66 @@ export async function openProduct(asin: string): Promise<Result> {
       return { status: 'ok', ...state.product };
     }
   }
+  // An ASIN that isn't in the latest results is usually one the agent made up.
+  const known =
+    state.results.some((r) => r.asin === wanted) || wanted === state.openedAsin || wanted === state.product?.asin;
+  if (state.results.length > 0 && !known && !state.asinWarned) {
+    state.asinWarned = true;
+    log(`product: ${wanted} is not in the search results`);
+    return {
+      status: 'unknown_asin',
+      message: `${wanted} is not one of the search results. Use an ASIN from these: ${state.results
+        .map((r, i) => `${i + 1}) ${r.title.slice(0, 50)} [ASIN ${r.asin}]`)
+        .join('; ')}. Only if the user asked for this exact product, call amazon_open_product with it again.`,
+    };
+  }
   await page.goto(`${config.baseUrl}/dp/${wanted}`, { waitUntil: 'commit' });
-  await page.locator('#productTitle').waitFor().catch(() => {});
+  const notFoundPage = page.getByText(/not a functioning page|couldn't find that page/i);
+  await page
+    .locator('#productTitle, #title')
+    .or(notFoundPage)
+    .first()
+    .waitFor({ timeout: 8_000 })
+    .catch(() => {});
   const blocked = await blocker(page);
   if (blocked) return blocked;
+  if (await visible(notFoundPage.first())) {
+    log(`product: ${wanted} does not exist on amazon.in`);
+    return {
+      status: 'not_found',
+      message: `Amazon has no product with ASIN ${wanted}.${
+        state.results.length
+          ? ` Use an ASIN from the search results: ${state.results.map((r) => r.asin).join(', ')}.`
+          : ' Search for it first.'
+      }`,
+    };
+  }
   // The buy box and variant rows render after the title. The twister
   // container itself appears early and empty, so wait for its rows.
   await page
     .locator('#buy-now-button, #add-to-cart-button')
     .first()
-    .waitFor({ timeout: 4_000 })
+    .waitFor({ timeout: 3_000 })
     .catch(() => {});
+  const variantRows = page.locator(
+    '[id^="inline-twister-row-"], [id^="inline-twister-singleton-header-"], #twister [id^="variation_"]',
+  );
   if ((await page.locator('#twister_feature_div').count()) > 0)
-    await page
-      .locator('[id^="inline-twister-row-"], [id^="inline-twister-singleton-header-"], #twister [id^="variation_"]')
-      .first()
-      .waitFor({ timeout: 3_000 })
-      .catch(() => {});
+    await variantRows.first().waitFor({ timeout: 2_000 }).catch(() => {});
 
-  const product = await readProduct(page);
+  let product = await readProduct(page);
+  // The options section can render late; read again rather than tell the
+  // agent there is nothing to choose.
+  if (product.variants.length === 0 && (await page.locator('#twister_feature_div, #twister').count()) > 0) {
+    await variantRows.first().waitFor({ timeout: 3_000 }).catch(() => {});
+    product = await readProduct(page);
+  }
   if (!product.title) return { status: 'not_found', message: 'Could not read that product page.' };
   Object.assign(state, {
     step: 'product_open',
     total: null,
     restartWarned: false,
+    asinWarned: false,
     openedAsin: wanted,
     product: publicProduct(product),
     checkout: null,
@@ -892,7 +939,14 @@ function readConfirmation(page: Page): Promise<{ confirmed: boolean; orderId: st
       // Prefer the number printed next to "Order #"; the checkout's own id
       // (p-404-...) has the same shape but is not an order number.
       const labelled = text.match(/Order\s*(?:#|number|no\.?|ID)\s*:?\s*(\d{3}-\d{7}-\d{7})/i)?.[1];
-      const orderId = labelled ?? (confirmed ? (text.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0] ?? null) : null);
+      // amazon.in's thank-you page often shows the number only inside
+      // "order details" links (…orderID=404-…).
+      const linked = [...document.querySelectorAll('a[href]')]
+        .map((a) => a.getAttribute('href') ?? '')
+        .map((href) => href.match(/order[-_]?id=(\d{3}-\d{7}-\d{7})/i)?.[1])
+        .find(Boolean);
+      const orderId =
+        labelled ?? linked ?? (confirmed ? (text.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0] ?? null) : null);
       return { confirmed, orderId };
     })
     .catch(() => ({ confirmed: false, orderId: null }));
