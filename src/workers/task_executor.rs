@@ -2,23 +2,26 @@
 * Worker executor consuming and running pending background tasks.
 */
 use crate::{
+    agents::gateway::{self, LlmGateway},
     config::Config,
     db::Db,
     identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
     outbound::OutboundCallService,
 };
-use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
+
+const PREAMBLE: &str = "You are Vox's background task execution engine. You process tasks autonomously and summarize the final result clearly.";
 
 #[derive(Clone)]
 pub struct TaskExecutorHandler {
     db: Db,
     api_key: String,
     model: String,
+    gateway: Option<LlmGateway>,
     jev: Option<JevClient>,
     outbound: Option<Arc<OutboundCallService>>,
 }
@@ -39,6 +42,7 @@ impl TaskExecutorHandler {
             db,
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
+            gateway: config.llm_gateway(),
             jev: None,
             outbound: None,
         }
@@ -49,6 +53,7 @@ impl TaskExecutorHandler {
             db,
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
+            gateway: config.llm_gateway(),
             jev,
             outbound: None,
         }
@@ -88,9 +93,6 @@ impl TaskExecutorHandler {
             .execute(self.db.pool())
             .await?;
 
-        let client = gemini::Client::new(&self.api_key)
-            .map_err(|e| TaskExecutorError::Agent(e.to_string()))?;
-
         let prompt = format!(
             "You are an autonomous AI worker executing a background task for the user.\n\
              Task title: {}\n\
@@ -100,15 +102,15 @@ impl TaskExecutorHandler {
             title, instruction
         );
 
-        let agent = client
-            .agent(&self.model)
-            .preamble("You are Vox's background task execution engine. You process tasks autonomously and summarize the final result clearly.")
-            .build();
-
-        let response = agent
-            .prompt(prompt)
-            .await
-            .map_err(|e| TaskExecutorError::Agent(e.to_string()))?;
+        let response = gateway::complete(
+            &self.api_key,
+            &self.model,
+            self.gateway.as_ref(),
+            PREAMBLE,
+            prompt,
+        )
+        .await
+        .map_err(|_| TaskExecutorError::Agent("LLM request failed".to_string()))?;
 
         let execution_result = json!({
             "outcome": "success",
@@ -185,3 +187,4 @@ impl TaskExecutorHandler {
         Ok(())
     }
 }
+

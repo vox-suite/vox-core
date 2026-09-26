@@ -18,6 +18,9 @@ pub struct Config {
     pub jev_enabled: bool,
     pub tts_provider: String,
     pub status_webhook_key: Option<String>,
+    pub llm_gateway_base_url: Option<String>,
+    pub llm_gateway_api_key: Option<String>,
+    pub llm_gateway_model: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -59,6 +62,12 @@ impl Config {
             jev_enabled,
             tts_provider,
             status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
+                .filter(|value| !value.trim().is_empty()),
+            llm_gateway_base_url: get("LLM_GATEWAY_BASE_URL")
+                .filter(|value| !value.trim().is_empty()),
+            llm_gateway_api_key: get("LLM_GATEWAY_API_KEY")
+                .filter(|value| !value.trim().is_empty()),
+            llm_gateway_model: get("LLM_GATEWAY_MODEL")
                 .filter(|value| !value.trim().is_empty()),
         })
     }

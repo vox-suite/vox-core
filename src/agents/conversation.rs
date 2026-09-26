@@ -1,7 +1,7 @@
 /**
 * Conversational agent logic, prompting structures, and TTS token chunking.
 */
-use super::{AgentError, tools};
+use super::{AgentError, gateway::LlmGateway, tools};
 use crate::outbound::OutboundCallService;
 use crate::realtime::{DeviceHub, UserEventHub};
 use crate::{
@@ -10,7 +10,11 @@ use crate::{
     identity::{ResourceOwner, UserId},
 };
 use async_trait::async_trait;
-use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
+use rig::{
+    client::AgentClientExt,
+    completion::Prompt,
+    providers::{gemini, openai},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -48,6 +52,7 @@ pub struct ConversationPrompt {
 pub struct ConversationAgent {
     api_key: String,
     model: String,
+    gateway: Option<LlmGateway>,
     http: reqwest::Client,
     exa_api_key: String,
     google_maps_api_key: Option<String>,
@@ -86,6 +91,7 @@ impl ConversationAgent {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
+            gateway: config.llm_gateway(),
             http: dependencies.http,
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
@@ -133,12 +139,16 @@ impl ConversationAgent {
         self
     }
 
-    async fn build_agent_and_input(
+    async fn build_agent_and_input<C>(
         &self,
+        client: &C,
+        model: &str,
         prompt: &ConversationPrompt,
-    ) -> Result<(rig::agent::Agent, String, bool), AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
-
+    ) -> Result<(rig::agent::Agent, String, bool), AgentError>
+    where
+        C: AgentClientExt,
+        C::CompletionModel: 'static,
+    {
         let is_voice = is_voice_channel(&prompt.channel);
         let tts = prompt.tts_provider.as_deref().unwrap_or(&self.tts_provider);
         let preamble = preamble_for_channel_and_tts(&prompt.channel, Some(tts));
@@ -188,7 +198,7 @@ impl ConversationAgent {
         let agent =
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
                 client
-                    .agent(&self.model)
+                    .agent(model)
                     .preamble(preamble)
                     .tool(tools::profile::UpdateUserInfo::new(
                         self.db.clone(),
@@ -199,7 +209,7 @@ impl ConversationAgent {
             } else if is_voice {
                 match routed_domain {
                     crate::jev::ToolDomain::WebSearch => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
                             self.http.clone(),
@@ -212,7 +222,7 @@ impl ConversationAgent {
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Maps => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::google_maps::SearchPlaces::new(
                             self.http.clone(),
@@ -229,7 +239,7 @@ impl ConversationAgent {
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::TasksAndRecords => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::spans::CreateSpan::new(
                             self.db.clone(),
@@ -280,7 +290,7 @@ impl ConversationAgent {
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
                         .tool(tools::profile::GetUserInfo::new(
@@ -294,7 +304,7 @@ impl ConversationAgent {
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Device => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::terminal::OpenTerminal::new(
                             self.db.clone(),
@@ -314,7 +324,7 @@ impl ConversationAgent {
                         .default_max_turns(6)
                         .build(),
                     _ => client
-                        .agent(&self.model)
+                        .agent(model)
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
                             self.http.clone(),
@@ -365,7 +375,7 @@ impl ConversationAgent {
                 }
             } else {
                 client
-                    .agent(&self.model)
+                    .agent(model)
                     .preamble(preamble)
                     .tool(tools::web_search::WebSearch::new(
                         self.http.clone(),
@@ -486,9 +496,34 @@ impl ConversationAgent {
         Ok((agent, input, is_voice))
     }
 
+    /// Routes through the configured LLM gateway (e.g. TrueFoundry's LLM
+    /// Gateway) when set, otherwise calls Gemini directly. Same tool wiring
+    /// either way, since `rig`'s `Agent` is uniform regardless of provider.
+    async fn dispatch_build(
+        &self,
+        prompt: &ConversationPrompt,
+    ) -> Result<(rig::agent::Agent, String, bool), AgentError> {
+        match &self.gateway {
+            Some(gateway) => {
+                let client = openai::Client::builder()
+                    .api_key(&gateway.api_key)
+                    .base_url(&gateway.base_url)
+                    .build()
+                    .map_err(|_| AgentError::Provider)?;
+                self.build_agent_and_input(&client, &gateway.model, prompt)
+                    .await
+            }
+            None => {
+                let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+                self.build_agent_and_input(&client, &self.model, prompt)
+                    .await
+            }
+        }
+    }
+
     async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
         let is_voice = is_voice_channel(&prompt.channel);
-        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+        let (agent, input, _) = self.dispatch_build(&prompt).await?;
         let start = std::time::Instant::now();
         let response = agent
             .prompt(input)
@@ -515,7 +550,7 @@ impl ConversationAgent {
         use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 
         let preparation_started = std::time::Instant::now();
-        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+        let (agent, input, _) = self.dispatch_build(&prompt).await?;
         tracing::info!(
             channel = %prompt.channel,
             preparation_ms = preparation_started.elapsed().as_millis(),
