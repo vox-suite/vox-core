@@ -659,9 +659,12 @@ export async function placeOrder(): Promise<Result> {
   state.step = 'placed';
   await button.click();
 
+  log('place: clicked Place your order');
+
   // Stays under the server's 17 s answer budget for placing.
   const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline && !/thankyou|thank-you|order-confirmation/i.test(page.url())) {
+  let confirmation = await readConfirmation(page);
+  while (!confirmation.confirmed && Date.now() < deadline) {
     await settle(page, 500);
     if (await declineUpsell(page)) log('place: declined an upsell (No Thanks)');
     const blockedAfter = await blocker(page);
@@ -670,20 +673,37 @@ export async function placeOrder(): Promise<Result> {
         ...blockedAfter,
         message: `${blockedAfter.message} The order may not be placed yet; check Your Orders before retrying.`,
       };
+    confirmation = await readConfirmation(page);
   }
 
-  const confirmed = /thankyou|thank-you|order-confirmation/i.test(page.url());
-  const orderId =
-    (await page
-      .evaluate(() => document.body.innerText.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0] ?? null)
-      .catch(() => null)) ?? new URL(page.url()).searchParams.get('purchaseId');
-  if (!confirmed && !orderId)
+  // Only Amazon's own confirmation counts; never report "placed" on a guess.
+  if (!confirmation.confirmed) {
+    log(`place: no confirmation page (still on ${new URL(page.url()).pathname})`);
     return {
       status: 'unknown',
       total,
       message: "Clicked Place your order but couldn't confirm it. Check Your Orders on Amazon before retrying.",
     };
-  return { status: 'placed', order_id: orderId, total };
+  }
+  log(`place: confirmed on ${new URL(page.url()).pathname}, order ${confirmation.orderId ?? '(id not shown)'}`);
+  return { status: 'placed', order_id: confirmation.orderId, total };
+}
+
+/** Whether Amazon shows its order confirmation, and the order number it lists. */
+function readConfirmation(page: Page): Promise<{ confirmed: boolean; orderId: string | null }> {
+  return page
+    .evaluate(() => {
+      const text = document.body?.innerText ?? '';
+      const confirmed =
+        /thankyou|thank-you|order-confirmation/i.test(location.href) ||
+        /order placed|your order has been placed/i.test(text);
+      // Prefer the number printed next to "Order #"; the checkout's own id
+      // (p-404-...) has the same shape but is not an order number.
+      const labelled = text.match(/Order\s*(?:#|number|no\.?|ID)\s*:?\s*(\d{3}-\d{7}-\d{7})/i)?.[1];
+      const orderId = labelled ?? (confirmed ? (text.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0] ?? null) : null);
+      return { confirmed, orderId };
+    })
+    .catch(() => ({ confirmed: false, orderId: null }));
 }
 
 export async function health(): Promise<Result> {
