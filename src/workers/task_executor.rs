@@ -102,6 +102,8 @@ impl TaskExecutorHandler {
 
         let agent = client
             .agent(&self.model)
+            .name("task-executor-agent")
+            .record_content_telemetry(crate::telemetry::record_content())
             .preamble("You are Vox's background task execution engine. You process tasks autonomously and summarize the final result clearly.")
             .build();
 
@@ -185,4 +187,3 @@ impl TaskExecutorHandler {
         Ok(())
     }
 }
-

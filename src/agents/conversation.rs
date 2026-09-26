@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::Instrument;
 
 use futures_util::Stream;
 use std::pin::Pin;
@@ -44,6 +45,9 @@ pub struct ConversationPrompt {
     pub tts_provider: Option<String>,
     #[serde(default)]
     pub filler: Option<String>,
+    /// Groups every turn of one call or chat into a Langfuse session.
+    #[serde(default)]
+    pub conversation_id: Option<uuid::Uuid>,
 }
 
 pub struct ConversationAgent {
@@ -202,10 +206,20 @@ impl ConversationAgent {
             crate::jev::ToolDomain::All
         };
 
+        tracing::Span::current().record("vox.tool_domain", tracing::field::debug(routed_domain));
+        // Names the agent after the tool set each branch gives it, so traces
+        // show which one ran.
+        let new_agent = |kind: &str| {
+            let name = format!("{kind}-agent");
+            tracing::Span::current().record("gen_ai.agent.name", name.as_str());
+            client
+                .agent(&self.model)
+                .name(&name)
+                .record_content_telemetry(crate::telemetry::record_content())
+        };
         let agent =
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
-                client
-                    .agent(&self.model)
+                new_agent("chat")
                     .preamble(preamble)
                     .tool(tools::profile::UpdateUserInfo::new(
                         self.db.clone(),
@@ -225,8 +239,7 @@ impl ConversationAgent {
                     prompt.user_id,
                     turn,
                 );
-                client
-                    .agent(&self.model)
+                new_agent("shopping")
                     .preamble(&format!("{preamble}\n{SHOPPING_INSTRUCTIONS}"))
                     .tool(tools::shopping::AmazonSearch::new(shopping.clone()))
                     .tool(tools::shopping::AmazonOpenProduct::new(shopping.clone()))
@@ -245,8 +258,7 @@ impl ConversationAgent {
                     .build()
             } else if is_voice {
                 match routed_domain {
-                    crate::jev::ToolDomain::WebSearch => client
-                        .agent(&self.model)
+                    crate::jev::ToolDomain::WebSearch => new_agent("web-search")
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
                             self.http.clone(),
@@ -258,8 +270,7 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
-                    crate::jev::ToolDomain::Maps => client
-                        .agent(&self.model)
+                    crate::jev::ToolDomain::Maps => new_agent("maps")
                         .preamble(preamble)
                         .tool(tools::google_maps::SearchPlaces::new(
                             self.http.clone(),
@@ -275,8 +286,7 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
-                    crate::jev::ToolDomain::TasksAndRecords => client
-                        .agent(&self.model)
+                    crate::jev::ToolDomain::TasksAndRecords => new_agent("tasks-and-records")
                         .preamble(preamble)
                         .tool(tools::spans::CreateSpan::new(
                             self.db.clone(),
@@ -326,8 +336,7 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
-                    crate::jev::ToolDomain::Calendar => client
-                        .agent(&self.model)
+                    crate::jev::ToolDomain::Calendar => new_agent("calendar")
                         .preamble(preamble)
                         .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
                         .tool(tools::profile::GetUserInfo::new(
@@ -340,8 +349,7 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
-                    crate::jev::ToolDomain::Device => client
-                        .agent(&self.model)
+                    crate::jev::ToolDomain::Device => new_agent("device")
                         .preamble(preamble)
                         .tool(tools::terminal::OpenTerminal::new(
                             self.db.clone(),
@@ -367,8 +375,7 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
-                    _ => client
-                        .agent(&self.model)
+                    _ => new_agent("voice-general")
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
                             self.http.clone(),
@@ -418,8 +425,7 @@ impl ConversationAgent {
                         .build(),
                 }
             } else {
-                client
-                    .agent(&self.model)
+                new_agent("all-tools")
                     .preamble(preamble)
                     .tool(tools::web_search::WebSearch::new(
                         self.http.clone(),
@@ -561,26 +567,34 @@ impl ConversationAgent {
     }
 
     async fn generate_response(&self, prompt: ConversationPrompt) -> Result<String, AgentError> {
-        let is_voice = is_voice_channel(&prompt.channel);
-        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
-        let start = std::time::Instant::now();
-        let response = agent
-            .prompt(input)
-            .await
-            .map_err(|_| AgentError::Provider)?;
+        let span = turn_span(&prompt);
+        async move {
+            let is_voice = is_voice_channel(&prompt.channel);
+            let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+            let start = std::time::Instant::now();
+            let response = agent.prompt(input).await.map_err(|_| {
+                tracing::Span::current().record("otel.status_code", "ERROR");
+                AgentError::Provider
+            })?;
+            if crate::telemetry::record_content() {
+                tracing::Span::current().record("langfuse.observation.output", response.as_str());
+            }
 
-        tracing::info!(
-            channel = %prompt.channel,
-            prompt_len = prompt.user_text.len(),
-            duration_ms = start.elapsed().as_millis(),
-            "Core LLM response completed"
-        );
+            tracing::info!(
+                channel = %prompt.channel,
+                prompt_len = prompt.user_text.len(),
+                duration_ms = start.elapsed().as_millis(),
+                "Core LLM response completed"
+            );
 
-        if is_voice {
-            Ok(spoken_response(&response))
-        } else {
-            Ok(response)
+            if is_voice {
+                Ok(spoken_response(&response))
+            } else {
+                Ok(response)
+            }
         }
+        .instrument(span)
+        .await
     }
 
     async fn generate_stream(&self, prompt: ConversationPrompt) -> Result<AgentStream, AgentError> {
@@ -588,14 +602,20 @@ impl ConversationAgent {
         use rig::agent::MultiTurnStreamItem;
         use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 
+        let span = turn_span(&prompt);
         let preparation_started = std::time::Instant::now();
-        let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
+        let (agent, input, _) = self
+            .build_agent_and_input(&prompt)
+            .instrument(span.clone())
+            .await?;
         tracing::info!(
             channel = %prompt.channel,
             preparation_ms = preparation_started.elapsed().as_millis(),
             "CORE_AGENT_PREPARATION"
         );
-        let stream = agent.stream_prompt(input).await;
+        let stream = async move { agent.stream_prompt(input).await }
+            .instrument(span.clone())
+            .await;
 
         let text_stream = stream.filter_map(|item_res| async move {
             match item_res {
@@ -614,8 +634,79 @@ impl ConversationAgent {
             }
         });
 
-        Ok(Box::pin(text_stream))
+        Ok(traced_reply(
+            text_stream,
+            span,
+            crate::telemetry::record_content(),
+        ))
     }
+}
+
+/// Polls the reply inside the turn span, since the caller polls it after
+/// `generate_stream` returns, so rig's chat and tool spans nest under the turn.
+fn traced_reply(
+    reply: impl Stream<Item = Result<String, AgentError>> + Send + 'static,
+    span: tracing::Span,
+    record_content: bool,
+) -> AgentStream {
+    use futures_util::StreamExt;
+
+    let spoken = SpokenReply {
+        span,
+        text: String::new(),
+        record: record_content,
+    };
+    Box::pin(futures_util::stream::unfold(
+        (Box::pin(reply), spoken),
+        |(mut stream, mut spoken)| async move {
+            let item = stream.next().instrument(spoken.span.clone()).await?;
+            match &item {
+                Ok(text) => spoken.text.push_str(text),
+                Err(_) => {
+                    spoken.span.record("otel.status_code", "ERROR");
+                }
+            }
+            Some((item, (stream, spoken)))
+        },
+    ))
+}
+
+/// Records the agent's reply on the turn span once, when the reply ends or the
+/// caller drops it mid-turn (barge-in), so a cut-off turn keeps what was said.
+struct SpokenReply {
+    span: tracing::Span,
+    text: String,
+    record: bool,
+}
+
+impl Drop for SpokenReply {
+    fn drop(&mut self) {
+        if self.record && !self.text.is_empty() {
+            self.span
+                .record("langfuse.observation.output", self.text.as_str());
+        }
+    }
+}
+
+/// Root span of one agent turn: one Langfuse trace, grouped per conversation,
+/// exported under the name of the agent that ran (`shopping-agent`, ...).
+fn turn_span(prompt: &ConversationPrompt) -> tracing::Span {
+    tracing::info_span!(
+        target: crate::telemetry::TURN_TARGET,
+        "conversation_turn",
+        gen_ai.agent.name = tracing::field::Empty,
+        langfuse.observation.type = "agent",
+        session.id = prompt.conversation_id.map(tracing::field::display),
+        user.id = %prompt.user_id.0,
+        langfuse.trace.tags = %serde_json::json!([prompt.channel]),
+        channel = %prompt.channel,
+        vox.tool_domain = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        // The caller's words and the agent's reply, only with content tracing on.
+        langfuse.observation.input = crate::telemetry::record_content()
+            .then_some(prompt.user_text.as_str()),
+        langfuse.observation.output = tracing::field::Empty,
+    )
 }
 
 /// Cheap keyword check so a purchase request reaches the shopping tools

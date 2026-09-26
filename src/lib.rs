@@ -45,4 +45,5 @@ pub mod sms_ingestion;
 pub mod status;
 pub mod storage;
 pub mod summaries;
+pub mod telemetry;
 pub mod workers;

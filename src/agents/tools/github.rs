@@ -1,7 +1,7 @@
 use crate::{
     agents::tools::terminal::{
-        DeviceRow, TerminalToolError, audit_device_command, device_link, resolve_device,
-        response_error, MAX_OUTPUT_CHARS, OPEN_TIMEOUT,
+        DeviceRow, MAX_OUTPUT_CHARS, OPEN_TIMEOUT, TerminalToolError, audit_device_command,
+        device_link, resolve_device, response_error,
     },
     db::Db,
     identity::{ResourceOwner, UserId},
@@ -135,7 +135,11 @@ impl Tool for ResolveGithubIssue {
         );
 
         let response = link
-            .request("run_command", json!({ "command": command }), CLAUDE_RUN_TIMEOUT)
+            .request(
+                "run_command",
+                json!({ "command": command }),
+                CLAUDE_RUN_TIMEOUT,
+            )
             .await;
         let response = match response {
             Ok(response) => response,

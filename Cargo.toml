@@ -29,6 +29,10 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal",
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+tracing-opentelemetry = "0.34"
+opentelemetry = "0.33"
+opentelemetry_sdk = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 url = "2"
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
@@ -36,6 +40,7 @@ base64 = "0.23.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
 
 [[bin]]
 name = "vox-core-api"

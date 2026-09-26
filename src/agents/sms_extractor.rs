@@ -48,6 +48,8 @@ impl SmsExtracting for GeminiSmsExtractor {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
+            .name("sms-extractor-agent")
+            .record_content_telemetry(crate::telemetry::record_content())
             .preamble(
                 "You classify a single SMS message for a personal activity timeline. \
                  Output ONLY a valid JSON object with this schema:\n\
