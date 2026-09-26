@@ -14,6 +14,7 @@ pub enum ToolDomain {
     TasksAndRecords,
     Calendar,
     Device,
+    Shopping,
     All,
 }
 
@@ -64,6 +65,12 @@ impl ToolRouter {
                 ),
             ),
             (
+                "shopping",
+                Some(
+                    "Buying or ordering a product (e.g. from Amazon), choosing a product's colour, size or storage, or confirming a purchase",
+                ),
+            ),
+            (
                 "all",
                 Some("Complex or multi-intent request requiring a combination of multiple tools"),
             ),
@@ -78,6 +85,7 @@ impl ToolRouter {
             "tasks_and_records" => ToolDomain::TasksAndRecords,
             "calendar" => ToolDomain::Calendar,
             "device" => ToolDomain::Device,
+            "shopping" => ToolDomain::Shopping,
             _ => ToolDomain::All,
         };
 

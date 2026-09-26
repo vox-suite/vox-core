@@ -214,6 +214,7 @@ fn test_tool_domain_variants() {
         ToolDomain::TasksAndRecords,
         ToolDomain::Calendar,
         ToolDomain::Device,
+        ToolDomain::Shopping,
         ToolDomain::All,
     ];
 
