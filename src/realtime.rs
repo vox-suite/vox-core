@@ -234,11 +234,19 @@ impl DeviceHub {
 /// over the normal REST API. Best-effort only: if the user has no live
 /// connection, a notify is silently dropped and the client picks up the
 /// change next time it polls or reconnects.
-type UserConnection = (u64, mpsc::UnboundedSender<String>);
+///
+/// A user can have several connections at once (desktop app + phone open
+/// together), so each is tagged with the client-reported `platform`
+/// (e.g. "macos-aarch64", "android") instead of one replacing another.
+struct UserConnection {
+    generation: u64,
+    tx: mpsc::UnboundedSender<String>,
+    platform: String,
+}
 
 #[derive(Clone, Default)]
 pub struct UserEventHub {
-    conns: Arc<Mutex<HashMap<Uuid, UserConnection>>>,
+    conns: Arc<Mutex<HashMap<Uuid, Vec<UserConnection>>>>,
     next_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -249,8 +257,13 @@ impl UserEventHub {
 
     /// Registers a newly connected client for `user_id`, returning the
     /// connection generation (pass it back to `unregister`) and the receiver
-    /// of outgoing frames. A reconnect replaces the previous link.
-    pub fn register(&self, user_id: Uuid) -> (u64, mpsc::UnboundedReceiver<String>) {
+    /// of outgoing frames. Additive: existing connections for the same user
+    /// (other devices) are left alone.
+    pub fn register(
+        &self,
+        user_id: Uuid,
+        platform: impl Into<String>,
+    ) -> (u64, mpsc::UnboundedReceiver<String>) {
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -258,29 +271,52 @@ impl UserEventHub {
         self.conns
             .lock()
             .expect("user event hub lock poisoned")
-            .insert(user_id, (generation, tx));
+            .entry(user_id)
+            .or_default()
+            .push(UserConnection {
+                generation,
+                tx,
+                platform: platform.into(),
+            });
         (generation, rx)
     }
 
-    /// Removes the link only if it is still the one `generation` registered,
-    /// so a stale socket closing never drops a newer reconnect.
+    /// Removes the link for `generation`, leaving the user's other
+    /// connections untouched.
     pub fn unregister(&self, user_id: Uuid, generation: u64) {
         let mut conns = self.conns.lock().expect("user event hub lock poisoned");
-        if conns.get(&user_id).map(|(g, _)| *g) == Some(generation) {
-            conns.remove(&user_id);
+        if let Some(list) = conns.get_mut(&user_id) {
+            list.retain(|c| c.generation != generation);
+            if list.is_empty() {
+                conns.remove(&user_id);
+            }
         }
     }
 
-    /// Tells `user_id`'s connected client (if any) that something changed.
+    /// Tells every one of `user_id`'s connected clients that something changed.
     pub fn notify(&self, user_id: Uuid, event: Value) {
-        if let Some((_, tx)) = self
+        if let Some(list) = self
             .conns
             .lock()
             .expect("user event hub lock poisoned")
             .get(&user_id)
         {
-            let _ = tx.send(event.to_string());
+            let frame = event.to_string();
+            for conn in list {
+                let _ = conn.tx.send(frame.clone());
+            }
         }
+    }
+
+    /// Platforms `user_id` currently has a live connection from (e.g. to
+    /// find whether their desktop app — and its local LLM — is reachable).
+    pub fn platforms(&self, user_id: Uuid) -> Vec<String> {
+        self.conns
+            .lock()
+            .expect("user event hub lock poisoned")
+            .get(&user_id)
+            .map(|list| list.iter().map(|c| c.platform.clone()).collect())
+            .unwrap_or_default()
     }
 }
 

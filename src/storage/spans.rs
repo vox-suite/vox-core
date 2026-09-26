@@ -96,21 +96,22 @@ impl SpanRepository {
         patch: SpanPatch,
     ) -> Result<ConcurrencyOutcome<Span>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let current = sqlx::query_scalar::<_, i32>(
-            "SELECT version FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        let row = sqlx::query_as::<_, (i32, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+            "SELECT version, start_at, end_at FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
         )
         .bind(id)
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some(current) = current else {
+        let Some((current, old_start_at, old_end_at)) = row else {
             return Ok(ConcurrencyOutcome::NotFound);
         };
         if patch.expected_version.is_some_and(|v| v != current) {
             return Ok(ConcurrencyOutcome::Conflict);
         }
 
-        let times_changed = patch.start_at.is_some() || patch.end_at.is_some();
+        let times_changed = patch.start_at.is_some_and(|v| v != old_start_at)
+            || patch.end_at.is_some_and(|v| v != old_end_at);
         sqlx::query(
             "UPDATE spans SET
                 title = COALESCE($3, title),

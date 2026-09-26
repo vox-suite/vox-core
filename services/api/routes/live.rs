@@ -7,12 +7,13 @@
 use axum::{
     Extension,
     extract::{
-        State,
+        Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use vox_core::{domain::identity::Actor, realtime::UserEventHub};
 
 #[derive(Clone)]
@@ -20,19 +21,33 @@ pub struct LiveApiState {
     pub hub: UserEventHub,
 }
 
+#[derive(Deserialize)]
+pub struct LiveSocketQuery {
+    /// Client-reported platform, e.g. "macos-aarch64" or "android". Same
+    /// vocabulary as device registration's `platform` field.
+    platform: Option<String>,
+}
+
 pub async fn live_socket(
     State(state): State<LiveApiState>,
     Extension(actor): Extension<Actor>,
+    Query(query): Query<LiveSocketQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state, actor.user_id))
+    let platform = query.platform.unwrap_or_else(|| "unknown".to_string());
+    ws.on_upgrade(move |socket| handle_socket(socket, state, actor.user_id, platform))
 }
 
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
-async fn handle_socket(socket: WebSocket, state: LiveApiState, user_id: uuid::Uuid) {
-    tracing::info!(%user_id, "Live socket connected");
-    let (generation, mut outgoing) = state.hub.register(user_id);
+async fn handle_socket(
+    socket: WebSocket,
+    state: LiveApiState,
+    user_id: uuid::Uuid,
+    platform: String,
+) {
+    tracing::info!(%user_id, %platform, "Live socket connected");
+    let (generation, mut outgoing) = state.hub.register(user_id, platform);
     let (mut sender, mut receiver) = socket.split();
 
     // Pings keep proxies from dropping an idle link; the writer ends when a
