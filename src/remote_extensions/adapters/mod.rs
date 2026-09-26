@@ -1,4 +1,5 @@
 use super::{AuthorizedEndpoint, ExtensionProtocol};
+use crate::privacy::PrivacyService;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -176,17 +177,7 @@ impl ProtocolRouter {
             }
         };
 
-        // Redact any sensitive tokens or secrets from the response
-        let redacted_data = Self::redact_sensitive_payload(&raw_response.data);
-
-        Ok(NormalizedResponse {
-            status: raw_response.status,
-            data: redacted_data,
-            provider_reference: raw_response.provider_reference,
-            guarantees_reported: raw_response.guarantees_reported,
-            error_code: raw_response.error_code,
-            error_message: raw_response.error_message,
-        })
+        Ok(Self::redact_response(raw_response))
     }
 
     pub async fn reconcile(
@@ -212,16 +203,7 @@ impl ProtocolRouter {
             }
         };
 
-        let redacted_data = Self::redact_sensitive_payload(&raw_response.data);
-
-        Ok(NormalizedResponse {
-            status: raw_response.status,
-            data: redacted_data,
-            provider_reference: raw_response.provider_reference,
-            guarantees_reported: raw_response.guarantees_reported,
-            error_code: raw_response.error_code,
-            error_message: raw_response.error_message,
-        })
+        Ok(Self::redact_response(raw_response))
     }
 
     /// Minimizes context sent to remote extensions to strictly adhere to declared access_needs.
@@ -236,13 +218,42 @@ impl ProtocolRouter {
             "database_url",
             "host_app_credentials",
             "raw_user_id",
+            "credential",
+            "password",
+            "token",
+            "secret",
+            "api_key",
+            "cookie",
         ];
+
+        fn strip_internal(value: &Value) -> Value {
+            match value {
+                Value::Object(map) => Value::Object(
+                    map.iter()
+                        .filter_map(|(key, value)| {
+                            let lower = key.to_ascii_lowercase();
+                            if BLOCKED_INTERNAL_KEYS
+                                .iter()
+                                .any(|blocked| lower.contains(blocked))
+                            {
+                                None
+                            } else {
+                                Some((key.clone(), strip_internal(value)))
+                            }
+                        })
+                        .collect(),
+                ),
+                Value::Array(items) => Value::Array(items.iter().map(strip_internal).collect()),
+                Value::String(_) if PrivacyService::scan_for_prohibited_content(value).is_err() => {
+                    Value::String("[REDACTED]".into())
+                }
+                _ => value.clone(),
+            }
+        }
 
         match parameters {
             Value::Object(map) => {
                 let allowed_keys: HashSet<&str> = access_needs.iter().map(|s| s.as_str()).collect();
-                let allow_all = allowed_keys.contains("*") || allowed_keys.is_empty();
-
                 let mut filtered = serde_json::Map::new();
                 for (k, v) in map {
                     let k_lower = k.to_lowercase();
@@ -252,13 +263,13 @@ impl ProtocolRouter {
                     {
                         continue;
                     }
-                    if allow_all || allowed_keys.contains(k.as_str()) {
-                        filtered.insert(k.clone(), v.clone());
+                    if allowed_keys.contains(k.as_str()) {
+                        filtered.insert(k.clone(), strip_internal(v));
                     }
                 }
                 Value::Object(filtered)
             }
-            other => other.clone(),
+            _ => Value::Object(serde_json::Map::new()),
         }
     }
 
@@ -274,6 +285,11 @@ impl ProtocolRouter {
             "private_key",
             "access_token",
             "client_secret",
+            "credential",
+            "cookie",
+            "session",
+            "authentication",
+            "authorization",
         ];
 
         match val {
@@ -281,7 +297,10 @@ impl ProtocolRouter {
                 let mut out = serde_json::Map::new();
                 for (k, v) in map {
                     let k_lower = k.to_lowercase();
-                    if SENSITIVE_MATCHERS.iter().any(|m| k_lower.contains(m)) {
+                    let short_secret_key = k_lower
+                        .split(|c: char| !c.is_ascii_alphanumeric())
+                        .any(|part| matches!(part, "pwd" | "auth" | "pin"));
+                    if short_secret_key || SENSITIVE_MATCHERS.iter().any(|m| k_lower.contains(m)) {
                         out.insert(k.clone(), Value::String("[REDACTED]".into()));
                     } else {
                         out.insert(k.clone(), Self::redact_sensitive_payload(v));
@@ -292,7 +311,34 @@ impl ProtocolRouter {
             Value::Array(arr) => {
                 Value::Array(arr.iter().map(Self::redact_sensitive_payload).collect())
             }
+            Value::String(_) if PrivacyService::scan_for_prohibited_content(val).is_err() => {
+                Value::String("[REDACTED]".into())
+            }
             other => other.clone(),
+        }
+    }
+
+    fn redact_response(raw: NormalizedResponse) -> NormalizedResponse {
+        NormalizedResponse {
+            status: raw.status,
+            data: Self::redact_sensitive_payload(&raw.data),
+            provider_reference: raw.provider_reference,
+            guarantees_reported: raw
+                .guarantees_reported
+                .as_ref()
+                .map(Self::redact_sensitive_payload),
+            error_code: raw.error_code.map(|code| {
+                if PrivacyService::scan_for_prohibited_content(&Value::String(code.clone()))
+                    .is_err()
+                {
+                    "[REDACTED]".into()
+                } else {
+                    code
+                }
+            }),
+            // Provider error bodies are unstructured and can contain arbitrary
+            // credentials. Keep the status/code but never return the raw body.
+            error_message: raw.error_message.map(|_| "[REDACTED]".into()),
         }
     }
 
@@ -313,5 +359,51 @@ impl ProtocolRouter {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn minimization_strips_nested_internal_data_and_denies_undeclared_arguments() {
+        let input = json!({
+            "city": "Paris",
+            "details": [{"name": "forecast", "session_token": "secret"}],
+            "system_prompt": "private"
+        });
+        assert_eq!(ProtocolRouter::minimize_context(&input, &[]), json!({}));
+        assert_eq!(
+            ProtocolRouter::minimize_context(&input, &["*".into()]),
+            json!({})
+        );
+        assert_eq!(
+            ProtocolRouter::minimize_context(&input, &["details".into()]),
+            json!({"details": [{"name": "forecast"}]})
+        );
+        assert_eq!(
+            ProtocolRouter::minimize_context(&json!([input]), &["details".into()]),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn response_redaction_covers_values_and_error_text() {
+        let response = NormalizedResponse {
+            status: ResponseStatus::ProviderError,
+            data: json!({"credential": "opaque", "message": "Bearer abcdef1234567890"}),
+            provider_reference: None,
+            guarantees_reported: Some(json!({"cookie": "private"})),
+            error_code: Some("provider_error".into()),
+            error_message: Some("raw response with unknown credential".into()),
+        };
+        let safe = ProtocolRouter::redact_response(response);
+        assert_eq!(safe.data["credential"], "[REDACTED]");
+        assert_eq!(safe.data["message"], "[REDACTED]");
+        assert_eq!(safe.guarantees_reported.unwrap()["cookie"], "[REDACTED]");
+        assert_eq!(safe.error_code.as_deref(), Some("provider_error"));
+        assert_eq!(safe.error_message.as_deref(), Some("[REDACTED]"));
     }
 }

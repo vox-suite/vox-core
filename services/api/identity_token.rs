@@ -118,8 +118,8 @@ pub async fn verify_id_token(token: &str) -> Result<VerifiedIdentity, StatusCode
         // New Supabase projects sign access tokens with asymmetric JWT signing keys (ES256).
         Some("ES256") => verify_supabase_asymmetric(token, Algorithm::ES256).await,
         Some("RS256") => {
-            // Prefer Supabase JWKS when the token (or env) points at a Supabase issuer.
-            if supabase_base_url().is_some() || supabase_base_from_token(token).is_some() {
+            // Only a configured Supabase project is a trusted issuer.
+            if supabase_base_url().is_some() {
                 match verify_supabase_asymmetric(token, Algorithm::RS256).await {
                     Ok(identity) => Ok(identity),
                     Err(_) => verify_google_token(token).await,
@@ -195,16 +195,6 @@ fn supabase_base_url() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn supabase_base_from_token(token: &str) -> Option<String> {
-    let (_, payload, _) = split_jwt(token).ok()?;
-    let claims: TokenClaims = serde_json::from_slice(&decode_part(payload).ok()?).ok()?;
-    let iss = claims.iss?.trim().trim_end_matches('/').to_string();
-    // Supabase access tokens use iss = https://<project>.supabase.co/auth/v1
-    iss.strip_suffix("/auth/v1")
-        .filter(|base| base.starts_with("https://"))
-        .map(str::to_string)
-}
-
 #[allow(dead_code)]
 pub fn verify_es256_components(
     token: &str,
@@ -266,9 +256,7 @@ async fn verify_supabase_asymmetric(
     token: &str,
     alg: Algorithm,
 ) -> Result<VerifiedIdentity, StatusCode> {
-    let base = supabase_base_url()
-        .or_else(|| supabase_base_from_token(token))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let base = supabase_base_url().ok_or(StatusCode::UNAUTHORIZED)?;
     let expected_issuer = format!("{base}/auth/v1");
     let (header, _, _) = split_jwt(token)?;
     let header_json: serde_json::Value =

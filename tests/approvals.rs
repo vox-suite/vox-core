@@ -133,7 +133,7 @@ async fn context(db: &Db, user: &str) -> (String, vox_core::identity::ResolvedUs
 async fn approval_endpoint_rejects_agent_assertion_forgery_and_replay() {
     let db = setup().await;
     let (deployment, owner, registered, host_context) = host(&db, "owner").await;
-    prepare(&db, &deployment, &owner).await;
+    let connection_id = prepare(&db, &deployment, &owner).await;
     let now = Utc::now();
     let task = DurableTaskService::new(db.clone())
         .start(
@@ -149,7 +149,12 @@ async fn approval_endpoint_rejects_agent_assertion_forgery_and_replay() {
     let proposal = ApprovalService::new(db.clone())
         .propose(
             &owner,
-            proposal(task.id, task.run_id, now + Duration::minutes(10)),
+            proposal(
+                task.id,
+                task.run_id,
+                connection_id,
+                now + Duration::minutes(10),
+            ),
             now,
         )
         .await
@@ -204,7 +209,11 @@ async fn approval_endpoint_rejects_agent_assertion_forgery_and_replay() {
     );
 }
 
-async fn prepare(db: &Db, deployment: &str, context: &vox_core::identity::ResolvedUserContext) {
+async fn prepare(
+    db: &Db,
+    deployment: &str,
+    context: &vox_core::identity::ResolvedUserContext,
+) -> Uuid {
     let agents = AgentRegistry::new(db.clone());
     agents
         .register(RegisterAgentDefinitionRequest {
@@ -282,11 +291,13 @@ async fn prepare(db: &Db, deployment: &str, context: &vox_core::identity::Resolv
         )
         .await
         .unwrap();
+    connection.id
 }
 
 fn proposal(
     task_id: Uuid,
     task_run_id: Uuid,
+    connection_id: Uuid,
     expires_at: chrono::DateTime<Utc>,
 ) -> CreateProposalRequest {
     CreateProposalRequest {
@@ -294,7 +305,7 @@ fn proposal(
         task_run_id,
         agent_external_key: "planner".into(),
         capability_external_key: "calendar.write".into(),
-        details: serde_json::json!({"event":"Dinner","at":"2026-10-01T19:00:00Z"}),
+        details: serde_json::json!({"event":"Dinner","at":"2026-10-01T19:00:00Z","execution":{"connection_id":connection_id}}),
         expires_at,
         replaces_proposal_id: None,
     }
@@ -302,10 +313,53 @@ fn proposal(
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
+async fn proposal_requires_an_effective_grant_for_its_connection() {
+    let db = setup().await;
+    let (deployment, owner) = context(&db, "proposal-grant-owner").await;
+    let connection_id = prepare(&db, &deployment, &owner).await;
+    let task = DurableTaskService::new(db.clone())
+        .start(
+            &owner,
+            StartTaskRequest {
+                title: "Grant-bound proposal".into(),
+                instruction: "Propose a calendar write".into(),
+                agent_external_key: Some("planner".into()),
+            },
+        )
+        .await
+        .unwrap();
+    CapabilityGrantService::new(db.clone())
+        .revoke(
+            &owner,
+            CreateGrantRequest {
+                agent_external_key: "planner".into(),
+                connection_id,
+                capability_external_key: "calendar.write".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let result = ApprovalService::new(db)
+        .propose(
+            &owner,
+            proposal(
+                task.id,
+                task.run_id,
+                connection_id,
+                Utc::now() + Duration::minutes(10),
+            ),
+            Utc::now(),
+        )
+        .await;
+    assert!(matches!(result, Err(ApprovalError::UnauthorizedCapability)));
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn exact_approval_is_context_bound_single_use_and_invalidated_by_change_or_expiry() {
     let db = setup().await;
     let (deployment, owner) = context(&db, "owner").await;
-    prepare(&db, &deployment, &owner).await;
+    let connection_id = prepare(&db, &deployment, &owner).await;
     let approvals = ApprovalService::new(db.clone());
     let now = Utc::now();
     let task = DurableTaskService::new(db.clone())
@@ -322,7 +376,12 @@ async fn exact_approval_is_context_bound_single_use_and_invalidated_by_change_or
     let first = approvals
         .propose(
             &owner,
-            proposal(task.id, task.run_id, now + Duration::minutes(10)),
+            proposal(
+                task.id,
+                task.run_id,
+                connection_id,
+                now + Duration::minutes(10),
+            ),
             now,
         )
         .await
@@ -355,8 +414,8 @@ async fn exact_approval_is_context_bound_single_use_and_invalidated_by_change_or
             &owner,
             CreateProposalRequest {
                 replaces_proposal_id: Some(first.id),
-                details: serde_json::json!({"event":"Dinner","at":"2026-10-01T20:00:00Z"}),
-                ..proposal(task.id, task.run_id, now + Duration::minutes(10))
+                details: serde_json::json!({"event":"Dinner","at":"2026-10-01T20:00:00Z","execution":{"connection_id":connection_id}}),
+                ..proposal(task.id, task.run_id, connection_id, now + Duration::minutes(10))
             },
             now,
         )
@@ -410,6 +469,7 @@ async fn exact_approval_is_context_bound_single_use_and_invalidated_by_change_or
             proposal(
                 expired_task.id,
                 expired_task.run_id,
+                connection_id,
                 now + Duration::minutes(1),
             ),
             now,

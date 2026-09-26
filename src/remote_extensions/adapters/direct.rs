@@ -144,12 +144,9 @@ impl ExtensionProtocolAdapter for DirectProtocolAdapter {
 
         if !status.is_success() {
             let err_body = String::from_utf8_lossy(&resp_bytes);
-            let code = parsed_json
-                .as_ref()
-                .and_then(|j| j.get("error_code").or_else(|| j.get("code")))
-                .and_then(Value::as_str)
-                .map(String::from)
-                .unwrap_or_else(|| format!("HTTP_{status_code}"));
+            // Provider-supplied error codes are untrusted strings and may carry
+            // credentials. Preserve only the HTTP status as a stable safe code.
+            let code = format!("HTTP_{status_code}");
 
             let message = parsed_json
                 .as_ref()

@@ -68,6 +68,7 @@ fn reply(r: Result<crate::approvals::Proposal, ApprovalError>, ok: StatusCode) -
         Ok(v) => (ok, Json(v)).into_response(),
         Err(ApprovalError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ApprovalError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(ApprovalError::UnauthorizedCapability) => StatusCode::FORBIDDEN.into_response(),
         Err(ApprovalError::Expired | ApprovalError::NotApprovable | ApprovalError::Consumed) => {
             StatusCode::CONFLICT.into_response()
         }

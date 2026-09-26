@@ -440,6 +440,10 @@ async fn quarantine_and_removal_preserve_historical_evidence() {
     // Quarantine version 1
     let quarantined = service.quarantine(&context, ext.id, 1).await.unwrap();
     assert_eq!(quarantined.lifecycle_state, LifecycleState::Quarantined);
+    assert!(matches!(
+        service.renew_consent(&context, ext.id, 1).await,
+        Err(RemoteExtensionError::Quarantined)
+    ));
 
     let err = service
         .authorize_call(&context, ext.id, "test.op")
@@ -450,6 +454,10 @@ async fn quarantine_and_removal_preserve_historical_evidence() {
     // Remove extension
     let removed = service.remove(&context, ext.id).await.unwrap();
     assert_eq!(removed.lifecycle_state, LifecycleState::Removed);
+    assert!(matches!(
+        service.renew_consent(&context, ext.id, 1).await,
+        Err(RemoteExtensionError::NotActive(LifecycleState::Removed))
+    ));
 
     // Records are preserved in DB
     let count = sqlx::query_scalar::<_, i64>(

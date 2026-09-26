@@ -193,7 +193,7 @@ impl PreferenceService {
             r#"
             SELECT id, user_context_id, category, preference_key, value, is_sensitive, confirmed_at, created_at, updated_at
             FROM user_preferences
-            WHERE user_context_id = $1 AND category = ANY($2)
+            WHERE user_context_id = $1 AND category = ANY($2) AND is_sensitive = false
             ORDER BY category ASC, preference_key ASC
             "#,
         )

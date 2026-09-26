@@ -381,7 +381,14 @@ impl ReminderService {
                         "interval reminders cannot have run_at or recurrence expression".into(),
                     ));
                 }
-                (now + Duration::seconds(secs), Some(secs), None)
+                let next = now
+                    .checked_add_signed(Duration::seconds(secs))
+                    .ok_or_else(|| {
+                        ReminderError::Invalid(
+                            "interval_seconds exceeds supported date range".into(),
+                        )
+                    })?;
+                (next, Some(secs), None)
             }
             ReminderScheduleKind::CalendarRecurrence => {
                 let expr = request.recurrence_expression.ok_or_else(|| {
@@ -400,6 +407,11 @@ impl ReminderService {
         };
 
         let max_retries = request.max_retries.unwrap_or(3);
+        if !(0..=10).contains(&max_retries) {
+            return Err(ReminderError::Invalid(
+                "max_retries must be between 0 and 10".into(),
+            ));
+        }
         let metadata = request.metadata.unwrap_or_else(|| serde_json::json!({}));
 
         let reminder = sqlx::query_as::<_, Reminder>(
@@ -918,7 +930,11 @@ impl ReminderScheduler {
 
         if reminder.schedule_kind == ReminderScheduleKind::Interval.as_str() {
             let secs = reminder.interval_seconds.unwrap_or(3600);
-            Ok(after + Duration::seconds(secs))
+            after
+                .checked_add_signed(Duration::seconds(secs))
+                .ok_or_else(|| {
+                    ReminderError::Invalid("interval_seconds exceeds supported date range".into())
+                })
         } else if reminder.schedule_kind == ReminderScheduleKind::CalendarRecurrence.as_str() {
             let expr = reminder
                 .recurrence_expression
