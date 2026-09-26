@@ -86,11 +86,20 @@ checkout, so the caller must hear the total and answer first.
 
 ## When a step is slow or stuck
 
-Every response comes back within 17 s, under Core's 20 s limit. If a step isn't
-finished by then, the helper answers `in_progress` and keeps working in the
-background. Calling checkout again resumes from the current checkout page instead
-of starting over. The terminal logs every checkout action
-(`checkout: on /checkout/p/.../pay`, `checkout: selected Pay on Delivery`, …).
+A phone turn has 30 s in total, so the helper answers within 10 s (17 s for
+placing the order, which must report its real outcome in one answer). A step
+that isn't finished by then answers `in_progress` and keeps going in the
+background:
+
+- Calling the same step again returns `in_progress` at once, and any other step
+  returns `busy`, so a retry or a fresh search can't wreck a checkout in progress.
+- Once it finishes, the next identical call gets the result at once.
+- Checkout resumes from the current checkout page, re-selects Pay on Delivery if
+  Amazon shows the payment page again, and declines upsells such as the Prime
+  free-trial popup (it only ever clicks an exact "No Thanks" or the popup's Close).
+
+The terminal logs every checkout action (`checkout: on /checkout/p/.../pay`,
+`checkout: selected Pay on Delivery`, …).
 
 To see what the browser shows right now, even while a step is running:
 

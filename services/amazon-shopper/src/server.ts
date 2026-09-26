@@ -29,13 +29,65 @@ app.use((req, res, next) => {
   next();
 });
 
-// Vox Core waits 20 s per step, so always answer before that. A step still
-// running then keeps going in the background (checkout resumes on the next call).
-const RESPONSE_BUDGET_MS = 17_000;
+// A phone turn has 30 s in total (vox-bridge -> Core), including the model's
+// own thinking, and Core waits at most 20 s per step. Answer within 10 s; a step
+// still running then finishes in the background and the next call picks it up.
+const RESPONSE_BUDGET_MS = 10_000;
+// Placing must report its real outcome in one answer: Core treats the caller's
+// confirmation as used once it asks, so an `in_progress` here couldn't be retried.
+const PLACE_RESPONSE_BUDGET_MS = 17_000;
+const FINISHED_RESULT_TTL_MS = 120_000;
 
-function handle(name: string, step: (body: Record<string, unknown>) => Promise<amazon.Result>) {
+const TOOL_NAMES: Record<string, string> = {
+  search: 'amazon_search',
+  product: 'amazon_open_product',
+  select: 'amazon_select_options',
+  checkout: 'amazon_checkout',
+  place: 'amazon_place_order',
+};
+const stillLoading = (name: string): amazon.Result => ({
+  status: 'in_progress',
+  message: `Amazon is still loading. Do not call any Amazon tool again in this turn. Tell the user it will take a moment, then call ${TOOL_NAMES[name] ?? 'the same tool'} again after their next message.`,
+});
+
+/** A step whose caller already got `in_progress` and that is still driving the browser. */
+let background: { name: string; key: string } | null = null;
+/** The result of that step once it finished, for the caller's next identical call. */
+let finished: { name: string; key: string; result: amazon.Result; at: number } | null = null;
+
+function handle(
+  name: string,
+  step: (body: Record<string, unknown>) => Promise<amazon.Result>,
+  budgetMs = RESPONSE_BUDGET_MS,
+) {
   return async (req: Request, res: Response) => {
     const started = Date.now();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const key = JSON.stringify(body);
+
+    // Never queue behind a background step: repeating it gets an instant
+    // "still loading", and anything else must not start over mid-checkout.
+    if (background) {
+      const result: amazon.Result =
+        background.name === name
+          ? stillLoading(name)
+          : {
+              status: 'busy',
+              message: `Amazon is still finishing the previous step. Do not start over. Tell the user to hold on, then call ${TOOL_NAMES[background.name]} again after their next message.`,
+            };
+      console.log(`${name} -> ${result.status} (${background.name} still running in the background)`);
+      res.json(result);
+      return;
+    }
+    if (finished?.name === name && finished.key === key && Date.now() - finished.at < FINISHED_RESULT_TTL_MS) {
+      const result = finished.result;
+      finished = null;
+      console.log(`${name} -> ${result.status} (finished earlier in the background)`);
+      res.json(result);
+      return;
+    }
+    finished = null;
+
     let abandoned = false;
     res.on('close', () => {
       if (!res.writableFinished) abandoned = true;
@@ -44,28 +96,29 @@ function handle(name: string, step: (body: Record<string, unknown>) => Promise<a
     const work = serial(async (): Promise<amazon.Result> => {
       // The caller gave up while this waited in the queue: don't drive the browser for nobody.
       if (abandoned) return { status: 'cancelled' };
-      return step((req.body ?? {}) as Record<string, unknown>);
+      return step(body);
     });
     let timer: NodeJS.Timeout | undefined;
     const slow = new Promise<amazon.Result>((resolve) => {
-      timer = setTimeout(
-        () =>
-          resolve({
-            status: 'in_progress',
-            message: 'Amazon is still loading. Tell the user it will take a moment, and call this tool again on their next message.',
-          }),
-        RESPONSE_BUDGET_MS,
-      );
+      timer = setTimeout(() => resolve(stillLoading(name)), budgetMs);
     });
 
     try {
       const result = await Promise.race([work, slow]);
       console.log(`${name} -> ${result.status} (${Date.now() - started} ms)`);
-      if (result.status === 'in_progress')
-        work.then(
-          (late) => console.log(`${name} finished in the background -> ${late.status} (${Date.now() - started} ms)`),
-          (err: unknown) => console.error(`${name} failed in the background`, err),
-        );
+      if (result.status === 'in_progress') {
+        background = { name, key };
+        work
+          .catch((err: unknown): amazon.Result => {
+            console.error(`${name} failed in the background`, err);
+            return { status: 'error', message: err instanceof Error ? err.message.split('\n')[0] : String(err) };
+          })
+          .then((late) => {
+            console.log(`${name} finished in the background -> ${late.status} (${Date.now() - started} ms)`);
+            finished = { name, key, result: late, at: Date.now() };
+            background = null;
+          });
+      }
       if (!abandoned) res.json(result);
     } catch (err) {
       // Playwright errors carry a multi-line call log; the first line is enough to speak.
@@ -83,7 +136,14 @@ function stringMap(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, String(v)]));
 }
 
-app.get('/health', handle('health', () => amazon.health()));
+app.get('/health', (req, res, next) => {
+  // Don't navigate away from a checkout that is finishing in the background.
+  if (background) {
+    res.json({ status: 'ok', busy: background.name });
+    return;
+  }
+  next();
+}, handle('health', () => amazon.health()));
 // Outside the queue on purpose, so it works while a step is stuck.
 app.get('/debug', async (_req, res) => {
   res.json(await amazon.debug().catch((err: unknown) => ({ status: 'error', message: String(err) })));
@@ -92,7 +152,7 @@ app.post('/search', handle('search', (b) => amazon.search(String(b.query ?? ''))
 app.post('/product', handle('product', (b) => amazon.openProduct(String(b.asin ?? ''))));
 app.post('/select', handle('select', (b) => amazon.selectOptions(stringMap(b.options))));
 app.post('/checkout', handle('checkout', (b) => amazon.checkout(Math.max(1, Number(b.quantity) || 1))));
-app.post('/place', handle('place', () => amazon.placeOrder()));
+app.post('/place', handle('place', () => amazon.placeOrder(), PLACE_RESPONSE_BUDGET_MS));
 
 // Playwright's own signal handlers close Chrome but leave the process (and
 // port) alive; exit explicitly so Ctrl+C really stops the helper.

@@ -13,6 +13,9 @@ export function openContext(): Promise<BrowserContext> {
     .launchPersistentContext(config.profileDir, {
       channel: 'chrome',
       headless: false,
+      // Keep Chrome's sandbox on (Playwright disables it by default), which also
+      // removes the "unsupported command-line flag: --no-sandbox" bar.
+      chromiumSandbox: true,
       viewport: null,
       args: ['--start-maximized'],
     })

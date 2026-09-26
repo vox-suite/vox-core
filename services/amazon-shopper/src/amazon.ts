@@ -32,7 +32,6 @@ type Step = 'idle' | 'product_open' | 'checkout_ready' | 'placed';
 const state: { step: Step; total: string | null } = { step: 'idle', total: null };
 
 const RESULT_CARD = 'div[data-component-type="s-search-result"][data-asin]:not([data-asin=""])';
-const STEP_BUDGET_MS = 15_000;
 // Longer than one HTTP request's budget: if the server answers `in_progress`,
 // checkout keeps going in the background and the next call resumes it.
 const CHECKOUT_BUDGET_MS = 30_000;
@@ -250,6 +249,42 @@ const codRadio = (page: Page) =>
     .or(page.locator('label:has-text("Pay on Delivery") input[type=radio], label:has-text("Cash on Delivery") input[type=radio]'))
     .first();
 
+// Exact decline wording only, so a "Start your free trial" button can never match.
+const NO_THANKS = /^\s*(no,?\s*thanks|skip)\s*$/i;
+
+/**
+ * Declines upsells such as the Prime "30 days FREE" popup, which Amazon can
+ * render in a separate frame. Falls back to the popup's Close button.
+ */
+async function declineUpsell(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    const decline = frame
+      .getByRole('button', { name: NO_THANKS })
+      .or(frame.getByRole('link', { name: NO_THANKS }))
+      .or(frame.getByText(NO_THANKS))
+      .first();
+    if (await visible(decline)) {
+      await decline.click().catch(() => {});
+      return true;
+    }
+  }
+  for (const frame of page.frames()) {
+    const primePopup = frame.getByText(/free trial|days of prime/i).first();
+    const close = frame.getByRole('button', { name: /^close$/i }).first();
+    if ((await visible(primePopup)) && (await visible(close))) {
+      await close.click().catch(() => {});
+      return true;
+    }
+  }
+  return false;
+}
+
+const usePaymentMethod = (page: Page) =>
+  page
+    .getByRole('button', { name: /use this payment method/i })
+    .or(page.locator('input[name*="SetPaymentPlanSelectionEvent"]'))
+    .first();
+
 const changePayment = (page: Page) =>
   page
     .locator('#payChangeButtonId, a[data-testid="payment-change-link"]')
@@ -258,15 +293,8 @@ const changePayment = (page: Page) =>
 
 // ------------------------------------------------------------------ steps
 
-export async function search(query: string): Promise<Result> {
-  if (!query.trim()) return { status: 'error', message: 'query is required' };
-  const page = await getPage();
-  await page.goto(`${config.baseUrl}/s?k=${encodeURIComponent(query.trim())}`, { waitUntil: 'commit' });
-  await page.locator(RESULT_CARD).first().waitFor().catch(() => {});
-  const blocked = await blocker(page);
-  if (blocked) return blocked;
-
-  const results = await page.$$eval(RESULT_CARD, (cards) =>
+function readResults(page: Page) {
+  return page.$$eval(RESULT_CARD, (cards) =>
     cards
       .map((card) => {
         const text = (selector: string) => card.querySelector(selector)?.textContent?.trim() ?? '';
@@ -292,6 +320,35 @@ export async function search(query: string): Promise<Result> {
       .slice(0, 5)
       .map(({ sponsored: _sponsored, ...r }) => r),
   );
+}
+
+export async function search(query: string): Promise<Result> {
+  if (!query.trim()) return { status: 'error', message: 'query is required' };
+  const page = await getPage();
+  await page.goto(`${config.baseUrl}/s?k=${encodeURIComponent(query.trim())}`, { waitUntil: 'commit' });
+  // Right after `commit` the old page can still be unloading, which makes the
+  // first wait fail at once; wait again on the new document.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const found = await page
+      .locator(RESULT_CARD)
+      .first()
+      .waitFor({ timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (found) break;
+  }
+  const blocked = await blocker(page);
+  if (blocked) return blocked;
+
+  // Results stream in: sponsored slots render first and organic ones a moment
+  // later, so keep reading until organic results appear.
+  let results: Awaited<ReturnType<typeof readResults>> = [];
+  const until = Date.now() + 8_000;
+  do {
+    results = await readResults(page).catch(() => []);
+    if (results.length > 0) break;
+    await page.waitForTimeout(400);
+  } while (Date.now() < until);
 
   state.step = 'idle';
   state.total = null;
@@ -420,6 +477,7 @@ export async function checkout(quantity = 1): Promise<Result> {
   }
 
   let codSelected = false;
+  let codAttempts = 0;
   let openedPaymentPicker = false;
   let lastPath = '';
   const deadline = Date.now() + CHECKOUT_BUDGET_MS;
@@ -437,9 +495,9 @@ export async function checkout(quantity = 1): Promise<Result> {
           "Amazon opened its one-click Buy Now popup, which can't switch to Pay on Delivery. Turn off 1-click in the Amazon account and try again.",
       };
 
-    // Protection-plan / add-on upsells.
-    if (await clickIfVisible(page.getByRole('button', { name: /^(no,? thanks|skip)$/i }))) {
-      log('checkout: dismissed an upsell');
+    // Protection-plan and Prime upsells.
+    if (await declineUpsell(page)) {
+      log('checkout: declined an upsell (No Thanks)');
       continue;
     }
     // Older flow: confirm the (default) delivery address.
@@ -454,19 +512,25 @@ export async function checkout(quantity = 1): Promise<Result> {
       continue;
     }
 
+    // Payment page: judge by what the page shows, not by what we did before,
+    // because Amazon can bring the payment page back with nothing selected.
     const cod = codRadio(page);
-    if (!codSelected && (await visible(cod))) {
+    if (await visible(cod)) {
       if (await cod.isDisabled().catch(() => false)) return codUnavailable(page);
-      await cod.check({ force: true }).catch(() => cod.click({ force: true }));
+      let acted = false;
+      if (!(await cod.isChecked().catch(() => false))) {
+        if (++codAttempts > 3)
+          return { status: 'error', message: "Couldn't select Pay on Delivery. Check the browser window." };
+        await cod.check({ force: true }).catch(() => cod.click({ force: true }));
+        log('checkout: selected Pay on Delivery');
+        acted = true;
+      }
       codSelected = true;
-      log('checkout: selected Pay on Delivery');
-      await clickIfVisible(
-        page
-          .getByRole('button', { name: /use this payment method/i })
-          .or(page.locator('input[name*="SetPaymentPlanSelectionEvent"]')),
-        3_000,
-      );
-      continue;
+      if (await clickIfVisible(usePaymentMethod(page), acted ? 3_000 : 0)) {
+        log('checkout: clicked "Use this payment method"');
+        acted = true;
+      }
+      if (acted) continue;
     }
 
     if (await visible(placeButton(page))) {
@@ -474,7 +538,7 @@ export async function checkout(quantity = 1): Promise<Result> {
       const payingOnDelivery = codSelected || summary.payment === 'Pay on Delivery';
       if (!payingOnDelivery) {
         // Another default payment is selected: open the payment picker once.
-        if (!openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
+        if (!codSelected && !openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
           openedPaymentPicker = true;
           log('checkout: opened the payment picker (another method was selected)');
           continue;
@@ -489,7 +553,9 @@ export async function checkout(quantity = 1): Promise<Result> {
     }
 
     // Payment collapsed behind a "Change" link, with no radios or Place button yet.
-    if (!openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
+    // Only before Pay on Delivery is chosen: later pages (offers, Prime) have
+    // their own "Change" links that lead back to the payment page.
+    if (!codSelected && !openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
       openedPaymentPicker = true;
       log('checkout: opened the payment picker');
       continue;
@@ -536,6 +602,12 @@ export async function debug(): Promise<Result> {
       };
     })
     .catch((err: unknown) => ({ error: String(err) }));
+  // Amazon's action buttons are inputs labelled by another element; the
+  // accessibility snapshot shows them with the names a person would see.
+  const aria = await page
+    .locator('body')
+    .ariaSnapshot({ timeout: 3_000 })
+    .catch(() => '');
   return {
     status: 'ok',
     url: page.url(),
@@ -544,6 +616,7 @@ export async function debug(): Promise<Result> {
     place_button_visible: await visible(placeButton(page)),
     cod_radio_visible: await visible(codRadio(page)),
     ...dom,
+    aria: aria.slice(0, 6_000),
   };
 }
 
@@ -586,9 +659,11 @@ export async function placeOrder(): Promise<Result> {
   state.step = 'placed';
   await button.click();
 
-  const deadline = Date.now() + STEP_BUDGET_MS;
+  // Stays under the server's 17 s answer budget for placing.
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline && !/thankyou|thank-you|order-confirmation/i.test(page.url())) {
     await settle(page, 500);
+    if (await declineUpsell(page)) log('place: declined an upsell (No Thanks)');
     const blockedAfter = await blocker(page);
     if (blockedAfter)
       return {
