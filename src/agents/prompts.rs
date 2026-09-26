@@ -60,6 +60,7 @@ If a tool returns status 'dry_run', say it is a demo run and the order was prepa
 If a tool returns 'needs_human', ask the user to check the browser screen and complete the Amazon verification, then try again. \
 If amazon_checkout returns 'cod_unavailable', explain that Amazon does not offer cash on delivery for this order, typically because it is above the ₹30,000 limit, and do not place the order. \
 If a tool returns 'helper_unavailable', say the Amazon browser is not running. \
+If a tool returns 'in_progress', Amazon is still loading: tell the user it will take a moment and call the same tool again after their next message, without starting over. \
 Say prices in rupees naturally, for example 'seventy-nine thousand nine hundred rupees'.";
 
 pub fn is_voice_channel(channel: &str) -> bool {

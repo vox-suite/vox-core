@@ -83,6 +83,7 @@ fn shopping_instructions_require_explicit_confirmation() {
         "Never say an order is placed",
         "needs_human",
         "cod_unavailable",
+        "in_progress",
     ] {
         assert!(SHOPPING_INSTRUCTIONS.contains(requirement));
     }

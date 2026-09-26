@@ -78,11 +78,29 @@ checkout, so the caller must hear the total and answer first.
 
 ## Status of the selectors (checked 2026-09-26 against live amazon.in)
 
-- **Verified:** search (sponsored results filtered), product page (title, price,
-  colour and fixed-size variants), and colour selection.
-- **Not yet verified:** checkout and place. Those need a logged-in account.
-  Rehearse them in dry run first. The code tries role and text locators first,
-  then Amazon's known element ids.
+- **Verified on a logged-in account:** search (sponsored results filtered), product
+  page (title, price, colour and fixed-size variants), colour selection, checkout
+  (Buy Now → payment page with Pay on Delivery → offers → Prime upsell → review page,
+  about 12 s), and place in dry run.
+- **Not yet verified:** clicking "Place your order" for real (`SHOPPER_DRY_RUN=false`).
+
+## When a step is slow or stuck
+
+Every response comes back within 17 s, under Core's 20 s limit. If a step isn't
+finished by then, the helper answers `in_progress` and keeps working in the
+background. Calling checkout again resumes from the current checkout page instead
+of starting over. The terminal logs every checkout action
+(`checkout: on /checkout/p/.../pay`, `checkout: selected Pay on Delivery`, …).
+
+To see what the browser shows right now, even while a step is running:
+
+```sh
+T=$(grep ^SHOPPER_TOKEN= .env | cut -d= -f2)
+curl -s localhost:4100/debug -H "Authorization: Bearer $T"
+```
+
+It returns the URL, the visible buttons, the payment radio options, and whether
+the "Place your order" button and the Pay on Delivery option are visible.
 
 ## API
 
@@ -92,13 +110,15 @@ All routes need `Authorization: Bearer $SHOPPER_TOKEN`. Every response has a
 | Route | Body | Status values |
 |---|---|---|
 | `GET /health` | | `ok` (with `logged_in`, `name`, `step`, `dry_run`) |
+| `GET /debug` | | `ok` (what the page shows; answers even while a step runs) |
 | `POST /search` | `{ "query": "iphone 16" }` | `ok`, `not_found`, `needs_human` |
 | `POST /product` | `{ "asin": "B0DGJHBX5Y" }` | `ok`, `not_found`, `needs_human` |
 | `POST /select` | `{ "options": { "Colour": "Teal" } }` | `ok`, `partial`, `invalid_state` |
 | `POST /checkout` | `{ "quantity": 1 }` | `ok`, `cod_unavailable`, `needs_human`, `invalid_state`, `error` |
 | `POST /place` | `{}` | `placed`, `dry_run`, `price_changed`, `unknown`, `needs_human`, `invalid_state` |
 
-Unexpected failures return HTTP 500 with `{ "status": "error", "message": ... }`.
+Any route can also answer `in_progress` (still working, call again) or, for
+unexpected failures, HTTP 500 with `{ "status": "error", "message": ... }`.
 
 ## Settings
 

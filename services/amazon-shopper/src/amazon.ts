@@ -33,6 +33,9 @@ const state: { step: Step; total: string | null } = { step: 'idle', total: null 
 
 const RESULT_CARD = 'div[data-component-type="s-search-result"][data-asin]:not([data-asin=""])';
 const STEP_BUDGET_MS = 15_000;
+// Longer than one HTTP request's budget: if the server answers `in_progress`,
+// checkout keeps going in the background and the next call resumes it.
+const CHECKOUT_BUDGET_MS = 30_000;
 
 // ---------------------------------------------------------------- helpers
 
@@ -384,28 +387,46 @@ async function codUnavailable(page: Page): Promise<Result> {
   };
 }
 
+const onCheckoutPage = (page: Page) => /\/(checkout|gp\/buy|buy)\//i.test(new URL(page.url()).pathname);
+const log = (message: string) => console.log(`  ${message}`);
+
+/**
+ * Resumable: if an earlier call ran out of time, Chrome is already on a
+ * checkout page, so continue from there instead of clicking Buy Now again.
+ */
 export async function checkout(quantity = 1): Promise<Result> {
-  if (state.step !== 'product_open')
-    return { status: 'invalid_state', message: 'Open a product (and pick its options) before checkout.' };
   const page = await getPage();
+  if (state.step === 'checkout_ready' && onCheckoutPage(page) && (await visible(placeButton(page)))) {
+    return { status: 'ok', ...(await readCheckout(page)), payment: 'Pay on Delivery' };
+  }
 
-  if (quantity > 1) await page.selectOption('#quantity', String(quantity)).catch(() => {});
-  // Phones offer an exchange accordion; the plain purchase is "Without Exchange".
-  await clickIfVisible(page.getByText(/^\s*without exchange\s*$/i));
+  if (onCheckoutPage(page) && state.step !== 'placed') {
+    log(`checkout: resuming on ${new URL(page.url()).pathname}`);
+  } else {
+    if (state.step !== 'product_open')
+      return { status: 'invalid_state', message: 'Open a product (and pick its options) before checkout.' };
+    if (quantity > 1) await page.selectOption('#quantity', String(quantity)).catch(() => {});
+    // Phones offer an exchange accordion; the plain purchase is "Without Exchange".
+    await clickIfVisible(page.getByText(/^\s*without exchange\s*$/i));
 
-  const buyNow = page.locator('#buy-now-button').or(page.getByRole('button', { name: /buy now/i })).first();
-  if (!(await visible(buyNow)))
-    return {
-      status: 'error',
-      message: 'This product has no Buy Now button. It may be unavailable, or need its options chosen first.',
-    };
-  await buyNow.click();
+    const buyNow = page.locator('#buy-now-button').or(page.getByRole('button', { name: /buy now/i })).first();
+    if (!(await visible(buyNow)))
+      return {
+        status: 'error',
+        message: 'This product has no Buy Now button. It may be unavailable, or need its options chosen first.',
+      };
+    await buyNow.click({ noWaitAfter: true });
+    log('checkout: clicked Buy Now');
+  }
 
   let codSelected = false;
   let openedPaymentPicker = false;
-  const deadline = Date.now() + STEP_BUDGET_MS;
+  let lastPath = '';
+  const deadline = Date.now() + CHECKOUT_BUDGET_MS;
   while (Date.now() < deadline) {
     await settle(page, 500);
+    const path = new URL(page.url()).pathname;
+    if (path !== lastPath) log(`checkout: on ${(lastPath = path)}`);
     const blocked = await blocker(page);
     if (blocked) return blocked;
 
@@ -417,7 +438,10 @@ export async function checkout(quantity = 1): Promise<Result> {
       };
 
     // Protection-plan / add-on upsells.
-    if (await clickIfVisible(page.getByRole('button', { name: /^(no,? thanks|skip)$/i }))) continue;
+    if (await clickIfVisible(page.getByRole('button', { name: /^(no,? thanks|skip)$/i }))) {
+      log('checkout: dismissed an upsell');
+      continue;
+    }
     // Older flow: confirm the (default) delivery address.
     if (
       await clickIfVisible(
@@ -425,14 +449,17 @@ export async function checkout(quantity = 1): Promise<Result> {
           .locator('#shipToThisAddressButton, input[data-testid="Address_selectShipToThisAddress"]')
           .or(page.getByRole('button', { name: /deliver to this address|use this address/i })),
       )
-    )
+    ) {
+      log('checkout: confirmed the default address');
       continue;
+    }
 
     const cod = codRadio(page);
     if (!codSelected && (await visible(cod))) {
       if (await cod.isDisabled().catch(() => false)) return codUnavailable(page);
       await cod.check({ force: true }).catch(() => cod.click({ force: true }));
       codSelected = true;
+      log('checkout: selected Pay on Delivery');
       await clickIfVisible(
         page
           .getByRole('button', { name: /use this payment method/i })
@@ -449,10 +476,13 @@ export async function checkout(quantity = 1): Promise<Result> {
         // Another default payment is selected: open the payment picker once.
         if (!openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
           openedPaymentPicker = true;
+          log('checkout: opened the payment picker (another method was selected)');
           continue;
         }
+        log(`checkout: payment shows "${summary.payment}", not Pay on Delivery`);
         return codUnavailable(page);
       }
+      log(`checkout: ready, total ${summary.total}`);
       state.step = 'checkout_ready';
       state.total = summary.total;
       return { status: 'ok', ...summary, payment: 'Pay on Delivery' };
@@ -461,6 +491,7 @@ export async function checkout(quantity = 1): Promise<Result> {
     // Payment collapsed behind a "Change" link, with no radios or Place button yet.
     if (!openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
       openedPaymentPicker = true;
+      log('checkout: opened the payment picker');
       continue;
     }
     if (openedPaymentPicker && !codSelected && !(await visible(cod))) {
@@ -468,7 +499,52 @@ export async function checkout(quantity = 1): Promise<Result> {
       if (radios > 0) return codUnavailable(page);
     }
   }
+  log('checkout: gave up; call GET /debug to see what the page shows');
   return { status: 'error', message: 'Checkout took too long. Check the browser window.' };
+}
+
+/** What the browser currently shows, for diagnosing a stuck step. Read-only. */
+export async function debug(): Promise<Result> {
+  const page = await getPage();
+  const dom = await page
+    .evaluate(() => {
+      const shown = (el: Element) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      const label = (el: Element) =>
+        ((el as HTMLInputElement).value || el.getAttribute('aria-label') || el.textContent || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 80);
+      return {
+        title: document.title,
+        buttons: [...document.querySelectorAll('button, input[type=submit], input[type=button], [role=button]')]
+          .filter(shown)
+          .map(label)
+          .filter(Boolean)
+          .slice(0, 40),
+        radios: [...document.querySelectorAll('input[type=radio]')].slice(0, 30).map((r) => ({
+          label: (r.closest('label')?.textContent ?? r.getAttribute('aria-label') ?? r.getAttribute('name') ?? '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80),
+          checked: (r as HTMLInputElement).checked,
+          disabled: (r as HTMLInputElement).disabled,
+          shown: shown(r),
+        })),
+      };
+    })
+    .catch((err: unknown) => ({ error: String(err) }));
+  return {
+    status: 'ok',
+    url: page.url(),
+    step: state.step,
+    blocker: await blocker(page),
+    place_button_visible: await visible(placeButton(page)),
+    cod_radio_visible: await visible(codRadio(page)),
+    ...dom,
+  };
 }
 
 export async function placeOrder(): Promise<Result> {

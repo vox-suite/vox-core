@@ -29,18 +29,51 @@ app.use((req, res, next) => {
   next();
 });
 
+// Vox Core waits 20 s per step, so always answer before that. A step still
+// running then keeps going in the background (checkout resumes on the next call).
+const RESPONSE_BUDGET_MS = 17_000;
+
 function handle(name: string, step: (body: Record<string, unknown>) => Promise<amazon.Result>) {
   return async (req: Request, res: Response) => {
     const started = Date.now();
+    let abandoned = false;
+    res.on('close', () => {
+      if (!res.writableFinished) abandoned = true;
+    });
+
+    const work = serial(async (): Promise<amazon.Result> => {
+      // The caller gave up while this waited in the queue: don't drive the browser for nobody.
+      if (abandoned) return { status: 'cancelled' };
+      return step((req.body ?? {}) as Record<string, unknown>);
+    });
+    let timer: NodeJS.Timeout | undefined;
+    const slow = new Promise<amazon.Result>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            status: 'in_progress',
+            message: 'Amazon is still loading. Tell the user it will take a moment, and call this tool again on their next message.',
+          }),
+        RESPONSE_BUDGET_MS,
+      );
+    });
+
     try {
-      const result = await serial(() => step((req.body ?? {}) as Record<string, unknown>));
+      const result = await Promise.race([work, slow]);
       console.log(`${name} -> ${result.status} (${Date.now() - started} ms)`);
-      res.json(result);
+      if (result.status === 'in_progress')
+        work.then(
+          (late) => console.log(`${name} finished in the background -> ${late.status} (${Date.now() - started} ms)`),
+          (err: unknown) => console.error(`${name} failed in the background`, err),
+        );
+      if (!abandoned) res.json(result);
     } catch (err) {
       // Playwright errors carry a multi-line call log; the first line is enough to speak.
       const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
       console.error(`${name} failed (${Date.now() - started} ms)`, err);
-      res.status(500).json({ status: 'error', message });
+      if (!abandoned) res.status(500).json({ status: 'error', message });
+    } finally {
+      clearTimeout(timer);
     }
   };
 }
@@ -51,6 +84,10 @@ function stringMap(value: unknown): Record<string, string> {
 }
 
 app.get('/health', handle('health', () => amazon.health()));
+// Outside the queue on purpose, so it works while a step is stuck.
+app.get('/debug', async (_req, res) => {
+  res.json(await amazon.debug().catch((err: unknown) => ({ status: 'error', message: String(err) })));
+});
 app.post('/search', handle('search', (b) => amazon.search(String(b.query ?? ''))));
 app.post('/product', handle('product', (b) => amazon.openProduct(String(b.asin ?? ''))));
 app.post('/select', handle('select', (b) => amazon.selectOptions(stringMap(b.options))));
