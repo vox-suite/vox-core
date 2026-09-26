@@ -1,7 +1,7 @@
 /**
 * HTTP endpoints for remote extension governance, conformance, and renewed consent.
 */
-use super::{AppState, host_apps::assertion_from_headers};
+use super::{AppState, auth, host_apps::assertion_from_headers};
 use crate::{
     host_trust::{HostContextRequest, HostTrustService},
     remote_extensions::{
@@ -128,6 +128,9 @@ pub async fn set_enabled(
     Path(id): Path<Uuid>,
     Json(r): Json<SetEnabledRequest>,
 ) -> Response {
+    if !auth::authorized(&h, &s.service_token) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Some(service) = s.remote_extensions.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
@@ -146,6 +149,9 @@ pub async fn record_conformance(
     Path(id): Path<Uuid>,
     Json(r): Json<ConformanceReportRequest>,
 ) -> Response {
+    if !auth::authorized(&h, &s.service_token) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Some(service) = s.remote_extensions.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
@@ -161,21 +167,15 @@ pub async fn record_conformance(
 }
 
 pub async fn renew_consent(
-    State(s): State<AppState>,
-    h: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(r): Json<RenewConsentRequest>,
+    State(_s): State<AppState>,
+    _h: HeaderMap,
+    Path(_id): Path<Uuid>,
+    Json(_r): Json<RenewConsentRequest>,
 ) -> Response {
-    let Some(service) = s.remote_extensions.as_ref() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    reply(
-        service.renew_consent(&c, id, r.version).await,
-        StatusCode::OK,
-    )
+    // A host assertion proves identity, not that the user reviewed the
+    // operator/recipient diff. Keep renewal unavailable until the public
+    // consent flow can bind an explicit decision to the reviewed version.
+    StatusCode::SERVICE_UNAVAILABLE.into_response()
 }
 
 pub async fn quarantine(
@@ -184,6 +184,9 @@ pub async fn quarantine(
     Path(id): Path<Uuid>,
     Json(r): Json<QuarantineRequest>,
 ) -> Response {
+    if !auth::authorized(&h, &s.service_token) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Some(service) = s.remote_extensions.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };

@@ -1,0 +1,10 @@
+{
+  "external_key": "meeting-prep",
+  "title": "Meeting prep",
+  "summary": "Prepare a short agenda from the user's notes.",
+  "instructions": "Summarize the meeting purpose, identify decisions needed, and ask for missing context. Use connected tools only when the user has granted this agent access.",
+  "requested_capabilities": ["calendar.read"],
+  "resources": {
+    "agenda_template": "Purpose; decisions; open questions; next steps."
+  }
+}

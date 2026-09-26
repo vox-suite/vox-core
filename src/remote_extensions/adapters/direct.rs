@@ -1,10 +1,11 @@
+use super::transport::client_for_endpoint;
 use super::{
     AdapterExecutionError, ExtensionInvocation, ExtensionProtocolAdapter, ExtensionReconciliation,
     NormalizedResponse, ResponseStatus, integrity::ExtensionIntegritySigner,
 };
 use crate::remote_extensions::{AuthorizedEndpoint, ExtensionProtocol};
 use chrono::Utc;
-use reqwest::Client;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -24,8 +25,8 @@ pub struct DirectApiRequest {
 }
 
 pub struct DirectProtocolAdapter {
-    client: Client,
     timeout: Duration,
+    allow_local_for_testing: bool,
 }
 
 impl DirectProtocolAdapter {
@@ -35,12 +36,15 @@ impl DirectProtocolAdapter {
 
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(timeout)
-                .build()
-                .unwrap_or_default(),
             timeout,
+            allow_local_for_testing: false,
         }
+    }
+
+    /// Isolated loopback mock servers in integration tests only.
+    pub fn with_local_endpoints_for_testing(mut self) -> Self {
+        self.allow_local_for_testing = true;
+        self
     }
 
     pub fn timeout(&self) -> Duration {
@@ -87,8 +91,13 @@ impl ExtensionProtocolAdapter for DirectProtocolAdapter {
         let now = Utc::now();
         let nonce = Uuid::new_v4();
 
-        let mut req_builder = self
-            .client
+        let client = client_for_endpoint(
+            &endpoint.endpoint_url,
+            self.timeout,
+            self.allow_local_for_testing,
+        )
+        .await?;
+        let mut req_builder = client
             .post(&endpoint.endpoint_url)
             .header("content-type", "application/json")
             .header("x-vox-protocol", "direct/v1");
@@ -125,17 +134,16 @@ impl ExtensionProtocolAdapter for DirectProtocolAdapter {
         })?;
 
         let status = response.status();
-        let resp_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| AdapterExecutionError::Network(e.to_string()))?;
-
-        if resp_bytes.len() > MAX_PAYLOAD_BYTES {
-            return Err(AdapterExecutionError::InvalidPayload(format!(
-                "response size {} bytes exceeds maximum allowed {}",
-                resp_bytes.len(),
-                MAX_PAYLOAD_BYTES
-            )));
+        let mut resp_bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AdapterExecutionError::Network(e.to_string()))?;
+            if resp_bytes.len().saturating_add(chunk.len()) > MAX_PAYLOAD_BYTES {
+                return Err(AdapterExecutionError::InvalidPayload(
+                    "direct response exceeds the 2 MiB limit".into(),
+                ));
+            }
+            resp_bytes.extend_from_slice(&chunk);
         }
 
         let status_code = status.as_u16();

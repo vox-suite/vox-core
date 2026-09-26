@@ -53,7 +53,7 @@ async fn host_cannot_claim_provider_authorization_or_platform_credential_custody
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
 
@@ -191,14 +191,13 @@ async fn connection_is_context_bound_and_reports_truthful_lifecycle() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn provider_verified_authorization_flow_binds_context_and_displays_account_identity() {
+async fn unverified_authorization_cannot_create_a_connection() {
     let db = setup().await;
     let (deployment, context) = create_context(&db).await;
     enable(&db, &deployment).await;
     let service = ConnectionService::new(db.clone());
 
-    // 1. Initiate authorization session
-    let init_resp = service
+    let initiation = service
         .initiate(
             &context,
             InitiateConnectionRequest {
@@ -208,107 +207,27 @@ async fn provider_verified_authorization_flow_binds_context_and_displays_account
                 redirect_uri: Some("https://app.voxagent.in/auth/callback".into()),
             },
         )
-        .await
-        .unwrap();
-
-    assert_eq!(init_resp.integration_external_key, "calendar");
-    assert!(!init_resp.state_token.is_empty());
-    assert!(init_resp.authorization_url.contains(&init_resp.state_token));
-
-    // 2. Cross-context callback fails closed with NotFound
-    let (_, other_context) = create_context(&db).await;
-    let wrong_ctx_result = service
-        .verify_callback(
-            &other_context,
-            VerifyConnectionCallbackRequest {
-                session_id: init_resp.session_id,
-                state_token: init_resp.state_token.clone(),
-                provider_code: "provider-auth-code-123".into(),
-                external_account_reference: "alice-primary-id".into(),
-                account_display_id: "alice@example.com".into(),
-            },
-        )
         .await;
-    assert!(matches!(wrong_ctx_result, Err(ConnectionError::NotFound)));
+    assert!(matches!(
+        initiation,
+        Err(ConnectionError::AuthorizationUnavailable)
+    ));
 
-    // 3. Callback with wrong state token fails closed
-    let wrong_state_result = service
+    let forged_callback = service
         .verify_callback(
             &context,
             VerifyConnectionCallbackRequest {
-                session_id: init_resp.session_id,
-                state_token: "forged-or-mismatched-state".into(),
-                provider_code: "provider-auth-code-123".into(),
-                external_account_reference: "alice-primary-id".into(),
-                account_display_id: "alice@example.com".into(),
+                session_id: Uuid::new_v4(),
+                state_token: "host-supplied-state".into(),
+                provider_code: "unverified-code".into(),
+                external_account_reference: "victim-account".into(),
+                account_display_id: "victim@example.com".into(),
             },
         )
         .await;
     assert!(matches!(
-        wrong_state_result,
-        Err(ConnectionError::InvalidState)
+        forged_callback,
+        Err(ConnectionError::AuthorizationUnavailable)
     ));
-
-    // 4. Legitimate verified callback succeeds and records connection
-    let authorized = service
-        .verify_callback(
-            &context,
-            VerifyConnectionCallbackRequest {
-                session_id: init_resp.session_id,
-                state_token: init_resp.state_token.clone(),
-                provider_code: "provider-auth-code-123".into(),
-                external_account_reference: "alice-primary-id".into(),
-                account_display_id: "alice@example.com".into(),
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        authorized.authorization_state,
-        AuthorizationState::Authorized
-    );
-    assert_eq!(
-        authorized.credential_custody,
-        CredentialCustody::ExternalOperator
-    );
-    assert_eq!(
-        authorized.account_display_id,
-        Some("alice@example.com".into())
-    );
-    assert_eq!(authorized.authorized_capabilities, vec!["read".to_string()]);
-    assert!(authorized.expires_at.is_some());
-
-    // 5. Replay of callback on consumed session fails closed
-    let replay_result = service
-        .verify_callback(
-            &context,
-            VerifyConnectionCallbackRequest {
-                session_id: init_resp.session_id,
-                state_token: init_resp.state_token.clone(),
-                provider_code: "provider-auth-code-123".into(),
-                external_account_reference: "alice-primary-id".into(),
-                account_display_id: "alice@example.com".into(),
-            },
-        )
-        .await;
-    assert!(matches!(
-        replay_result,
-        Err(ConnectionError::SessionAlreadyConsumed)
-    ));
-
-    // 6. List returns verified account display ID
-    let listed = service.list(&context).await.unwrap();
-    let conn = listed
-        .iter()
-        .find(|c| c.id == authorized.id)
-        .expect("found in list");
-    assert_eq!(conn.account_display_id, Some("alice@example.com".into()));
-    assert_eq!(conn.authorization_state, AuthorizationState::Authorized);
-
-    // 7. Disconnect revokes connection cleanly
-    let revoked = service.disconnect(&context, authorized.id).await.unwrap();
-    assert_eq!(revoked.authorization_state, AuthorizationState::Revoked);
-    assert_eq!(revoked.account_display_id, Some("alice@example.com".into()));
-    assert!(revoked.authorized_capabilities.is_empty());
+    assert!(service.list(&context).await.unwrap().is_empty());
 }

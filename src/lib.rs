@@ -40,6 +40,7 @@ pub mod redis_keys;
 pub mod reminders;
 pub mod remote_extensions;
 pub mod schedules;
+pub mod skills;
 pub mod sms_ingestion;
 pub mod status;
 pub mod storage;

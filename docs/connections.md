@@ -9,10 +9,16 @@ claims. That is insufficient for a production connection.
 
 ## Current public behavior
 
-- `POST /v1/connections/authorize` can record non-authoritative lifecycle
-  states for an enabled integration. It rejects `authorized` and
-  `platform_held` claims with `403`. The endpoint must not be used as a
-  production provider callback.
+- `POST /v1/connections/initiate` and `POST /v1/connections/callback` now
+  return `503`. No provider authorization adapter is configured, so Core refuses
+  to invent an authorization URL or accept a caller-supplied account identity.
+- Internal connection records no longer synthesize a `vault-<id>` secret
+  reference. The legacy reference remains empty until real credential custody
+  exists.
+
+- `POST /v1/connections/authorize` also returns `503`. Host-supplied account
+  identity, scopes, custody, and lifecycle states are no longer accepted on
+  any public connection creation path.
 - `POST /v1/connections/list` takes a signed host assertion and
   `{"host_context": {"host_user_id": "...", "organization_external_key": null}}`.
   It returns at most 100 connection records owned by that exact user context.

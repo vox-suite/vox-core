@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
-use url::Url;
+use std::net::IpAddr;
+use url::{Host, Url};
 use uuid::Uuid;
 
 pub mod adapters;
@@ -303,25 +304,86 @@ pub enum RemoteExtensionError {
 #[derive(Clone)]
 pub struct RemoteExtensionService {
     db: Db,
+    allow_local_endpoints: bool,
+}
+
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 198 && (b == 18 || b == 19))
+                || (a == 192 && b == 0 && c == 0))
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return public_ip(IpAddr::V4(mapped));
+            }
+            let first = ip.segments()[0];
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 impl RemoteExtensionService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self {
+            db,
+            allow_local_endpoints: false,
+        }
     }
 
-    fn validate_endpoint_url(url_str: &str) -> Result<String, RemoteExtensionError> {
+    /// For isolated integration tests with a loopback mock server only.
+    pub fn with_local_endpoints_for_testing(mut self) -> Self {
+        self.allow_local_endpoints = true;
+        self
+    }
+
+    fn validate_endpoint_url(&self, url_str: &str) -> Result<String, RemoteExtensionError> {
         let trimmed = url_str.trim();
         let parsed = Url::parse(trimmed).map_err(|_| RemoteExtensionError::Invalid)?;
-        match parsed.scheme() {
-            "https" => Ok(trimmed.to_string()),
-            "http"
-                if parsed.host_str() == Some("127.0.0.1")
-                    || parsed.host_str() == Some("localhost") =>
-            {
-                Ok(trimmed.to_string())
+        if !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(RemoteExtensionError::Invalid);
+        }
+        let host = parsed.host().ok_or(RemoteExtensionError::Invalid)?;
+        let local_name = match host {
+            Host::Domain(name) => {
+                name.eq_ignore_ascii_case("localhost")
+                    || name.ends_with(".localhost")
+                    || name.ends_with(".local")
+                    || name.ends_with(".internal")
             }
-            _ => Err(RemoteExtensionError::Invalid),
+            _ => false,
+        };
+        let local_ip = match host {
+            Host::Ipv4(ip) => !public_ip(IpAddr::V4(ip)),
+            Host::Ipv6(ip) => !public_ip(IpAddr::V6(ip)),
+            _ => false,
+        };
+        if (local_name || local_ip) && !self.allow_local_endpoints {
+            return Err(RemoteExtensionError::Invalid);
+        }
+        if parsed.scheme() == "https"
+            || (self.allow_local_endpoints && parsed.scheme() == "http" && (local_name || local_ip))
+        {
+            Ok(trimmed.to_string())
+        } else {
+            Err(RemoteExtensionError::Invalid)
         }
     }
 
@@ -340,7 +402,7 @@ impl RemoteExtensionService {
     ) -> Result<RemoteExtension, RemoteExtensionError> {
         let external_key = Self::validate_key(&request.external_key)?;
         let display_name = Self::validate_key(&request.display_name)?;
-        let endpoint_url = Self::validate_endpoint_url(&request.endpoint_url)?;
+        let endpoint_url = self.validate_endpoint_url(&request.endpoint_url)?;
 
         if request.operator.operator_id.trim().is_empty()
             || request.operator.operator_name.trim().is_empty()
@@ -581,7 +643,7 @@ impl RemoteExtensionService {
             serde_json::from_value(row.get("capabilities")).unwrap_or_default();
 
         let new_endpoint = match request.endpoint_url.as_deref() {
-            Some(url) => Self::validate_endpoint_url(url)?,
+            Some(url) => self.validate_endpoint_url(url)?,
             None => old_endpoint,
         };
 

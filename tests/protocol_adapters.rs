@@ -291,8 +291,13 @@ async fn start_mock_direct_server(state: Arc<MockServerState>) -> String {
 }
 
 fn create_router() -> ProtocolRouter {
-    let mcp = Arc::new(McpProtocolAdapter::with_timeout(Duration::from_secs(5)));
-    let direct = Arc::new(DirectProtocolAdapter::with_timeout(Duration::from_secs(5)));
+    let mcp = Arc::new(
+        McpProtocolAdapter::with_timeout(Duration::from_secs(5)).with_local_endpoints_for_testing(),
+    );
+    let direct = Arc::new(
+        DirectProtocolAdapter::with_timeout(Duration::from_secs(5))
+            .with_local_endpoints_for_testing(),
+    );
     ProtocolRouter::new(mcp, direct, TEST_SIGNING_SECRET.to_vec())
 }
 
@@ -430,7 +435,8 @@ async fn test_protocol_parity_read_and_consequential_scenarios() {
 async fn test_protocol_choice_provides_no_inherent_trust_or_permission() {
     let db = setup_db().await;
     let (context, _) = create_host_context(&db, "user-parity-trust").await;
-    let service = Arc::new(RemoteExtensionService::new(db.clone()));
+    let service =
+        Arc::new(RemoteExtensionService::new(db.clone()).with_local_endpoints_for_testing());
     let router = Arc::new(create_router());
 
     // 1. Install MCP extension with consequential capability
@@ -978,7 +984,8 @@ async fn test_fuzzing_and_malformed_protocol_resilience() {
 async fn test_consequential_dispatch_succeeds_after_conformance_and_operator_enablement() {
     let db = setup_db().await;
     let (context, _) = create_host_context(&db, "user-consequential-success").await;
-    let service = Arc::new(RemoteExtensionService::new(db.clone()));
+    let service =
+        Arc::new(RemoteExtensionService::new(db.clone()).with_local_endpoints_for_testing());
 
     let mcp_state = MockServerState::new();
     let mcp_url = start_mock_mcp_server(mcp_state.clone()).await;

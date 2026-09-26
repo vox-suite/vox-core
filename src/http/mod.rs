@@ -25,6 +25,7 @@ pub mod rate_limit;
 pub mod reminders;
 pub mod remote_extensions;
 pub mod schedules;
+pub mod skills;
 pub mod status;
 
 use crate::{
@@ -67,6 +68,7 @@ pub struct AppState {
     pub(crate) privacy: Option<Arc<crate::privacy::PrivacyService>>,
     pub(crate) reminders: Option<Arc<crate::reminders::ReminderService>>,
     pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
+    pub(crate) skills: Option<Arc<crate::skills::SkillService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
     pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
     pub(crate) expedia_write: Option<Arc<crate::providers::ExpediaLodgingService>>,
@@ -100,6 +102,7 @@ impl AppState {
             privacy: None,
             reminders: None,
             remote_extensions: None,
+            skills: None,
             status: None,
             uber_read: None,
             expedia_write: None,
@@ -184,6 +187,7 @@ impl AppState {
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
+            skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
                 db.clone(),
@@ -288,6 +292,7 @@ impl AppState {
             remote_extensions: Some(Arc::new(
                 crate::remote_extensions::RemoteExtensionService::new(db.clone()),
             )),
+            skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
                 db.clone(),
@@ -490,6 +495,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(status::disable_subscription),
         )
         .route("/v1/agent-definitions", post(agent_registry::register))
+        .route(
+            "/v1/agents/selected",
+            post(agent_registry::list_selected_for_host),
+        )
         .route("/v1/agent-selections", post(agent_registry::select))
         .route(
             "/v1/agent-definitions/enabled",
@@ -573,6 +582,24 @@ pub fn router(state: AppState) -> Router {
             delete(host_apps::revoke_credential),
         )
         .route("/v1/remote-extensions", post(remote_extensions::install))
+        .route("/v1/skills/private", post(skills::publish_private))
+        .route("/v1/skills/curated", post(skills::publish_curated))
+        .route("/v1/skills/list", post(skills::list))
+        .route("/v1/skills/{id}/versions/{version}", post(skills::version))
+        .route("/v1/skills/{id}/install", post(skills::install))
+        .route("/v1/skills/{id}/disable", post(skills::disable))
+        .route(
+            "/v1/agents/{agent_key}/effective-skills",
+            post(skills::effective),
+        )
+        .route(
+            "/v1/agents/{agent_key}/skills/{skill_id}/load",
+            post(skills::load_for_agent),
+        )
+        .route(
+            "/v1/agents/{agent_key}/skills/{skill_id}/enable",
+            post(skills::set_agent_enabled),
+        )
         .route("/v1/remote-extensions/list", post(remote_extensions::list))
         .route(
             "/v1/remote-extensions/{id}",
