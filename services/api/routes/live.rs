@@ -14,11 +14,16 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use vox_core::{domain::identity::Actor, realtime::UserEventHub};
+use sqlx::PgPool;
+use vox_core::{
+    domain::{devices::local_llm_capable, identity::Actor},
+    realtime::UserEventHub,
+};
 
 #[derive(Clone)]
 pub struct LiveApiState {
     pub hub: UserEventHub,
+    pub pool: PgPool,
 }
 
 #[derive(Deserialize)]
@@ -35,7 +40,21 @@ pub async fn live_socket(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let platform = query.platform.unwrap_or_else(|| "unknown".to_string());
-    ws.on_upgrade(move |socket| handle_socket(socket, state, actor.user_id, platform))
+    // Best-effort: reuses the capabilities the client already reported when
+    // it registered as a device, so we don't need a separate declaration here.
+    let local_llm = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT capabilities FROM devices \
+         WHERE user_id = $1 AND platform = $2 \
+         ORDER BY last_seen_at DESC LIMIT 1",
+    )
+    .bind(actor.user_id)
+    .bind(&platform)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some_and(|capabilities| local_llm_capable(&capabilities));
+    ws.on_upgrade(move |socket| handle_socket(socket, state, actor.user_id, platform, local_llm))
 }
 
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
@@ -45,8 +64,9 @@ async fn handle_socket(
     state: LiveApiState,
     user_id: uuid::Uuid,
     platform: String,
+    local_llm_capable: bool,
 ) {
-    tracing::info!(%user_id, %platform, "Live socket connected");
+    tracing::info!(%user_id, %platform, local_llm_capable, "Live socket connected");
     let (generation, mut outgoing) = state.hub.register(user_id, platform);
     let (mut sender, mut receiver) = socket.split();
 

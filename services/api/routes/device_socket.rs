@@ -11,9 +11,12 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use vox_core::{domain::identity::Actor, realtime::DeviceHub};
+use vox_core::{
+    domain::{devices::local_llm_capable, identity::Actor},
+    realtime::DeviceHub,
+};
 
 #[derive(Clone)]
 pub struct DeviceSocketState {
@@ -27,27 +30,37 @@ pub async fn device_socket(
     Path(id): Path<Uuid>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let owned = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM devices WHERE id = $1 AND user_id = $2 AND is_active = true AND execution_consent = true)",
+    let device = sqlx::query(
+        "SELECT platform, capabilities FROM devices \
+         WHERE id = $1 AND user_id = $2 AND is_active = true AND execution_consent = true",
     )
     .bind(id)
     .bind(actor.user_id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await
-    .unwrap_or(false);
+    .unwrap_or(None);
 
-    if !owned {
+    let Some(device) = device else {
         tracing::warn!(device_id = %id, user_id = %actor.user_id, "Device socket rejected: not an active device owned by this user");
         return axum::http::StatusCode::NOT_FOUND.into_response();
-    }
+    };
+    let platform: String = device.get("platform");
+    let capabilities: serde_json::Value = device.get("capabilities");
+    let local_llm = local_llm_capable(&capabilities);
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state, id))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, id, platform, local_llm))
 }
 
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
-async fn handle_socket(socket: WebSocket, state: DeviceSocketState, device_id: Uuid) {
-    tracing::info!(device_id = %device_id, "Device socket connected");
+async fn handle_socket(
+    socket: WebSocket,
+    state: DeviceSocketState,
+    device_id: Uuid,
+    platform: String,
+    local_llm_capable: bool,
+) {
+    tracing::info!(device_id = %device_id, %platform, local_llm_capable, "Device socket connected");
     let (generation, mut outgoing) = state.hub.register(device_id);
     let (mut sender, mut receiver) = socket.split();
 

@@ -21,3 +21,12 @@ pub struct Device {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+/// Reads the `local_llm` flag a client reports in its `capabilities` blob at
+/// registration time (e.g. the desktop app's Gemma-2B-on-device support).
+pub fn local_llm_capable(capabilities: &serde_json::Value) -> bool {
+    capabilities
+        .get("local_llm")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}

@@ -141,6 +141,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/me/events/socket", get(live_socket))
         .with_state(LiveApiState {
             hub: state.user_events.clone(),
+            pool: state.pool.clone(),
         });
 
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));

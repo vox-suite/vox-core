@@ -13,7 +13,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use vox_core::{
     application::devices::{DeviceService, RegisterDeviceInput},
-    domain::identity::Actor,
+    domain::{devices::local_llm_capable, identity::Actor},
 };
 
 #[derive(Clone)]
@@ -40,6 +40,7 @@ pub async fn register_device(
         user_id = %actor.user_id,
         platform = %device.platform,
         label = %device.label,
+        local_llm_capable = local_llm_capable(&device.capabilities),
         "Device registered"
     );
     Ok((StatusCode::CREATED, Json(device)))
