@@ -56,18 +56,25 @@ impl ResolveGithubIssue {
         }
     }
 
-    async fn notify_done(&self, issue_number: u64, repo_hint: &str) {
+    async fn notify_done(&self, issue_number: u64, repo_hint: &str, pr_url: &str) {
         let Some(outbound) = &self.outbound else {
             return;
         };
         let reason = format!("Issue #{issue_number} resolved");
         let opening = format!(
-            "Let the user know Claude Code finished working on GitHub issue #{issue_number} in {repo_hint} and a pull request is ready for review."
+            "Let the user know Claude Code finished working on GitHub issue #{issue_number} in {repo_hint} and opened a pull request: {pr_url}."
         );
         let _ = outbound
             .initiate_call_for_user(self.owner, &reason, &opening, None, None)
             .await;
     }
+}
+
+fn last_marker_value<'a>(output: &'a str, marker: &str) -> Option<&'a str> {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix(marker))
 }
 
 impl Tool for ResolveGithubIssue {
@@ -129,7 +136,10 @@ impl Tool for ResolveGithubIssue {
         );
         let command = format!(
             "REPO_DIR=$(find ~ -maxdepth 5 -type d -iname '*{repo_hint}*' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1); \
-             if [ -z \"$REPO_DIR\" ]; then echo VOX_REPO_NOT_FOUND; else cd \"$REPO_DIR\" && claude --permission-mode bypassPermissions -p '{prompt}'; fi",
+             if [ -z \"$REPO_DIR\" ]; then echo VOX_REPO_NOT_FOUND; \
+             else cd \"$REPO_DIR\" && claude --permission-mode bypassPermissions -p '{prompt}'; \
+             CLAUDE_EXIT=$?; PR_URL=$(gh pr view --json url -q .url 2>/dev/null); \
+             echo \"VOX_CLAUDE_EXIT:$CLAUDE_EXIT\"; echo \"VOX_PR_URL:${{PR_URL:-none}}\"; fi",
             repo_hint = repo_hint,
             prompt = prompt.replace('\'', "'\\''"),
         );
@@ -191,13 +201,38 @@ impl Tool for ResolveGithubIssue {
             )));
         }
 
-        self.notify_done(args.issue_number, &repo_hint).await;
+        let claude_exit: Option<i64> = last_marker_value(&output, "VOX_CLAUDE_EXIT:")
+            .and_then(|v| v.parse().ok());
+        let pr_url = last_marker_value(&output, "VOX_PR_URL:")
+            .filter(|v| !v.is_empty() && *v != "none")
+            .map(str::to_string);
+
+        if claude_exit != Some(0) {
+            return Err(TerminalToolError::DeviceUnavailable(format!(
+                "Claude Code did not finish successfully on issue #{} (exit code {:?}). No pull request was confirmed, so the user was not called.",
+                args.issue_number, claude_exit
+            )));
+        }
+
+        match &pr_url {
+            Some(url) => self.notify_done(args.issue_number, &repo_hint, url).await,
+            None => {
+                return Ok(json!({
+                    "device": device.label,
+                    "issue_number": args.issue_number,
+                    "repo_hint": repo_hint,
+                    "pr_url": Value::Null,
+                    "output": output,
+                    "note": "Claude Code finished but no pull request was found for the branch; the user was not called.",
+                }));
+            }
+        }
 
         Ok(json!({
             "device": device.label,
             "issue_number": args.issue_number,
             "repo_hint": repo_hint,
-            "exit_code": exit_code,
+            "pr_url": pr_url,
             "output": output,
         }))
     }

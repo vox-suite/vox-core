@@ -43,7 +43,7 @@ impl JobKind {
 pub struct ClaimedJob {
     pub id: Uuid,
     pub kind: JobKind,
-    pub payload_reference_id: Uuid,
+    pub payload_reference_id: Option<Uuid>,
     pub occurrence_at: Option<DateTime<Utc>>,
     pub attempt_count: i32,
 }

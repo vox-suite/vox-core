@@ -114,16 +114,23 @@ impl Worker {
 
         for job in jobs {
             tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job claimed");
+            let Some(reference_id) = job.payload_reference_id else {
+                tracing::error!(job_id = %job.id, kind = job.kind.as_str(), "job has no payload_reference_id; failing");
+                self.jobs
+                    .fail(job.id, &self.worker_id, Utc::now(), "missing_payload_reference_id")
+                    .await?;
+                continue;
+            };
             let result = match job.kind {
                 JobKind::ProcessEvent => self
                     .events
-                    .handle(EventId(job.payload_reference_id))
+                    .handle(EventId(reference_id))
                     .await
                     .map_err(|_| "event_processing"),
                 JobKind::RunSchedule => match &self.schedules {
                     Some(schedules) => match job.occurrence_at {
                         Some(occurrence_at) => schedules
-                            .handle(ScheduleId(job.payload_reference_id), occurrence_at)
+                            .handle(ScheduleId(reference_id), occurrence_at)
                             .await
                             .map_err(|_| "schedule_processing"),
                         None => Err("schedule_occurrence_missing"),
@@ -132,21 +139,21 @@ impl Worker {
                 },
                 JobKind::SummarizeConversation => match &self.summaries {
                     Some(summaries) => summaries
-                        .handle(ConversationId(job.payload_reference_id))
+                        .handle(ConversationId(reference_id))
                         .await
                         .map_err(|_| "summary_processing"),
                     None => Err("summary_handler_unavailable"),
                 },
                 JobKind::EvaluateSpan | JobKind::ExecuteSpan => match &self.task_executor {
                     Some(executor) => executor
-                        .handle(job.payload_reference_id)
+                        .handle(reference_id)
                         .await
                         .map_err(|_| "task_execution"),
                     None => Err("task_executor_unavailable"),
                 },
                 JobKind::ProcessSmsBatch => match &self.sms_batches {
                     Some(handler) => handler
-                        .handle(job.payload_reference_id)
+                        .handle(reference_id)
                         .await
                         .map_err(|_| "sms_batch_processing"),
                     None => Err("sms_batch_handler_unavailable"),

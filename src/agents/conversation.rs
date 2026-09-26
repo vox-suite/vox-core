@@ -184,6 +184,12 @@ impl ConversationAgent {
             // Keeps short replies ("teal, 256", "yes") on the shopping tools
             // mid-purchase, and routes a purchase without needing Jev.
             crate::jev::ToolDomain::Shopping
+        } else if mentions_device(&prompt.user_text) {
+            // Device state (battery, terminal output, etc.) is volatile and
+            // must be re-checked live even on a repeat question, but Jev
+            // tends to route repeats to `None` ("answerable from context")
+            // since the old answer is already in the transcript.
+            crate::jev::ToolDomain::Device
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
                 Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
@@ -720,6 +726,23 @@ fn mentions_shopping(text: &str) -> bool {
         "order me",
         "place an order",
         "place the order",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword))
+}
+
+fn mentions_device(text: &str) -> bool {
+    let text = text.to_lowercase();
+    [
+        "battery",
+        "terminal",
+        "run a command",
+        "shell command",
+        "my mac",
+        "my computer",
+        "my laptop",
+        "github issue",
+        "pull request",
     ]
     .iter()
     .any(|keyword| text.contains(keyword))
