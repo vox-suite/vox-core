@@ -412,16 +412,68 @@ impl RemoteExtensionService {
 
         let mut tx = self.db.pool().begin().await?;
 
-        let existing = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM remote_extensions WHERE user_context_id = $1 AND external_key = $2)",
+        let existing = sqlx::query(
+            "SELECT id, current_version, lifecycle_state FROM remote_extensions \
+             WHERE user_context_id = $1 AND external_key = $2 FOR UPDATE",
         )
         .bind(context.id.0)
         .bind(&external_key)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        if existing {
-            return Err(RemoteExtensionError::Conflict);
+        if let Some(row) = existing {
+            let lifecycle_state: String = row.get("lifecycle_state");
+            if lifecycle_state != "removed" {
+                return Err(RemoteExtensionError::Conflict);
+            }
+
+            // Removal is a soft delete that keeps the row (and its version history) as
+            // evidence, so reinstalling revives it as a fresh, unproven version rather
+            // than colliding with the (user, external_key) unique constraint.
+            let extension_id: Uuid = row.get("id");
+            let next_version: i32 = row.get::<i32, _>("current_version") + 1;
+            let capabilities_json = serde_json::to_value(&request.capabilities)
+                .map_err(|_| RemoteExtensionError::Invalid)?;
+
+            sqlx::query(
+                "INSERT INTO remote_extension_versions (
+                    extension_id, version, endpoint_url, operator_id, operator_name,
+                    capabilities, conformance_status, conformance_report, consent_granted_at
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, 'pending', '{}'::jsonb, now()
+                )",
+            )
+            .bind(extension_id)
+            .bind(next_version)
+            .bind(&endpoint_url)
+            .bind(&request.operator.operator_id)
+            .bind(&request.operator.operator_name)
+            .bind(&capabilities_json)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                "UPDATE remote_extensions \
+                 SET display_name = $2, protocol = $3, endpoint_url = $4, \
+                     operator_id = $5, operator_name = $6, support_email = $7, terms_url = $8, \
+                     current_version = $9, conformance_status = 'pending', operator_enabled = false, \
+                     consent_status = 'consented', lifecycle_state = 'installed', updated_at = now() \
+                 WHERE id = $1",
+            )
+            .bind(extension_id)
+            .bind(&display_name)
+            .bind(request.protocol.as_str())
+            .bind(&endpoint_url)
+            .bind(&request.operator.operator_id)
+            .bind(&request.operator.operator_name)
+            .bind(&request.operator.support_email)
+            .bind(&request.operator.terms_url)
+            .bind(next_version)
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            return self.get(context, extension_id).await;
         }
 
         let extension_id = sqlx::query_scalar::<_, Uuid>(

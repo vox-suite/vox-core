@@ -481,6 +481,71 @@ async fn quarantine_and_removal_preserve_historical_evidence() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
+async fn reinstalling_a_removed_extension_revives_it_as_a_new_version() {
+    let db = setup().await;
+    let (_, context, _, _) = host(&db, "user-reinstall").await;
+    let service = RemoteExtensionService::new(db.clone());
+
+    let request = || InstallExtensionRequest {
+        external_key: "amazon".into(),
+        display_name: "Amazon".into(),
+        protocol: ExtensionProtocol::Mcp,
+        endpoint_url: "https://mcp.amazon.example.com/v1".into(),
+        operator: ExtensionOperator {
+            operator_id: "amazon".into(),
+            operator_name: "Amazon.com, Inc.".into(),
+            support_email: None,
+            terms_url: None,
+        },
+        capabilities: vec![ExtensionCapability {
+            external_key: "search_catalog".into(),
+            display_name: "Search products".into(),
+            effect: ExtensionEffect::Read,
+            consequential: false,
+            data_recipients: vec![],
+            access_needs: vec![],
+            optional_guarantees: json!({}),
+        }],
+    };
+
+    let first = service.install(&context, request()).await.unwrap();
+
+    // A live extension still conflicts.
+    assert!(matches!(
+        service.install(&context, request()).await,
+        Err(RemoteExtensionError::Conflict)
+    ));
+
+    service.remove(&context, first.id).await.unwrap();
+
+    // Reinstalling after removal reuses the row instead of failing on the unique key.
+    let again = service.install(&context, request()).await.unwrap();
+    assert_eq!(again.id, first.id);
+    assert_eq!(again.current_version, 2);
+    assert_eq!(again.lifecycle_state, LifecycleState::Installed);
+    assert_eq!(again.conformance_status, ConformanceStatus::Pending);
+    assert_eq!(again.consent_status, ConsentStatus::Consented);
+    assert!(!again.operator_enabled);
+
+    // Version history from the first install is preserved.
+    let versions = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM remote_extension_versions WHERE extension_id = $1",
+    )
+    .bind(first.id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(versions, 2);
+
+    // Once revived it is live again, so a further install conflicts.
+    assert!(matches!(
+        service.install(&context, request()).await,
+        Err(RemoteExtensionError::Conflict)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
 async fn rejects_invalid_urls_and_local_code_uploads() {
     let db = setup().await;
     let (_, context, _, _) = host(&db, "user-malicious").await;
