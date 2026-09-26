@@ -25,7 +25,7 @@ use crate::{router::build_api_router, state::ApiState};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _traces = vox_core::telemetry::init("vox-core-api");
     let config = Config::from_env().expect("Vox Core configuration is invalid");
 
     let db = Db::connect(&config.database_url)

@@ -10,7 +10,7 @@ use vox_core::config::Config;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _traces = vox_core::telemetry::init("vox-core-worker");
     let config = Config::from_env().expect("Vox Core worker configuration is invalid");
 
     let cancellation = CancellationToken::new();

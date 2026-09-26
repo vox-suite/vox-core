@@ -75,3 +75,79 @@ fn detects_purchase_requests_for_shopping_route() {
     assert!(!mentions_shopping("What's the weather in Chennai?"));
     assert!(!mentions_shopping("Remind me to call mom"));
 }
+
+#[tokio::test]
+async fn traced_reply_records_what_was_said_and_marks_failures() {
+    use super::{AgentError, ConversationPrompt, traced_reply, turn_span};
+    use crate::identity::{ResourceOwner, UserContextId, UserId};
+    use futures_util::StreamExt;
+    use opentelemetry::trace::{Status, TracerProvider as _};
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use tracing_subscriber::layer::SubscriberExt;
+    use uuid::Uuid;
+
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test"))),
+    );
+    let user_id = UserId(Uuid::new_v4());
+    let prompt = ConversationPrompt {
+        user_id,
+        owner: ResourceOwner {
+            user_context_id: UserContextId(Uuid::new_v4()),
+            user_id,
+        },
+        channel: "voice".into(),
+        user_context: String::new(),
+        recent_messages: Vec::new(),
+        user_text: "Order me a charger".into(),
+        initiation_context: None,
+        needs_onboarding: false,
+        tts_provider: None,
+        filler: None,
+        conversation_id: Some(Uuid::nil()),
+    };
+
+    let chunks = futures_util::stream::iter([
+        Ok("Sure, ".to_string()),
+        Ok("ordering it.".to_string()),
+        Err(AgentError::Provider),
+    ]);
+    let reply: Vec<_> = traced_reply(chunks, turn_span(&prompt), true)
+        .collect()
+        .await;
+    assert_eq!(reply.len(), 3);
+
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let turn = spans
+        .iter()
+        .find(|span| span.name == "conversation_turn")
+        .expect("turn span");
+    let attribute = |key: &str| {
+        turn.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .map(|kv| kv.value.as_str().to_string())
+    };
+    assert_eq!(
+        attribute("langfuse.observation.output").as_deref(),
+        Some("Sure, ordering it.")
+    );
+    assert_eq!(
+        attribute("session.id").as_deref(),
+        Some("00000000-0000-0000-0000-000000000000")
+    );
+    assert_eq!(
+        attribute("langfuse.observation.type").as_deref(),
+        Some("agent")
+    );
+    assert_eq!(
+        attribute("langfuse.trace.tags").as_deref(),
+        Some(r#"["voice"]"#)
+    );
+    assert!(matches!(turn.status, Status::Error { .. }));
+}

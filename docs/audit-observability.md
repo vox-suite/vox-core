@@ -22,3 +22,22 @@ in Core's database or audit records.
 the Redis admin routes), returns `Cache-Control: no-store`, and records every
 successful read as `audit.accessed`. Audit events are privileged operational
 evidence, not a user-facing task-history interface.
+
+## Agent traces (Langfuse)
+
+Setting `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` exports agent traces to
+Langfuse over OTLP (`LANGFUSE_BASE_URL`, EU cloud by default). Each conversation
+turn is one trace whose root `agent` observation is named after the agent that
+ran (`shopping-agent`, `maps-agent`, ...), tagged with its channel, and grouped
+into a Langfuse session per conversation. Every LLM call (model, tokens,
+latency) and tool call (named after the tool, with its outcome) nests under it.
+The background agents (`summarizer-agent`, `sms-extractor-agent`,
+`event-planner-agent`, `task-executor-agent`) produce their own traces.
+`LANGFUSE_TRACING_ENVIRONMENT` and `LANGFUSE_RELEASE` set the Langfuse
+environment and release on every trace.
+
+Only agent spans are exported, never log events. By default the spans carry no
+conversation text. `LANGFUSE_RECORD_CONTENT=true` adds prompts, replies, and
+tool arguments/results, which include callers' personal details and make
+Langfuse a disclosed sink for conversation text; agent spans are kept out of
+console logs so that text reaches Langfuse only.

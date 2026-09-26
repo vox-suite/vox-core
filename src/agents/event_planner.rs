@@ -51,6 +51,8 @@ impl EventPlanning for GeminiEventPlanner {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
+            .name("event-planner-agent")
+            .record_content_telemetry(crate::telemetry::record_content())
             .preamble("You plan actions for Vox. Assess the event using current tools when needed. Return only JSON with version 1 and an actions array. The only allowed action kind is outbound_call with reason and opening_instruction. Return an empty actions array when no action is useful.")
             .tool(super::tools::web_search::WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
             .tool(super::tools::google_maps::SearchPlaces::new(self.http.clone(), self.google_maps_api_key.clone()))

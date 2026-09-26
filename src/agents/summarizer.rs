@@ -36,6 +36,8 @@ impl Summarizing for GeminiSummarizer {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
+            .name("summarizer-agent")
+            .record_content_telemetry(crate::telemetry::record_content())
             .preamble(
                 "You are an expert conversation summarizer for Vox. Analyze the provided conversation \
                  and output ONLY a valid JSON object with the following schema:\n\
