@@ -49,8 +49,26 @@ impl ShoppingContext {
     /// purchase now stands for the next turn.
     fn finish(&self, tool: &str, result: Result<Value, ShopperError>) -> Value {
         let value = outcome(tool, result);
-        if let Some(note) = state_note(tool, &value) {
-            self.sessions.set_note(self.user_id.0, note);
+        let user_id = self.user_id.0;
+        // Only browsing that really changed the page abandons a prepared
+        // checkout; a restart the helper refused leaves it in place.
+        if matches!(
+            tool,
+            "amazon_search" | "amazon_open_product" | "amazon_select_options"
+        ) && matches!(response_status(&value), "ok" | "partial" | "not_found")
+        {
+            self.sessions.touch(user_id);
+        } else {
+            self.sessions.keep_alive(user_id);
+        }
+        // The helper's own account of the browser is the source of truth.
+        let note = value
+            .get("where")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| state_note(tool, &value));
+        if let Some(note) = note {
+            self.sessions.set_note(user_id, note);
         }
         value
     }
@@ -152,7 +170,6 @@ impl Tool for AmazonSearch {
         args: Self::Args,
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, query = %args.query, "Tool called");
-        self.0.sessions.touch(self.0.user_id.0);
         Ok(self
             .0
             .finish(Self::NAME, self.0.client.search(args.query.trim()).await))
@@ -202,7 +219,6 @@ impl Tool for AmazonOpenProduct {
         args: Self::Args,
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, asin = %args.asin, "Tool called");
-        self.0.sessions.touch(self.0.user_id.0);
         Ok(self.0.finish(
             Self::NAME,
             self.0.client.open_product(args.asin.trim()).await,
@@ -257,7 +273,6 @@ impl Tool for AmazonSelectOptions {
         args: Self::Args,
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, options = ?args.options, "Tool called");
-        self.0.sessions.touch(self.0.user_id.0);
         Ok(self.0.finish(
             Self::NAME,
             self.0.client.select_options(&args.options).await,
@@ -310,7 +325,6 @@ impl Tool for AmazonCheckout {
         let quantity = args.quantity.unwrap_or(1).clamp(1, 10);
         tracing::info!(tool = Self::NAME, quantity, "Tool called");
         let user_id = self.0.user_id.0;
-        self.0.sessions.touch(user_id);
         let result = self
             .0
             .finish(Self::NAME, self.0.client.checkout(quantity).await);
@@ -388,9 +402,6 @@ impl Tool for AmazonPlaceOrder {
         }
 
         let result = self.0.finish(Self::NAME, self.0.client.place_order().await);
-        if matches!(response_status(&result), "placed" | "dry_run") {
-            self.0.sessions.end(user_id);
-        }
         if let Some(db) = &self.0.db {
             audit_order(db, user_id, result.clone()).await;
         }

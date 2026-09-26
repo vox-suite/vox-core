@@ -17,7 +17,8 @@ export function openContext(): Promise<BrowserContext> {
       // removes the "unsupported command-line flag: --no-sandbox" bar.
       chromiumSandbox: true,
       viewport: null,
-      args: ['--start-maximized'],
+      // No "Restore pages?" bubble if Chrome was stopped abruptly last time.
+      args: ['--start-maximized', '--hide-crash-restore-bubble'],
     })
     .then(async (ctx) => {
       // tsx (esbuild keepNames) wraps named functions in `__name(...)`; functions
@@ -33,6 +34,12 @@ export function openContext(): Promise<BrowserContext> {
       throw err;
     });
   return context;
+}
+
+/** Closes Chrome cleanly, so it doesn't report a crash on the next start. */
+export async function closeContext(): Promise<void> {
+  const ctx = await context?.catch(() => undefined);
+  await ctx?.close().catch(() => {});
 }
 
 /** The single working tab every step drives. */

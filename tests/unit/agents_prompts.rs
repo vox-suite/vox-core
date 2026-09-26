@@ -84,6 +84,8 @@ fn shopping_instructions_require_explicit_confirmation() {
         "needs_human",
         "cod_unavailable",
         "in_progress",
+        "Shopping state",
+        "never start over",
     ] {
         assert!(SHOPPING_INSTRUCTIONS.contains(requirement));
     }

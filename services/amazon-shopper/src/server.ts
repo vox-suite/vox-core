@@ -4,7 +4,7 @@
  */
 import express, { type Request, type Response } from 'express';
 import * as amazon from './amazon.js';
-import { getPage } from './browser.js';
+import { closeContext, getPage } from './browser.js';
 import { config } from './config.js';
 
 if (!config.token) {
@@ -55,6 +55,14 @@ let background: { name: string; key: string } | null = null;
 /** The result of that step once it finished, for the caller's next identical call. */
 let finished: { name: string; key: string; result: amazon.Result; at: number } | null = null;
 
+/** Adds `where` (see amazon.describe) so the agent always knows where the purchase stands. */
+async function send(res: Response, result: amazon.Result, step: string, status = 200): Promise<void> {
+  const where = await amazon
+    .describe(background ? (TOOL_NAMES[background.name] ?? background.name) : null, TOOL_NAMES[step] ?? null)
+    .catch(() => null);
+  res.status(status).json(where ? { ...result, where } : result);
+}
+
 function handle(
   name: string,
   step: (body: Record<string, unknown>) => Promise<amazon.Result>,
@@ -76,14 +84,14 @@ function handle(
               message: `Amazon is still finishing the previous step. Do not start over. Tell the user to hold on, then call ${TOOL_NAMES[background.name]} again after their next message.`,
             };
       console.log(`${name} -> ${result.status} (${background.name} still running in the background)`);
-      res.json(result);
+      await send(res, result, name);
       return;
     }
     if (finished?.name === name && finished.key === key && Date.now() - finished.at < FINISHED_RESULT_TTL_MS) {
       const result = finished.result;
       finished = null;
       console.log(`${name} -> ${result.status} (finished earlier in the background)`);
-      res.json(result);
+      await send(res, result, name);
       return;
     }
     finished = null;
@@ -119,12 +127,12 @@ function handle(
             background = null;
           });
       }
-      if (!abandoned) res.json(result);
+      if (!abandoned) await send(res, result, name);
     } catch (err) {
       // Playwright errors carry a multi-line call log; the first line is enough to speak.
       const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
       console.error(`${name} failed (${Date.now() - started} ms)`, err);
-      if (!abandoned) res.status(500).json({ status: 'error', message });
+      if (!abandoned) await send(res, { status: 'error', message }, name, 500);
     } finally {
       clearTimeout(timer);
     }
@@ -157,7 +165,12 @@ app.post('/place', handle('place', () => amazon.placeOrder(), PLACE_RESPONSE_BUD
 // Playwright's own signal handlers close Chrome but leave the process (and
 // port) alive; exit explicitly so Ctrl+C really stops the helper.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => process.exit(0));
+  process.once(signal, () => {
+    // Close Chrome cleanly (it otherwise shows "Restore pages?" next time),
+    // but never hang on the way out.
+    setTimeout(() => process.exit(0), 3_000).unref();
+    void closeContext().finally(() => process.exit(0));
+  });
 }
 
 // Open the browser up front so the first call doesn't pay Chrome's startup.

@@ -97,3 +97,19 @@ fn note_survives_browsing_and_checkout_until_the_session_ends() {
     sessions.end(user);
     assert_eq!(sessions.note(user), None);
 }
+
+#[test]
+fn reconfirming_checkout_keeps_the_earlier_turn() {
+    // Checkout ready in turn 1; the agent re-checks it in turn 2 (e.g. after a
+    // blocked restart) and the user's "yes" in turn 2 must still count.
+    let sessions = ShopperSessions::new();
+    let user = Uuid::new_v4();
+    let (turn1, turn2) = (Uuid::new_v4(), Uuid::new_v4());
+    sessions.record_checkout(user, turn1);
+    sessions.keep_alive(user);
+    sessions.record_checkout(user, turn2);
+    assert_eq!(
+        sessions.authorize_place(user, turn2),
+        PlaceDecision::Allowed
+    );
+}

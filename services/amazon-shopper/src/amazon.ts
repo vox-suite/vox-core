@@ -28,27 +28,92 @@ type Checkout = {
   payment: string | null;
 };
 
-type Step = 'idle' | 'product_open' | 'checkout_ready' | 'placed';
-const state: { step: Step; total: string | null; restartWarned: boolean } = {
-  step: 'idle',
-  total: null,
-  restartWarned: false,
-};
+type Step = 'idle' | 'results' | 'product_open' | 'checkout_ready' | 'placed';
 
 /**
- * The agent only remembers what was said, not tool results, so on the next
- * turn it may start over with a search even though checkout is ready. Warn it
- * once instead of navigating away; a second attempt in a row is taken as a
- * real request for a different product.
+ * What the browser is doing. The agent only remembers what was said, not tool
+ * results, so every answer carries `describe()` of this state and the agent
+ * continues from it instead of starting over.
  */
-function checkoutAlreadyReady(): Result | null {
-  if (state.step !== 'checkout_ready' || state.restartWarned) return null;
+const state = {
+  step: 'idle' as Step,
+  total: null as string | null,
+  restartWarned: false,
+  query: null as string | null,
+  results: [] as { asin: string; title: string; price: string | null }[],
+  /** The ASIN the agent opened; choosing a colour can switch the page to a sibling ASIN. */
+  openedAsin: null as string | null,
+  product: null as ReturnType<typeof publicProduct> | null,
+  checkout: null as Checkout | null,
+  order: null as { id: string | null; total: string | null } | null,
+  blocker: null as string | null,
+  /** A finished outcome to report instead of the step, e.g. cash on delivery unavailable. */
+  notice: null as string | null,
+};
+
+const productName = () => state.product?.title.slice(0, 80) ?? 'the product';
+
+function describeState(): string {
+  if (state.notice) return state.notice;
+  const p = state.product;
+  switch (state.step) {
+    case 'placed':
+      return `Order placed for ${productName()}: order ID ${state.order?.id ?? '(see Your Orders)'}, total ${state.order?.total ?? state.total}. It is done; do not place it again.`;
+    case 'checkout_ready':
+      return `Checkout is ready for ${productName()}: total ${state.checkout?.total ?? state.total}, Pay on Delivery${state.checkout?.delivery ? `, ${state.checkout.delivery}` : ''}. Read the total to the user and ask them to confirm; when they say yes, call amazon_place_order.`;
+    case 'product_open': {
+      const options = (p?.variants ?? [])
+        .map((v) => {
+          const chosen = v.options.find((o) => o.selected)?.label ?? 'not chosen';
+          if (v.options.length < 2) return `${v.dimension}: ${chosen} (only option)`;
+          const choices = v.options.filter((o) => o.available).map((o) => o.label);
+          return `${v.dimension}: ${chosen} (choices: ${choices.join(', ')})`;
+        })
+        .join('; ');
+      return `Product page open: ${productName()} (ASIN ${p?.asin}) at ${p?.price ?? 'unknown price'}.${options ? ` ${options}.` : ''} Next: ask the user about any option with more than one choice (amazon_select_options), then call amazon_checkout when they want to buy.`;
+    }
+    case 'results':
+      return `Search results for "${state.query}", none opened yet: ${state.results
+        .map((r, i) => `${i + 1}) ${r.title.slice(0, 60).replace(/[\s,;:-]+$/, '')}, ${r.price ?? 'no price'} [ASIN ${r.asin}]`)
+        .join('; ')}. Open the one the user wants with amazon_open_product and its ASIN.`;
+    default:
+      return 'Nothing is in progress in the browser.';
+  }
+}
+
+/**
+ * Where the purchase stands, sent with every answer. `running` is a tool still
+ * finishing in the background; `retry` is the tool to repeat after the user
+ * finishes a verification page.
+ */
+export async function describe(running: string | null, retry: string | null): Promise<string> {
+  if (running === 'amazon_checkout')
+    return `Checkout is loading in the browser for ${productName()}. On the user's next message call amazon_checkout again; do not search again.`;
+  if (running) return `${running} is still running in the browser; on the user's next message call it again instead of starting over.`;
+  if (state.blocker)
+    return `Amazon is showing a ${state.blocker.replace('_', ' ')} page in the browser that the user must finish by hand. When they say it's done, call ${retry ?? 'the same tool'} again.`;
+  if (state.step === 'idle' && !state.notice && onCheckoutPage(await getPage()))
+    return 'A checkout page is open in the browser; call amazon_checkout to continue it.';
+  return describeState();
+}
+
+/**
+ * Stops accidental backwards steps: searching again for what is already open,
+ * or browsing away from a prepared checkout, returns where things stand
+ * instead. Warned once; a second attempt in a row is a real change of course.
+ */
+function alreadyFurther(step: 'search' | 'product' | 'select', arg = ''): Result | null {
+  if (state.restartWarned) return null;
+  const sameSearch = step === 'search' && norm(arg) !== '' && norm(arg) === norm(state.query ?? '');
+  const leavesCheckout = state.step === 'checkout_ready';
+  const repeatsSearch = state.step === 'product_open' && sameSearch;
+  if (!leavesCheckout && !repeatsSearch) return null;
   state.restartWarned = true;
-  log('restart blocked: checkout is already ready');
+  log(`restart blocked: ${step} while ${state.step}`);
   return {
-    status: 'checkout_ready',
+    status: leavesCheckout ? 'checkout_ready' : 'already_open',
     total: state.total,
-    message: `A checkout is already prepared and waiting (total ${state.total}, Pay on Delivery). Do not start over: call amazon_checkout now (it returns at once), read the total to the user and ask them to confirm. Only if the user asked for a different product, call this tool again.`,
+    message: `Already further along: ${describeState()} Continue from there. Only if the user asked for something different, call this tool again.`,
   };
 }
 
@@ -96,6 +161,7 @@ async function blocker(page: Page): Promise<Result | null> {
   else if (/\/ap\/(mfa|cvf)/.test(url)) reason = 'verification';
   else if ((await page.locator('form[action*="validateCaptcha"], #captchacharacters').count()) > 0)
     reason = 'captcha';
+  state.blocker = reason;
   return reason ? { status: 'needs_human', reason, message: BLOCKER_MESSAGES[reason] } : null;
 }
 
@@ -146,9 +212,12 @@ function publicProduct(p: Product) {
 function readProduct(page: Page): Promise<Product> {
   return page.evaluate(() => {
     const clean = (s?: string | null) => (s ?? '').replace(/\s+/g, ' ').trim();
+    // Visible text only: some labels contain hidden <style> blocks whose CSS
+    // would otherwise end up in what the agent says.
+    const textOf = (el?: Element | null) => (el ? ((el as HTMLElement).innerText ?? el.textContent) : '');
     const first = (selectors: string[]) => {
       for (const s of selectors) {
-        const t = clean(document.querySelector(s)?.textContent);
+        const t = clean(textOf(document.querySelector(s)));
         if (t) return t;
       }
       return '';
@@ -182,16 +251,16 @@ function readProduct(page: Page): Promise<Product> {
         const heading = row.querySelector(
           '[id^="inline-twister-dim-title-"] .a-color-secondary, [id^="inline-twister-dim-title-"] span, .a-form-label',
         );
-        const dimension = clean(heading?.textContent).split(':')[0].trim() || humanize(key);
+        const dimension = clean(textOf(heading)).split(':')[0].trim() || humanize(key);
         const options = [...row.querySelectorAll('li')]
           .map((li, o) => {
             const label =
               clean(li.querySelector('img')?.getAttribute('alt')) ||
               clean(li.getAttribute('title')?.replace(/^Click to select\s*/i, '')) ||
               clean(
-                li.querySelector('.swatch-title-text-display, .swatch-title-text, .a-button-text')?.textContent,
+                textOf(li.querySelector('.swatch-title-text-display, .swatch-title-text, .a-button-text')),
               ).split(' ₹')[0] ||
-              clean(li.textContent).split(' ₹')[0];
+              clean(textOf(li)).split(' ₹')[0];
             const classes = `${li.className} ${li.querySelector('.a-button')?.className ?? ''}`;
             const ref = `${d}-${o}`;
             li.setAttribute('data-vox-option', ref);
@@ -204,7 +273,8 @@ function readProduct(page: Page): Promise<Product> {
               ref,
             };
           })
-          .filter((o) => o.label);
+          // Carousel controls (arrows, page numbers) sit in the same list.
+          .filter((o) => o.label && !/^[\d\s←→‹›<>«»]+$/.test(o.label));
         return { dimension, key, options };
       })
       .filter((v) => v.options.length > 1);
@@ -212,9 +282,9 @@ function readProduct(page: Page): Promise<Product> {
     // Dimensions with a single value (e.g. this listing only comes in 128 GB).
     for (const header of document.querySelectorAll('[id^="inline-twister-singleton-header-"]')) {
       const key = header.id.replace(/^inline-twister-singleton-header-/, '');
-      const label = clean(document.getElementById(`inline-twister-expanded-dimension-text-${key}`)?.textContent);
+      const label = clean(textOf(document.getElementById(`inline-twister-expanded-dimension-text-${key}`)));
       if (!label || variants.some((v) => v.key === key)) continue;
-      const dimension = clean(header.querySelector('.a-color-secondary')?.textContent).split(':')[0].trim() || humanize(key);
+      const dimension = clean(textOf(header.querySelector('.a-color-secondary'))).split(':')[0].trim() || humanize(key);
       variants.push({ dimension, key, options: [{ label, selected: true, available: true, ref: '' }] });
     }
 
@@ -345,8 +415,8 @@ function readResults(page: Page) {
 
 export async function search(query: string): Promise<Result> {
   if (!query.trim()) return { status: 'error', message: 'query is required' };
-  const ready = checkoutAlreadyReady();
-  if (ready) return ready;
+  const further = alreadyFurther('search', query);
+  if (further) return further;
   const page = await getPage();
   await page.goto(`${config.baseUrl}/s?k=${encodeURIComponent(query.trim())}`, { waitUntil: 'commit' });
   // Right after `commit` the old page can still be unloading, which makes the
@@ -373,8 +443,18 @@ export async function search(query: string): Promise<Result> {
     await page.waitForTimeout(400);
   } while (Date.now() < until);
 
-  state.step = 'idle';
-  state.total = null;
+  Object.assign(state, {
+    step: results.length ? 'results' : 'idle',
+    total: null,
+    restartWarned: false,
+    query,
+    results: results.map(({ asin, title, price }) => ({ asin, title, price })),
+    openedAsin: null,
+    product: null,
+    checkout: null,
+    order: null,
+    notice: null,
+  });
   if (results.length === 0) return { status: 'not_found', message: `No results for "${query}".` };
   return { status: 'ok', query, results };
 }
@@ -382,10 +462,21 @@ export async function search(query: string): Promise<Result> {
 export async function openProduct(asin: string): Promise<Result> {
   if (!/^[A-Z0-9]{10}$/i.test(asin.trim()))
     return { status: 'error', message: 'asin must be a 10-character Amazon ASIN' };
-  const ready = checkoutAlreadyReady();
-  if (ready) return ready;
+  const wanted = asin.trim().toUpperCase();
+  const further = alreadyFurther('product', wanted);
+  if (further) return further;
   const page = await getPage();
-  await page.goto(`${config.baseUrl}/dp/${asin.trim().toUpperCase()}`, { waitUntil: 'commit' });
+  // Already open (possibly as the sibling ASIN of a chosen colour): don't
+  // reload and lose the selection, just report it.
+  if (state.step === 'product_open' && (wanted === state.openedAsin || wanted === state.product?.asin)) {
+    const current = await readProduct(page).catch(() => null);
+    if (current?.title) {
+      state.product = publicProduct(current);
+      log('product: already open, not reloading');
+      return { status: 'ok', ...state.product };
+    }
+  }
+  await page.goto(`${config.baseUrl}/dp/${wanted}`, { waitUntil: 'commit' });
   await page.locator('#productTitle').waitFor().catch(() => {});
   const blocked = await blocker(page);
   if (blocked) return blocked;
@@ -405,9 +496,17 @@ export async function openProduct(asin: string): Promise<Result> {
 
   const product = await readProduct(page);
   if (!product.title) return { status: 'not_found', message: 'Could not read that product page.' };
-  state.step = 'product_open';
-  state.total = null;
-  return { status: 'ok', ...publicProduct(product) };
+  Object.assign(state, {
+    step: 'product_open',
+    total: null,
+    restartWarned: false,
+    openedAsin: wanted,
+    product: publicProduct(product),
+    checkout: null,
+    order: null,
+    notice: null,
+  });
+  return { status: 'ok', ...state.product };
 }
 
 async function waitForSelected(page: Page, dimension: string, label: string): Promise<void> {
@@ -421,8 +520,8 @@ async function waitForSelected(page: Page, dimension: string, label: string): Pr
 }
 
 export async function selectOptions(wanted: Record<string, string>): Promise<Result> {
-  const ready = checkoutAlreadyReady();
-  if (ready) return ready;
+  const further = alreadyFurther('select');
+  if (further) return further;
   if (state.step !== 'product_open')
     return { status: 'invalid_state', message: 'Open a product first with amazon_open_product.' };
   const page = await getPage();
@@ -453,6 +552,8 @@ export async function selectOptions(wanted: Record<string, string>): Promise<Res
   if (blocked) return blocked;
   const product = await readProduct(page);
   state.total = null;
+  state.restartWarned = false;
+  state.product = publicProduct(product);
   return {
     status: unmatched.length ? 'partial' : 'ok',
     applied,
@@ -464,6 +565,8 @@ export async function selectOptions(wanted: Record<string, string>): Promise<Res
 async function codUnavailable(page: Page): Promise<Result> {
   const { total } = await readCheckout(page).catch(() => ({ total: null }));
   state.step = 'idle';
+  state.checkout = null;
+  state.notice = `Amazon doesn't offer Cash/Pay on Delivery for ${productName()}${total ? ` (total ${total})` : ''}, so it can't be ordered this way. Offer the user a different product.`;
   return {
     status: 'cod_unavailable',
     total,
@@ -482,7 +585,9 @@ export async function checkout(quantity = 1): Promise<Result> {
   const page = await getPage();
   if (state.step === 'checkout_ready' && onCheckoutPage(page) && (await visible(placeButton(page)))) {
     state.restartWarned = false;
-    return { status: 'ok', ...(await readCheckout(page)), payment: 'Pay on Delivery' };
+    state.notice = null;
+    state.checkout = { ...(await readCheckout(page)), payment: 'Pay on Delivery' };
+    return { status: 'ok', ...state.checkout };
   }
 
   if (onCheckoutPage(page) && state.step !== 'placed') {
@@ -508,11 +613,22 @@ export async function checkout(quantity = 1): Promise<Result> {
   let codAttempts = 0;
   let openedPaymentPicker = false;
   let lastPath = '';
+  let lastProgress = Date.now();
+  let stallReported = false;
+  const progress = (message: string) => {
+    log(message);
+    lastProgress = Date.now();
+  };
   const deadline = Date.now() + CHECKOUT_BUDGET_MS;
   while (Date.now() < deadline) {
     await settle(page, 500);
     const path = new URL(page.url()).pathname;
-    if (path !== lastPath) log(`checkout: on ${(lastPath = path)}`);
+    if (path !== lastPath) progress(`checkout: on ${(lastPath = path)}`);
+    // An Amazon page this loop doesn't know yet: say what it offers, once.
+    if (!stallReported && Date.now() - lastProgress > 6_000) {
+      stallReported = true;
+      log(`checkout: no progress on ${path} for 6 s; the page offers: ${(await pageActions(page)).join(' | ')}`);
+    }
     const blocked = await blocker(page);
     if (blocked) return blocked;
 
@@ -525,7 +641,7 @@ export async function checkout(quantity = 1): Promise<Result> {
 
     // Protection-plan and Prime upsells.
     if (await declineUpsell(page)) {
-      log('checkout: declined an upsell (No Thanks)');
+      progress('checkout: declined an upsell (No Thanks)');
       continue;
     }
     // Older flow: confirm the (default) delivery address.
@@ -536,7 +652,7 @@ export async function checkout(quantity = 1): Promise<Result> {
           .or(page.getByRole('button', { name: /deliver to this address|use this address/i })),
       )
     ) {
-      log('checkout: confirmed the default address');
+      progress('checkout: confirmed the default address');
       continue;
     }
 
@@ -550,12 +666,12 @@ export async function checkout(quantity = 1): Promise<Result> {
         if (++codAttempts > 3)
           return { status: 'error', message: "Couldn't select Pay on Delivery. Check the browser window." };
         await cod.check({ force: true }).catch(() => cod.click({ force: true }));
-        log('checkout: selected Pay on Delivery');
+        progress('checkout: selected Pay on Delivery');
         acted = true;
       }
       codSelected = true;
       if (await clickIfVisible(usePaymentMethod(page), acted ? 3_000 : 0)) {
-        log('checkout: clicked "Use this payment method"');
+        progress('checkout: clicked "Use this payment method"');
         acted = true;
       }
       if (acted) continue;
@@ -568,7 +684,7 @@ export async function checkout(quantity = 1): Promise<Result> {
         // Another default payment is selected: open the payment picker once.
         if (!codSelected && !openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
           openedPaymentPicker = true;
-          log('checkout: opened the payment picker (another method was selected)');
+          progress('checkout: opened the payment picker (another method was selected)');
           continue;
         }
         log(`checkout: payment shows "${summary.payment}", not Pay on Delivery`);
@@ -578,7 +694,9 @@ export async function checkout(quantity = 1): Promise<Result> {
       state.step = 'checkout_ready';
       state.total = summary.total;
       state.restartWarned = false;
-      return { status: 'ok', ...summary, payment: 'Pay on Delivery' };
+      state.notice = null;
+      state.checkout = { ...summary, payment: 'Pay on Delivery' };
+      return { status: 'ok', ...state.checkout };
     }
 
     // Payment collapsed behind a "Change" link, with no radios or Place button yet.
@@ -586,16 +704,31 @@ export async function checkout(quantity = 1): Promise<Result> {
     // their own "Change" links that lead back to the payment page.
     if (!codSelected && !openedPaymentPicker && (await clickIfVisible(changePayment(page)))) {
       openedPaymentPicker = true;
-      log('checkout: opened the payment picker');
+      progress('checkout: opened the payment picker');
       continue;
     }
     if (openedPaymentPicker && !codSelected && !(await visible(cod))) {
       const radios = await page.getByRole('radio').count();
       if (radios > 0) return codUnavailable(page);
     }
+    // Unknown interstitial with a plain forward button (never "Place your
+    // order", which is only clicked by placeOrder).
+    if (await clickIfVisible(page.getByRole('button', { name: /^\s*continue\s*$/i }))) {
+      progress('checkout: clicked Continue');
+      continue;
+    }
   }
   log('checkout: gave up; call GET /debug to see what the page shows');
   return { status: 'error', message: 'Checkout took too long. Check the browser window.' };
+}
+
+/** Names of the buttons, links and radios a person would see, for stall reports. */
+async function pageActions(page: Page): Promise<string[]> {
+  const aria = await page
+    .locator('body')
+    .ariaSnapshot({ timeout: 2_000 })
+    .catch(() => '');
+  return [...aria.matchAll(/(button|link|radio) "([^"]{1,60})"/g)].map((m) => `${m[1]}: ${m[2]}`).slice(0, 25);
 }
 
 /** What the browser currently shows, for diagnosing a stuck step. Read-only. */
@@ -650,6 +783,20 @@ export async function debug(): Promise<Result> {
 }
 
 export async function placeOrder(): Promise<Result> {
+  // Asked again after clicking: same answer, never a second order.
+  if (state.step === 'placed')
+    return state.order
+      ? {
+          status: 'placed',
+          order_id: state.order.id,
+          total: state.order.total,
+          message: 'This order was already placed; it was not ordered again.',
+        }
+      : {
+          status: 'unknown',
+          total: state.total,
+          message: "Place your order was already clicked but Amazon's confirmation wasn't seen. Check Your Orders; it was not clicked again.",
+        };
   if (state.step !== 'checkout_ready')
     return { status: 'invalid_state', message: 'No checkout is ready. Run checkout first.' };
   const page = await getPage();
@@ -664,6 +811,7 @@ export async function placeOrder(): Promise<Result> {
   const { total } = await readCheckout(page);
   if (state.total && total && total !== state.total) {
     state.step = 'idle';
+    state.notice = `The total changed from ${state.total} to ${total}. Tell the user the new total, and if they still want it call amazon_checkout again.`;
     return {
       status: 'price_changed',
       previous_total: state.total,
@@ -680,7 +828,20 @@ export async function placeOrder(): Promise<Result> {
         (el as HTMLElement).style.outlineOffset = '4px';
       })
       .catch(() => {});
-    state.step = 'idle';
+    // Make a deliberate stop impossible to mistake for a hang.
+    await page
+      .evaluate(() => {
+        if (document.getElementById('vox-dry-run')) return;
+        const banner = document.createElement('div');
+        banner.id = 'vox-dry-run';
+        banner.textContent = 'Vox demo (dry run): stopped before "Place your order". No order was placed.';
+        banner.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:14px;text-align:center;font:600 18px system-ui;background:#e11d48;color:#fff';
+        document.body.prepend(banner);
+      })
+      .catch(() => {});
+    // Stay on the prepared checkout, so asking again gives the same answer.
+    state.notice = `Demo run: the order for ${productName()} (total ${total}) was prepared but not placed.`;
     return { status: 'dry_run', total, message: 'Dry run: stopped before clicking Place your order.' };
   }
 
@@ -708,6 +869,7 @@ export async function placeOrder(): Promise<Result> {
   // Only Amazon's own confirmation counts; never report "placed" on a guess.
   if (!confirmation.confirmed) {
     log(`place: no confirmation page (still on ${new URL(page.url()).pathname})`);
+    state.notice = `Place your order was clicked for ${productName()} but Amazon's confirmation wasn't seen. Ask the user to check Your Orders; do not place it again.`;
     return {
       status: 'unknown',
       total,
@@ -715,6 +877,7 @@ export async function placeOrder(): Promise<Result> {
     };
   }
   log(`place: confirmed on ${new URL(page.url()).pathname}, order ${confirmation.orderId ?? '(id not shown)'}`);
+  state.order = { id: confirmation.orderId, total };
   return { status: 'placed', order_id: confirmation.orderId, total };
 }
 

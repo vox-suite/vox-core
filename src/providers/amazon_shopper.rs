@@ -181,8 +181,18 @@ impl ShopperSessions {
         self.update(user_id, |session| session.checkout_turn = None);
     }
 
+    /// Marks checkout as prepared in `turn`. If it was already prepared in an
+    /// earlier turn (and not browsed away from since), that earlier turn is
+    /// kept: the caller has heard the total already.
     pub fn record_checkout(&self, user_id: Uuid, turn: Uuid) {
-        self.update(user_id, |session| session.checkout_turn = Some(turn));
+        self.update(user_id, |session| {
+            session.checkout_turn.get_or_insert(turn);
+        });
+    }
+
+    /// Keeps the session alive without changing where the purchase stands.
+    pub fn keep_alive(&self, user_id: Uuid) {
+        self.update(user_id, |_| {});
     }
 
     pub fn set_note(&self, user_id: Uuid, note: impl Into<String>) {
