@@ -96,7 +96,14 @@ impl SpanRepository {
         patch: SpanPatch,
     ) -> Result<ConcurrencyOutcome<Span>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query_as::<_, (i32, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                i32,
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ),
+        >(
             "SELECT version, start_at, end_at FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
         )
         .bind(id)
