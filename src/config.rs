@@ -18,9 +18,6 @@ pub struct Config {
     pub jev_enabled: bool,
     pub tts_provider: String,
     pub status_webhook_key: Option<String>,
-    pub llm_gateway_base_url: Option<String>,
-    pub llm_gateway_api_key: Option<String>,
-    pub llm_gateway_model: Option<String>,
     /// Local Playwright helper for amazon.in shopping; unset disables it.
     pub amazon_shopper_url: Option<String>,
     pub amazon_shopper_token: Option<String>,
@@ -65,12 +62,6 @@ impl Config {
             jev_enabled,
             tts_provider,
             status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
-                .filter(|value| !value.trim().is_empty()),
-            llm_gateway_base_url: get("LLM_GATEWAY_BASE_URL")
-                .filter(|value| !value.trim().is_empty()),
-            llm_gateway_api_key: get("LLM_GATEWAY_API_KEY")
-                .filter(|value| !value.trim().is_empty()),
-            llm_gateway_model: get("LLM_GATEWAY_MODEL")
                 .filter(|value| !value.trim().is_empty()),
             amazon_shopper_url: get("AMAZON_SHOPPER_URL").filter(|value| !value.trim().is_empty()),
             amazon_shopper_token: get("AMAZON_SHOPPER_TOKEN")

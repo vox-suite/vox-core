@@ -7,7 +7,6 @@ pub mod prompts;
 pub mod sms_extractor;
 pub mod summarizer;
 pub mod tools;
-pub mod gateway;
 pub mod utils;
 
 pub use utils::structured_json;

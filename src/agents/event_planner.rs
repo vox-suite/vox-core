@@ -1,19 +1,13 @@
 /**
 * Event planning agent decomposing user intents into structured action plans.
 */
-use super::{AgentError, gateway::LlmGateway, structured_json};
+use super::{AgentError, structured_json};
 use crate::{config::Config, identity::UserId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rig::{
-    client::AgentClientExt,
-    completion::Prompt,
-    providers::{gemini, openai},
-};
+use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-const PREAMBLE: &str = "You plan actions for Vox. Assess the event using current tools when needed. Return only JSON with version 1 and an actions array. The only allowed action kind is outbound_call with reason and opening_instruction. Return an empty actions array when no action is useful.";
 
 #[derive(Clone, Debug)]
 pub struct EventPlanningPrompt {
@@ -32,7 +26,6 @@ pub trait EventPlanning: Send + Sync {
 pub struct GeminiEventPlanner {
     api_key: String,
     model: String,
-    gateway: Option<LlmGateway>,
     http: reqwest::Client,
     exa_api_key: String,
     google_maps_api_key: Option<String>,
@@ -45,56 +38,33 @@ impl GeminiEventPlanner {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
-            gateway: config.llm_gateway(),
             http: dependencies.http,
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
         })
-    }
-
-    async fn plan_with_client<C>(
-        &self,
-        client: &C,
-        model: &str,
-        input: String,
-    ) -> Result<String, AgentError>
-    where
-        C: AgentClientExt,
-        C::CompletionModel: 'static,
-    {
-        let agent = client
-            .agent(model)
-            .preamble(PREAMBLE)
-            .tool(super::tools::web_search::WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
-            .tool(super::tools::google_maps::SearchPlaces::new(self.http.clone(), self.google_maps_api_key.clone()))
-            .tool(super::tools::google_maps::GetRoute::new(self.http.clone(), self.google_maps_api_key.clone()))
-            .default_max_turns(10)
-            .build();
-        agent.prompt(input).await.map_err(|_| AgentError::Provider)
     }
 }
 
 #[async_trait]
 impl EventPlanning for GeminiEventPlanner {
     async fn plan(&self, prompt: EventPlanningPrompt) -> Result<Vec<PlannedAction>, AgentError> {
+        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let agent = client
+            .agent(&self.model)
+            .preamble("You plan actions for Vox. Assess the event using current tools when needed. Return only JSON with version 1 and an actions array. The only allowed action kind is outbound_call with reason and opening_instruction. Return an empty actions array when no action is useful.")
+            .tool(super::tools::web_search::WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
+            .tool(super::tools::google_maps::SearchPlaces::new(self.http.clone(), self.google_maps_api_key.clone()))
+            .tool(super::tools::google_maps::GetRoute::new(self.http.clone(), self.google_maps_api_key.clone()))
+            .default_max_turns(10)
+            .build();
         let input = format!(
             "User context:\n{}\nEvent type: {}\nOccurred at: {}\nPayload: {}",
             prompt.user_context, prompt.event_type, prompt.occurred_at, prompt.payload
         );
-        let output = match &self.gateway {
-            Some(gateway) => {
-                let client = openai::Client::builder()
-                    .api_key(&gateway.api_key)
-                    .base_url(&gateway.base_url)
-                    .build()
-                    .map_err(|_| AgentError::Provider)?;
-                self.plan_with_client(&client, &gateway.model, input).await?
-            }
-            None => {
-                let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
-                self.plan_with_client(&client, &self.model, input).await?
-            }
-        };
+        let output = agent
+            .prompt(input)
+            .await
+            .map_err(|_| AgentError::Provider)?;
         parse_planned_actions(&output)
     }
 }

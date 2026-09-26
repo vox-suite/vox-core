@@ -13,11 +13,11 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use uuid::Uuid;
 
-const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(25);
 // ponytail: whole tool output is capped rather than streamed/paginated;
 // raise this or add pagination if commands routinely produce more output.
-const MAX_OUTPUT_CHARS: usize = 4000;
+pub(crate) const MAX_OUTPUT_CHARS: usize = 4000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TerminalToolError {
@@ -38,13 +38,17 @@ impl From<DeviceLinkError> for TerminalToolError {
 }
 
 #[derive(sqlx::FromRow, Clone)]
-struct DeviceRow {
-    id: Uuid,
-    label: String,
-    platform: String,
+pub(crate) struct DeviceRow {
+    pub(crate) id: Uuid,
+    pub(crate) label: String,
+    #[allow(dead_code)]
+    pub(crate) platform: String,
 }
 
-async fn resolve_device(
+/// Resolves which of the user's registered devices a device-control tool
+/// should target. Shared by every tool that talks to a device over
+/// [`DeviceHub`] (terminal control, resolving a GitHub issue, ...).
+pub(crate) async fn resolve_device(
     db: &Db,
     user_id: Uuid,
     hint: Option<&str>,
@@ -87,7 +91,7 @@ async fn resolve_device(
     )))
 }
 
-fn device_link(
+pub(crate) fn device_link(
     hub: &DeviceHub,
     device: &DeviceRow,
 ) -> Result<crate::realtime::DeviceLink, TerminalToolError> {
@@ -99,7 +103,7 @@ fn device_link(
     })
 }
 
-fn response_error(response: &Value) -> Option<String> {
+pub(crate) fn response_error(response: &Value) -> Option<String> {
     if response.get("ok").and_then(Value::as_bool) == Some(true) {
         None
     } else {
@@ -207,7 +211,7 @@ impl RunTerminalCommand {
     }
 }
 
-async fn audit_device_command(db: &Db, user_id: Uuid, device_id: Uuid, details: Value) {
+pub(crate) async fn audit_device_command(db: &Db, user_id: Uuid, device_id: Uuid, details: Value) {
     let result = sqlx::query(
         "INSERT INTO audit_events (user_id, actor, event_type, affected_ids, details) \
          VALUES ($1, 'agent', 'device.command', $2, $3)",
