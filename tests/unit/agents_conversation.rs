@@ -1,4 +1,4 @@
-use super::{VOICE_CALL_PREAMBLE, spoken_response};
+use super::{VOICE_CALL_PREAMBLE, mentions_shopping, spoken_response};
 
 #[test]
 fn prompt_requires_natural_speech_only() {
@@ -66,4 +66,12 @@ fn splits_spoken_sentences_without_breaking_decimals_or_producing_letterless_chu
     for s in sentences {
         assert!(s.chars().any(|c| c.is_alphabetic()));
     }
+}
+
+#[test]
+fn detects_purchase_requests_for_shopping_route() {
+    assert!(mentions_shopping("I want to buy an iPhone 16"));
+    assert!(mentions_shopping("Order me AA batteries from Amazon"));
+    assert!(!mentions_shopping("What's the weather in Chennai?"));
+    assert!(!mentions_shopping("Remind me to call mom"));
 }

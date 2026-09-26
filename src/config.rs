@@ -21,6 +21,9 @@ pub struct Config {
     pub llm_gateway_base_url: Option<String>,
     pub llm_gateway_api_key: Option<String>,
     pub llm_gateway_model: Option<String>,
+    /// Local Playwright helper for amazon.in shopping; unset disables it.
+    pub amazon_shopper_url: Option<String>,
+    pub amazon_shopper_token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -68,6 +71,9 @@ impl Config {
             llm_gateway_api_key: get("LLM_GATEWAY_API_KEY")
                 .filter(|value| !value.trim().is_empty()),
             llm_gateway_model: get("LLM_GATEWAY_MODEL")
+                .filter(|value| !value.trim().is_empty()),
+            amazon_shopper_url: get("AMAZON_SHOPPER_URL").filter(|value| !value.trim().is_empty()),
+            amazon_shopper_token: get("AMAZON_SHOPPER_TOKEN")
                 .filter(|value| !value.trim().is_empty()),
         })
     }

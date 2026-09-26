@@ -30,6 +30,7 @@ fn loads_required_configuration_without_redis() {
     assert!(!config.jev_enabled);
     assert_eq!(config.jev_base_url, "https://api.typesafe.ai/v1/systemone");
     assert_eq!(config.tts_provider, "elevenlabs");
+    assert_eq!(config.amazon_shopper_url, None);
 }
 
 #[test]

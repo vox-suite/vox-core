@@ -24,6 +24,9 @@ services:
       REDIS_URL: redis://redis:6379
     expose:
       - "3001"
+    # Lets Core reach the amazon-shopper helper running natively on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy

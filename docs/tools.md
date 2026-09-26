@@ -312,3 +312,58 @@ This document details all agent tools available to the Gemini conversation agent
     "message": "Outbound call initiated to +1234567890 for Critical server alert"
   }
   ```
+
+---
+
+## 8. Shopping Tools
+
+Demo path for ordering on **amazon.in** during a call. The tools drive the local Playwright helper in [`services/amazon-shopper`](../services/amazon-shopper/README.md), which controls a visible Chrome window already logged into the user's Amazon account. They are registered only when `AMAZON_SHOPPER_URL` is set. A turn is routed to them when the message mentions buying or Amazon, or while a shopping session is active (10 minutes), so short replies like "teal" or "yes" stay on these tools.
+
+Every response carries a `status`. Handled outcomes such as `needs_human` (sign-in, OTP or CAPTCHA to finish in the browser), `cod_unavailable` and `helper_unavailable` come back as results rather than errors, so the agent can say them aloud.
+
+### `amazon_search`
+- **Module**: `crate::agents::tools::shopping::AmazonSearch`
+- **Description**: Searches amazon.in and returns up to 5 organic (non-sponsored) results.
+- **Arguments**:
+  - `query` *(required string)*: What to search for.
+- **Response**:
+  ```json
+  { "status": "ok", "query": "iphone 16", "results": [ { "asin": "B0DGJHBX5Y", "title": "Apple iPhone 16 128 GB: ...", "price": "₹86,900", "rating": "4.5" } ] }
+  ```
+
+### `amazon_open_product`
+- **Module**: `crate::agents::tools::shopping::AmazonOpenProduct`
+- **Description**: Opens a product page and returns its title, price, availability and variant options. A dimension with one option is fixed for that listing.
+- **Arguments**:
+  - `asin` *(required string)*: From `amazon_search`.
+- **Response**:
+  ```json
+  { "status": "ok", "asin": "B0DGJHBX5Y", "title": "Apple iPhone 16 128 GB: ...", "price": "₹86,900.00", "availability": "In stock",
+    "variants": [ { "dimension": "Colour", "options": [ { "label": "Black", "selected": true, "available": true }, { "label": "Teal", "selected": false, "available": true } ] },
+                  { "dimension": "Size", "options": [ { "label": "128 GB", "selected": true, "available": true } ] } ] }
+  ```
+
+### `amazon_select_options`
+- **Module**: `crate::agents::tools::shopping::AmazonSelectOptions`
+- **Description**: Clicks variant options on the open product page. Returns `partial` with `unmatched` entries when a requested option does not exist or is unavailable.
+- **Arguments**:
+  - `options` *(required object)*: Dimension name to option label, e.g. `{"Colour": "Teal"}`.
+
+### `amazon_checkout`
+- **Module**: `crate::agents::tools::shopping::AmazonCheckout`
+- **Description**: Clicks Buy Now, keeps the default delivery address, selects Cash/Pay on Delivery and stops on the review page. Does not place the order. Returns `cod_unavailable` when Amazon does not offer Pay on Delivery (above about ₹30,000).
+- **Arguments**:
+  - `quantity` *(optional integer, 1–10)*: Defaults to 1.
+- **Response**:
+  ```json
+  { "status": "ok", "total": "₹499.00", "address": "Rahul, Anna Nagar, Chennai", "delivery": "Arriving Thursday", "payment": "Pay on Delivery" }
+  ```
+
+### `amazon_place_order`
+- **Module**: `crate::agents::tools::shopping::AmazonPlaceOrder`
+- **Description**: Places the order prepared by `amazon_checkout`. Enforced on the server: it only runs from a turn **after** the one that prepared checkout, so the caller has heard the total and answered. It returns `awaiting_user` when called in the same turn and `no_checkout` when nothing is prepared. Each attempt is written to `audit_events` as `amazon.order`. With the helper's `SHOPPER_DRY_RUN=true` it returns `dry_run` without clicking.
+- **Response**:
+  ```json
+  { "status": "placed", "order_id": "408-1234567-1234567", "total": "₹499.00" }
+  ```
+

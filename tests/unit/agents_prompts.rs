@@ -74,3 +74,19 @@ fn elevenlabs_preamble_contains_v3_best_practices() {
         assert!(ELEVENLABS_VOICE_CALL_PREAMBLE.contains(requirement));
     }
 }
+
+#[test]
+fn shopping_instructions_require_explicit_confirmation() {
+    for requirement in [
+        "amazon_checkout",
+        "only after the user explicitly says yes",
+        "Never say an order is placed",
+        "needs_human",
+        "cod_unavailable",
+        "in_progress",
+        "Shopping state",
+        "never start over",
+    ] {
+        assert!(SHOPPING_INSTRUCTIONS.contains(requirement));
+    }
+}
