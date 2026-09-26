@@ -11,6 +11,7 @@ pub mod direct;
 pub mod execution;
 pub mod integrity;
 pub mod mcp;
+mod transport;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

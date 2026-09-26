@@ -492,7 +492,12 @@ async fn rejects_invalid_urls_and_local_code_uploads() {
         "ftp://remote.example.com",
         "javascript:alert(1)",
         "data:text/html,<html>",
-        "http://insecure-remote.example.com", // Plain HTTP only allowed for localhost / 127.0.0.1
+        "http://insecure-remote.example.com",
+        "https://127.0.0.1/mcp",
+        "https://10.0.0.4/mcp",
+        "https://[::1]/mcp",
+        "https://metadata.internal/mcp",
+        "https://user:password@example.com/mcp",
     ] {
         let request = InstallExtensionRequest {
             external_key: "bad-url".into(),
@@ -600,4 +605,56 @@ async fn remote_extension_http_endpoints_require_signed_assertions() {
     let list_signed = signed_request(list_uri, "POST", list_body, &list_assertion);
     let list_res = app.clone().oneshot(list_signed).await.unwrap();
     assert_eq!(list_res.status(), StatusCode::OK);
+}
+#[tokio::test]
+async fn host_cannot_certify_or_enable_its_own_remote_extension() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let app = vox_core::http::router(vox_core::http::AppState::new(false));
+    for (path, body) in [
+        (
+            "/v1/remote-extensions/00000000-0000-0000-0000-000000000001/enable",
+            serde_json::json!({"host_context":{"host_user_id":"user"},"enabled":true}),
+        ),
+        (
+            "/v1/remote-extensions/00000000-0000-0000-0000-000000000001/conformance",
+            serde_json::json!({"host_context":{"host_user_id":"user"},"version":1,"passed":true,"report":{}}),
+        ),
+        (
+            "/v1/remote-extensions/00000000-0000-0000-0000-000000000001/quarantine",
+            serde_json::json!({"host_context":{"host_user_id":"user"},"version":1}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let renewal = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/remote-extensions/00000000-0000-0000-0000-000000000001/renew-consent")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"host_context":{"host_user_id":"user"},"version":2})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renewal.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

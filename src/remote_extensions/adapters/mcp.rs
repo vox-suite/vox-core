@@ -1,10 +1,11 @@
+use super::transport::client_for_endpoint;
 use super::{
     AdapterExecutionError, ExtensionInvocation, ExtensionProtocolAdapter, ExtensionReconciliation,
     NormalizedResponse, ResponseStatus, integrity::ExtensionIntegritySigner,
 };
 use crate::remote_extensions::{AuthorizedEndpoint, ExtensionProtocol};
 use chrono::Utc;
-use reqwest::Client;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -40,8 +41,8 @@ pub struct JsonRpcResponse {
 }
 
 pub struct McpProtocolAdapter {
-    client: Client,
     timeout: Duration,
+    allow_local_for_testing: bool,
 }
 
 impl McpProtocolAdapter {
@@ -51,12 +52,15 @@ impl McpProtocolAdapter {
 
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(timeout)
-                .build()
-                .unwrap_or_default(),
             timeout,
+            allow_local_for_testing: false,
         }
+    }
+
+    /// Isolated loopback mock servers in integration tests only.
+    pub fn with_local_endpoints_for_testing(mut self) -> Self {
+        self.allow_local_for_testing = true;
+        self
     }
 
     pub fn timeout(&self) -> Duration {
@@ -85,11 +89,17 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
         let req_id = Value::String(Uuid::new_v4().to_string());
         let rpc_request = JsonRpcRequest {
             jsonrpc: "2.0".into(),
-            id: req_id,
+            id: req_id.clone(),
             method: "tools/call".into(),
             params: json!({
                 "name": invocation.capability_key,
                 "arguments": invocation.parameters,
+                "_meta": {
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "vox-core",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }
             }),
         };
 
@@ -107,11 +117,19 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
         let now = Utc::now();
         let nonce = Uuid::new_v4();
 
-        let mut req_builder = self
-            .client
+        let client = client_for_endpoint(
+            &endpoint.endpoint_url,
+            self.timeout,
+            self.allow_local_for_testing,
+        )
+        .await?;
+        let mut req_builder = client
             .post(&endpoint.endpoint_url)
             .header("content-type", "application/json")
-            .header("x-vox-protocol", "mcp/2024-11-05");
+            .header("accept", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", &invocation.capability_key);
 
         if let Some(ref ikey) = invocation.idempotency_key {
             req_builder = req_builder.header("x-vox-idempotency-key", ikey);
@@ -145,17 +163,16 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
         })?;
 
         let status = response.status();
-        let resp_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| AdapterExecutionError::Network(e.to_string()))?;
-
-        if resp_bytes.len() > MAX_PAYLOAD_BYTES {
-            return Err(AdapterExecutionError::InvalidPayload(format!(
-                "response size {} bytes exceeds maximum allowed {}",
-                resp_bytes.len(),
-                MAX_PAYLOAD_BYTES
-            )));
+        let mut resp_bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AdapterExecutionError::Network(e.to_string()))?;
+            if resp_bytes.len().saturating_add(chunk.len()) > MAX_PAYLOAD_BYTES {
+                return Err(AdapterExecutionError::InvalidPayload(
+                    "MCP response exceeds the 2 MiB limit".into(),
+                ));
+            }
+            resp_bytes.extend_from_slice(&chunk);
         }
 
         if !status.is_success() {
@@ -175,25 +192,17 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
             });
         }
 
-        let rpc_response: JsonRpcResponse = match serde_json::from_slice(&resp_bytes) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                // Defensive fallback: if payload is plain JSON or not strict JSON-RPC
-                if let Ok(raw_json) = serde_json::from_slice::<Value>(&resp_bytes) {
-                    return Ok(NormalizedResponse {
-                        status: ResponseStatus::Success,
-                        data: raw_json,
-                        provider_reference: None,
-                        guarantees_reported: None,
-                        error_code: None,
-                        error_message: None,
-                    });
-                }
-                return Err(AdapterExecutionError::ProtocolError(format!(
-                    "failed to parse JSON-RPC response: {e}"
-                )));
-            }
-        };
+        let rpc_response: JsonRpcResponse = serde_json::from_slice(&resp_bytes).map_err(|e| {
+            AdapterExecutionError::ProtocolError(format!("invalid JSON-RPC response: {e}"))
+        })?;
+        if rpc_response.jsonrpc != "2.0"
+            || rpc_response.id != req_id
+            || rpc_response.result.is_some() == rpc_response.error.is_some()
+        {
+            return Err(AdapterExecutionError::ProtocolError(
+                "MCP response has mismatched id or invalid result/error envelope".into(),
+            ));
+        }
 
         if let Some(err) = rpc_response.error {
             return Ok(NormalizedResponse {
@@ -206,7 +215,14 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
             });
         }
 
-        let result = rpc_response.result.unwrap_or(Value::Null);
+        let result = rpc_response.result.ok_or_else(|| {
+            AdapterExecutionError::ProtocolError("MCP response is missing a result".into())
+        })?;
+        if result.get("content").is_none() && result.get("structuredContent").is_none() {
+            return Err(AdapterExecutionError::ProtocolError(
+                "MCP tool result has no content".into(),
+            ));
+        }
 
         // Parse MCP tool result convention:
         // { "content": [ { "type": "text", "text": "..." } ], "isError": false, "_meta": { ... } }
@@ -233,22 +249,23 @@ impl ExtensionProtocolAdapter for McpProtocolAdapter {
             .cloned()
             .or_else(|| result.get("guarantees").cloned());
 
-        let parsed_data =
-            if let Some(content_array) = result.get("content").and_then(Value::as_array) {
-                if let Some(first_text) = content_array
-                    .iter()
-                    .find(|c| c.get("type").and_then(Value::as_str) == Some("text"))
-                    .and_then(|c| c.get("text").and_then(Value::as_str))
-                {
-                    // Attempt to parse text content as JSON if available
-                    serde_json::from_str::<Value>(first_text)
-                        .unwrap_or_else(|_| json!({ "text": first_text }))
-                } else {
-                    result.clone()
-                }
+        let parsed_data = if let Some(structured) = result.get("structuredContent") {
+            structured.clone()
+        } else if let Some(content_array) = result.get("content").and_then(Value::as_array) {
+            if let Some(first_text) = content_array
+                .iter()
+                .find(|c| c.get("type").and_then(Value::as_str) == Some("text"))
+                .and_then(|c| c.get("text").and_then(Value::as_str))
+            {
+                // Attempt to parse text content as JSON if available
+                serde_json::from_str::<Value>(first_text)
+                    .unwrap_or_else(|_| json!({ "text": first_text }))
             } else {
                 result.clone()
-            };
+            }
+        } else {
+            result.clone()
+        };
 
         if is_error {
             Ok(NormalizedResponse {

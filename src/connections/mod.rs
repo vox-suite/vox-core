@@ -99,6 +99,8 @@ pub enum ConnectionError {
     SessionExpired,
     #[error("invalid state challenge")]
     InvalidState,
+    #[error("provider authorization is not configured")]
+    AuthorizationUnavailable,
     #[error("connection storage unavailable")]
     Database(#[from] sqlx::Error),
 }
@@ -108,187 +110,25 @@ impl ConnectionService {
         Self { db }
     }
 
+    /// A host assertion cannot establish provider authorization. Keep the
+    /// endpoint unavailable until a provider adapter can perform a server-side
+    /// code exchange and verify the external account and granted scopes.
     pub async fn initiate(
         &self,
-        context: &ResolvedUserContext,
-        request: InitiateConnectionRequest,
+        _context: &ResolvedUserContext,
+        _request: InitiateConnectionRequest,
     ) -> Result<InitiateConnectionResponse, ConnectionError> {
-        let integration = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, external_key FROM integration_definitions \
-             WHERE deployment_id=$1 AND external_key=$2 AND state='enabled'",
-        )
-        .bind(context.subject.deployment_id.0)
-        .bind(request.integration_external_key.trim())
-        .fetch_optional(self.db.pool())
-        .await?
-        .ok_or(ConnectionError::IntegrationUnavailable)?;
-
-        let session_id = Uuid::new_v4();
-        let state_token = format!("{}-{}", Uuid::new_v4(), Uuid::new_v4());
-        let expires_at = Utc::now() + chrono::Duration::minutes(10);
-
-        sqlx::query(
-            "INSERT INTO connection_authorization_sessions \
-             (id, user_context_id, integration_id, state_token, credential_custody, requested_capabilities, redirect_uri, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        )
-        .bind(session_id)
-        .bind(context.id.0)
-        .bind(integration.0)
-        .bind(&state_token)
-        .bind(custody(&request.credential_custody))
-        .bind(&request.requested_capabilities)
-        .bind(&request.redirect_uri)
-        .bind(expires_at)
-        .execute(self.db.pool())
-        .await?;
-
-        let authorization_url = format!(
-            "/v1/integrations/{}/oauth/authorize?state={}&session={}",
-            integration.1, state_token, session_id
-        );
-
-        Ok(InitiateConnectionResponse {
-            session_id,
-            integration_external_key: integration.1,
-            state_token,
-            authorization_url,
-            expires_at,
-        })
+        Err(ConnectionError::AuthorizationUnavailable)
     }
 
+    /// Never turn host-supplied account fields into an authorized connection.
+    /// Provider callbacks must be handled by a trusted provider adapter.
     pub async fn verify_callback(
         &self,
-        context: &ResolvedUserContext,
-        request: VerifyConnectionCallbackRequest,
+        _context: &ResolvedUserContext,
+        _request: VerifyConnectionCallbackRequest,
     ) -> Result<Connection, ConnectionError> {
-        if request.state_token.trim().is_empty()
-            || request.provider_code.trim().is_empty()
-            || request.external_account_reference.trim().is_empty()
-            || request.account_display_id.trim().is_empty()
-        {
-            return Err(ConnectionError::Invalid);
-        }
-
-        let mut tx = self.db.pool().begin().await?;
-
-        let row = sqlx::query(
-            "SELECT id, integration_id, state_token, credential_custody, requested_capabilities, expires_at, consumed_at \
-             FROM connection_authorization_sessions \
-             WHERE id=$1 AND user_context_id=$2 FOR UPDATE",
-        )
-        .bind(request.session_id)
-        .bind(context.id.0)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ConnectionError::NotFound)?;
-
-        let consumed_at: Option<DateTime<Utc>> = row.get("consumed_at");
-        if consumed_at.is_some() {
-            return Err(ConnectionError::SessionAlreadyConsumed);
-        }
-
-        let expires_at: DateTime<Utc> = row.get("expires_at");
-        if expires_at < Utc::now() {
-            return Err(ConnectionError::SessionExpired);
-        }
-
-        let expected_state: String = row.get("state_token");
-        if expected_state != request.state_token {
-            return Err(ConnectionError::InvalidState);
-        }
-
-        sqlx::query("UPDATE connection_authorization_sessions SET consumed_at=now() WHERE id=$1")
-            .bind(request.session_id)
-            .execute(&mut *tx)
-            .await?;
-
-        let integration_id: Uuid = row.get("integration_id");
-        let custody_str: String = row.get("credential_custody");
-        let requested_capabilities: Vec<String> = row.get("requested_capabilities");
-        let credential_custody = parse_custody(&custody_str)?;
-
-        let integration_key: String =
-            sqlx::query_scalar("SELECT external_key FROM integration_definitions WHERE id=$1")
-                .bind(integration_id)
-                .fetch_one(&mut *tx)
-                .await?;
-
-        let expires_at_conn = Some(Utc::now() + chrono::Duration::days(30));
-        let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO external_connections \
-             (user_context_id, integration_id, external_account_hash, account_display_id, credential_custody, authorization_state, authorized_capabilities, expires_at, failure_code, revoked_at) \
-             VALUES ($1, $2, $3, $4, $5, 'authorized', $6, $7, NULL, NULL) \
-             ON CONFLICT (user_context_id, integration_id, external_account_hash) \
-             DO UPDATE SET account_display_id=EXCLUDED.account_display_id, \
-                           credential_custody=EXCLUDED.credential_custody, \
-                           authorization_state='authorized', \
-                           authorized_capabilities=EXCLUDED.authorized_capabilities, \
-                           expires_at=EXCLUDED.expires_at, \
-                           failure_code=NULL, \
-                           revoked_at=NULL, \
-                           updated_at=now() \
-             RETURNING id",
-        )
-        .bind(context.id.0)
-        .bind(integration_id)
-        .bind(hash(&request.external_account_reference))
-        .bind(request.account_display_id.trim())
-        .bind(custody(&credential_custody))
-        .bind(&requested_capabilities)
-        .bind(expires_at_conn)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        let acct_hash = hash(&request.external_account_reference);
-        let acct_hash_hex = hex::encode(&acct_hash);
-        let secret_ref = format!("vault-{}", id);
-        sqlx::query(
-            "DELETE FROM connections WHERE user_id=$1 AND provider_key=$2 AND external_account_hash=$3 AND id<>$4",
-        )
-        .bind(context.user_id.0)
-        .bind(&integration_key)
-        .bind(&acct_hash_hex)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO connections \
-             (id, user_id, provider_key, external_account_hash, secret_reference, allowed_capabilities, authorization_state, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'authorized', $7) \
-             ON CONFLICT (id) DO UPDATE SET \
-                provider_key=EXCLUDED.provider_key, \
-                external_account_hash=EXCLUDED.external_account_hash, \
-                secret_reference=EXCLUDED.secret_reference, \
-                allowed_capabilities=EXCLUDED.allowed_capabilities, \
-                authorization_state='authorized', \
-                expires_at=EXCLUDED.expires_at, \
-                updated_at=now()",
-        )
-        .bind(id)
-        .bind(context.user_id.0)
-        .bind(&integration_key)
-        .bind(&acct_hash_hex)
-        .bind(&secret_ref)
-        .bind(&requested_capabilities)
-        .bind(expires_at_conn)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(Connection {
-            id,
-            user_context_id: context.id,
-            integration_external_key: integration_key,
-            account_display_id: Some(request.account_display_id.trim().to_string()),
-            credential_custody,
-            authorization_state: AuthorizationState::Authorized,
-            authorized_capabilities: requested_capabilities,
-            expires_at: expires_at_conn,
-            failure_code: None,
-        })
+        Err(ConnectionError::AuthorizationUnavailable)
     }
 
     pub async fn record(
@@ -338,7 +178,6 @@ impl ConnectionService {
         .await?;
 
         let acct_hash_hex = hex::encode(&acct_hash);
-        let secret_ref = format!("vault-{}", id);
         let legacy_st = legacy_state(&request.authorization_state);
 
         sqlx::query(
@@ -369,7 +208,7 @@ impl ConnectionService {
         .bind(context.user_id.0)
         .bind(&integration.1)
         .bind(&acct_hash_hex)
-        .bind(&secret_ref)
+        .bind(Option::<String>::None)
         .bind(&request.authorized_capabilities)
         .bind(legacy_st)
         .bind(request.expires_at)
