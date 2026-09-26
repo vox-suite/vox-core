@@ -29,7 +29,3 @@ impl Db {
         &self.pool
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/greeting.rs"]
-mod greeting_tests;

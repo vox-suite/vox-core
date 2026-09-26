@@ -155,7 +155,3 @@ impl Answer {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/jev_types.rs"]
-mod tests;

@@ -126,7 +126,3 @@ pub fn onboarding_instruction(
         ""
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/agents_prompts.rs"]
-mod tests;

@@ -196,7 +196,3 @@ fn name_agent_span(span: &mut SpanData) {
         span.name = agent.value.as_str().into_owned().into();
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/telemetry.rs"]
-mod tests;

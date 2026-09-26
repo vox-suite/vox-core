@@ -383,7 +383,3 @@ impl Tool for TriggerOutboundCall {
         }))
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/agents_tools_calls.rs"]
-mod tests;

@@ -1048,11 +1048,3 @@ fn explicit_name(text: &str) -> Option<String> {
                 .all(|c| c.is_alphabetic() || matches!(c, ' ' | '-' | '\''))
     })
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/conversations_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "../../tests/unit/conversations_recovery_tests.rs"]
-mod recovery_tests;

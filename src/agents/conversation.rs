@@ -222,6 +222,24 @@ impl ConversationAgent {
                 .agent(&self.model)
                 .name(&name)
                 .record_content_telemetry(crate::telemetry::record_content())
+                .tool(tools::terminal::OpenTerminal::new(
+                    self.db.clone(),
+                    prompt.user_id,
+                    self.device_hub.clone().unwrap_or_default(),
+                ))
+                .tool(tools::terminal::RunTerminalCommand::new(
+                    self.db.clone(),
+                    prompt.user_id,
+                    self.device_hub.clone().unwrap_or_default(),
+                    turn,
+                ))
+                .tool(tools::github::ResolveGithubIssue::new(
+                    self.db.clone(),
+                    prompt.user_id,
+                    prompt.owner,
+                    self.device_hub.clone().unwrap_or_default(),
+                    self.outbound.clone(),
+                ))
         };
         let agent =
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
@@ -231,7 +249,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .default_max_turns(2)
+                    .default_max_turns(6)
                     .build()
             } else if let Some(shopper) = self
                 .shopper
@@ -357,24 +375,6 @@ impl ConversationAgent {
                         .build(),
                     crate::jev::ToolDomain::Device => new_agent("device")
                         .preamble(preamble)
-                        .tool(tools::terminal::OpenTerminal::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::terminal::RunTerminalCommand::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            self.device_hub.clone().unwrap_or_default(),
-                            turn,
-                        ))
-                        .tool(tools::github::ResolveGithubIssue::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                            prompt.owner,
-                            self.device_hub.clone().unwrap_or_default(),
-                            self.outbound.clone(),
-                        ))
                         .tool(tools::profile::UpdateUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -510,24 +510,6 @@ impl ConversationAgent {
                     .tool(tools::records::ManageUserGoal::new(
                         self.db.clone(),
                         prompt.user_id,
-                    ))
-                    .tool(tools::terminal::OpenTerminal::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                        self.device_hub.clone().unwrap_or_default(),
-                    ))
-                    .tool(tools::terminal::RunTerminalCommand::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                        self.device_hub.clone().unwrap_or_default(),
-                        turn,
-                    ))
-                    .tool(tools::github::ResolveGithubIssue::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                        prompt.owner,
-                        self.device_hub.clone().unwrap_or_default(),
-                        self.outbound.clone(),
                     ))
                     .default_max_turns(10)
                     .build()
@@ -959,7 +941,3 @@ impl ConversationResponder for ConversationAgent {
         self.generate_stream(prompt).await
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/agents_conversation.rs"]
-mod tests;

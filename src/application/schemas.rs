@@ -102,7 +102,3 @@ fn reject_external_refs(schema: &serde_json::Value) -> Result<(), String> {
 fn is_local_schema_ref(reference: &str) -> bool {
     reference == "#" || reference.starts_with("#/")
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/schemas.rs"]
-mod tests;

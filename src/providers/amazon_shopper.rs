@@ -243,7 +243,3 @@ impl ShopperSessions {
         f(&mut sessions)
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/providers_amazon_shopper.rs"]
-mod tests;

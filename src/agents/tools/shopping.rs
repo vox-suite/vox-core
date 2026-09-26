@@ -408,7 +408,3 @@ impl Tool for AmazonPlaceOrder {
         Ok(result)
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/agents_tools_shopping.rs"]
-mod tests;

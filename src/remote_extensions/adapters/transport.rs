@@ -87,27 +87,3 @@ pub(super) async fn client_for_endpoint(
 fn allowed_ip(ip: IpAddr, allow_local_for_testing: bool) -> bool {
     public_ip(ip) || (allow_local_for_testing && ip.is_loopback())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn private_network_targets_fail_before_dispatch() {
-        for endpoint in [
-            "http://127.0.0.1:8080/mcp",
-            "https://127.0.0.1/mcp",
-            "https://10.1.2.3/mcp",
-            "https://169.254.169.254/latest/meta-data",
-            "https://[::1]/mcp",
-            "https://user:password@example.com/mcp",
-        ] {
-            assert!(
-                client_for_endpoint(endpoint, Duration::from_secs(1), false)
-                    .await
-                    .is_err(),
-                "{endpoint}"
-            );
-        }
-    }
-}

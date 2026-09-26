@@ -1,12 +1,12 @@
 use crate::{
     agents::tools::terminal::{
-        DeviceRow, MAX_OUTPUT_CHARS, OPEN_TIMEOUT, TerminalToolError, audit_device_command,
-        device_link, resolve_device, response_error,
+        DeviceRow, OPEN_TIMEOUT, TerminalToolError, audit_device_command, device_link,
+        resolve_device, response_error,
     },
     db::Db,
     identity::{ResourceOwner, UserId},
     outbound::OutboundCallService,
-    realtime::DeviceHub,
+    realtime::{DeviceHub, DeviceLink},
 };
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -56,17 +56,88 @@ impl ResolveGithubIssue {
         }
     }
 
-    async fn notify_done(&self, issue_number: u64, repo_hint: &str, pr_url: &str) {
+    async fn notify(&self, reason: &str, opening: &str) {
         let Some(outbound) = &self.outbound else {
             return;
         };
-        let reason = format!("Issue #{issue_number} resolved");
-        let opening = format!(
-            "Let the user know Claude Code finished working on GitHub issue #{issue_number} in {repo_hint} and opened a pull request: {pr_url}."
+        if let Err(err) = outbound
+            .initiate_call_for_user(self.owner, reason, opening, None, None)
+            .await
+        {
+            tracing::warn!(?err, "resolve_github_issue callback call failed");
+        }
+    }
+
+    /// Runs Claude Code on the device and returns the opened PR's URL, or a
+    /// message saying why no pull request was confirmed.
+    async fn run(
+        &self,
+        db: &Db,
+        device: &DeviceRow,
+        link: &DeviceLink,
+        issue_number: u64,
+        repo_hint: &str,
+    ) -> Result<String, String> {
+        let prompt = format!(
+            "Resolve GitHub issue #{issue_number}: read it with `gh issue view {issue_number}`, implement a fix on a new branch, and open a pull request with `gh pr create --fill`.",
         );
-        let _ = outbound
-            .initiate_call_for_user(self.owner, &reason, &opening, None, None)
-            .await;
+        let command = format!(
+            "REPO_DIR=$(find ~ -maxdepth 5 -type d -iname '*{repo_hint}*' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1); \
+             if [ -z \"$REPO_DIR\" ]; then echo VOX_REPO_NOT_FOUND; \
+             else cd \"$REPO_DIR\" && claude --permission-mode bypassPermissions -p '{prompt}'; \
+             CLAUDE_EXIT=$?; PR_URL=$(gh pr view --json url -q .url 2>/dev/null); \
+             echo \"VOX_CLAUDE_EXIT:$CLAUDE_EXIT\"; echo \"VOX_PR_URL:${{PR_URL:-none}}\"; fi",
+            prompt = prompt.replace('\'', "'\\''"),
+        );
+
+        let audit = |outcome: Value| {
+            let mut entry = json!({ "tool": "resolve_github_issue", "issue_number": issue_number, "repo_hint": repo_hint });
+            if let (Some(entry), Some(outcome)) = (entry.as_object_mut(), outcome.as_object()) {
+                entry.extend(outcome.clone());
+            }
+            audit_device_command(db, self.user_id.0, device.id, entry)
+        };
+
+        let response = match link
+            .request(
+                "run_command",
+                json!({ "command": command }),
+                CLAUDE_RUN_TIMEOUT,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                audit(json!({ "outcome": "unreachable", "error": err.to_string() })).await;
+                return Err(format!("{} could not be reached: {err}", device.label));
+            }
+        };
+        if let Some(err) = response_error(&response) {
+            audit(json!({ "outcome": "rejected", "error": err })).await;
+            return Err(format!("{} rejected the command: {err}", device.label));
+        }
+
+        let output = response.get("output").and_then(Value::as_str).unwrap_or("");
+        let exit_code = response.get("exit_code").and_then(Value::as_i64);
+        audit(json!({ "outcome": "executed", "exit_code": exit_code })).await;
+
+        if output.contains("VOX_REPO_NOT_FOUND") {
+            return Err(format!(
+                "no local repo matching '{repo_hint}' was found on {}",
+                device.label
+            ));
+        }
+        let claude_exit: Option<i64> =
+            last_marker_value(output, "VOX_CLAUDE_EXIT:").and_then(|v| v.parse().ok());
+        if claude_exit != Some(0) {
+            return Err(format!(
+                "Claude Code did not finish successfully (exit code {claude_exit:?})"
+            ));
+        }
+        last_marker_value(output, "VOX_PR_URL:")
+            .filter(|v| !v.is_empty() && *v != "none")
+            .map(str::to_string)
+            .ok_or_else(|| "Claude Code finished but no pull request was found".to_string())
     }
 }
 
@@ -130,110 +201,39 @@ impl Tool for ResolveGithubIssue {
         let link = device_link(&self.hub, &device)?;
         let _ = link.request("open_shell", json!({}), OPEN_TIMEOUT).await;
 
-        let prompt = format!(
-            "Resolve GitHub issue #{issue}: read it with `gh issue view {issue}`, implement a fix on a new branch, and open a pull request with `gh pr create --fill`.",
-            issue = args.issue_number,
-        );
-        let command = format!(
-            "REPO_DIR=$(find ~ -maxdepth 5 -type d -iname '*{repo_hint}*' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -1); \
-             if [ -z \"$REPO_DIR\" ]; then echo VOX_REPO_NOT_FOUND; \
-             else cd \"$REPO_DIR\" && claude --permission-mode bypassPermissions -p '{prompt}'; \
-             CLAUDE_EXIT=$?; PR_URL=$(gh pr view --json url -q .url 2>/dev/null); \
-             echo \"VOX_CLAUDE_EXIT:$CLAUDE_EXIT\"; echo \"VOX_PR_URL:${{PR_URL:-none}}\"; fi",
-            repo_hint = repo_hint,
-            prompt = prompt.replace('\'', "'\\''"),
-        );
-
-        let response = link
-            .request(
-                "run_command",
-                json!({ "command": command }),
-                CLAUDE_RUN_TIMEOUT,
-            )
-            .await;
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => {
-                audit_device_command(
-                    db,
-                    self.user_id.0,
-                    device.id,
-                    json!({ "tool": "resolve_github_issue", "issue_number": args.issue_number, "repo_hint": repo_hint, "outcome": "unreachable", "error": err.to_string() }),
-                )
-                .await;
-                return Err(err.into());
+        let tool = self.clone();
+        let db = db.clone();
+        let issue_number = args.issue_number;
+        let task_repo_hint = repo_hint.clone();
+        let task_device = device.clone();
+        tokio::spawn(async move {
+            let repo_hint = task_repo_hint;
+            let device = task_device;
+            match tool.run(&db, &device, &link, issue_number, &repo_hint).await {
+                Ok(pr_url) => {
+                    tool.notify(
+                        &format!("Issue #{issue_number} resolved"),
+                        &format!("Let the user know Claude Code finished working on GitHub issue #{issue_number} in {repo_hint} and opened a pull request: {pr_url}."),
+                    )
+                    .await
+                }
+                Err(reason) => {
+                    tracing::warn!(issue_number, %repo_hint, %reason, "resolve_github_issue failed");
+                    tool.notify(
+                        &format!("Issue #{issue_number} not resolved"),
+                        &format!("Let the user know Claude Code could not open a pull request for GitHub issue #{issue_number} in {repo_hint}: {reason}."),
+                    )
+                    .await
+                }
             }
-        };
-        if let Some(err) = response_error(&response) {
-            audit_device_command(
-                db,
-                self.user_id.0,
-                device.id,
-                json!({ "tool": "resolve_github_issue", "issue_number": args.issue_number, "repo_hint": repo_hint, "outcome": "rejected", "error": err }),
-            )
-            .await;
-            return Err(TerminalToolError::DeviceUnavailable(err));
-        }
-
-        let mut output = response
-            .get("output")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if output.chars().count() > MAX_OUTPUT_CHARS {
-            output = output.chars().take(MAX_OUTPUT_CHARS).collect();
-            output.push_str("\n… output truncated");
-        }
-        let exit_code = response.get("exit_code").and_then(Value::as_i64);
-
-        audit_device_command(
-            db,
-            self.user_id.0,
-            device.id,
-            json!({ "tool": "resolve_github_issue", "issue_number": args.issue_number, "repo_hint": repo_hint, "outcome": "executed", "exit_code": exit_code }),
-        )
-        .await;
-
-        if output.contains("VOX_REPO_NOT_FOUND") {
-            return Err(TerminalToolError::InvalidInput(format!(
-                "No local repo matching '{repo_hint}' was found on {}.",
-                device.label
-            )));
-        }
-
-        let claude_exit: Option<i64> = last_marker_value(&output, "VOX_CLAUDE_EXIT:")
-            .and_then(|v| v.parse().ok());
-        let pr_url = last_marker_value(&output, "VOX_PR_URL:")
-            .filter(|v| !v.is_empty() && *v != "none")
-            .map(str::to_string);
-
-        if claude_exit != Some(0) {
-            return Err(TerminalToolError::DeviceUnavailable(format!(
-                "Claude Code did not finish successfully on issue #{} (exit code {:?}). No pull request was confirmed, so the user was not called.",
-                args.issue_number, claude_exit
-            )));
-        }
-
-        match &pr_url {
-            Some(url) => self.notify_done(args.issue_number, &repo_hint, url).await,
-            None => {
-                return Ok(json!({
-                    "device": device.label,
-                    "issue_number": args.issue_number,
-                    "repo_hint": repo_hint,
-                    "pr_url": Value::Null,
-                    "output": output,
-                    "note": "Claude Code finished but no pull request was found for the branch; the user was not called.",
-                }));
-            }
-        }
+        });
 
         Ok(json!({
+            "status": "started",
             "device": device.label,
-            "issue_number": args.issue_number,
+            "issue_number": issue_number,
             "repo_hint": repo_hint,
-            "pr_url": pr_url,
-            "output": output,
+            "note": "Claude Code is working on this in the background and may take several minutes. The user will get a phone call when the pull request is opened or if it fails.",
         }))
     }
 }

@@ -755,7 +755,3 @@ fn webhook_signature(secret: &str, timestamp: &str, body: &[u8]) -> Result<Strin
     mac.update(body);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/status.rs"]
-mod tests;

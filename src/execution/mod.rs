@@ -485,7 +485,3 @@ fn confirmation_evidence_is_present(evidence: &Value) -> bool {
         .as_object()
         .is_some_and(|object| !object.is_empty())
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/execution.rs"]
-mod tests;

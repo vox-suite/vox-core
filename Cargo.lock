@@ -5039,7 +5039,6 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -7989,7 +7988,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
- "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

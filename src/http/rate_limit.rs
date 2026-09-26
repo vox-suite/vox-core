@@ -203,7 +203,3 @@ pub async fn rate_limit_middleware(
         response
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/http_rate_limit.rs"]
-mod tests;

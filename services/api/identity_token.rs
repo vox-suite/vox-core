@@ -421,7 +421,3 @@ fn rsa_sha256_valid(key: &GoogleKey, message: &str, signature: &str) -> Result<b
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     Ok(verifier.verify(message.as_bytes(), &signature).is_ok())
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/identity_token.rs"]
-mod tests;

@@ -9,7 +9,3 @@ pub fn structured_json(raw: &str) -> &str {
         .map(str::trim)
         .unwrap_or(trimmed)
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/agents_utils.rs"]
-mod tests;

@@ -117,7 +117,12 @@ impl Worker {
             let Some(reference_id) = job.payload_reference_id else {
                 tracing::error!(job_id = %job.id, kind = job.kind.as_str(), "job has no payload_reference_id; failing");
                 self.jobs
-                    .fail(job.id, &self.worker_id, Utc::now(), "missing_payload_reference_id")
+                    .fail(
+                        job.id,
+                        &self.worker_id,
+                        Utc::now(),
+                        "missing_payload_reference_id",
+                    )
                     .await?;
                 continue;
             };

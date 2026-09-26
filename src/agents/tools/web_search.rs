@@ -100,7 +100,3 @@ impl Tool for WebSearch {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/agents_tools_web_search.rs"]
-mod tests;

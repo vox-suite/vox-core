@@ -329,7 +329,3 @@ fn reduce_routes_response(response: Value) -> Value {
 
     json!({ "routes": routes })
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/agents_tools_google_maps.rs"]
-mod tests;

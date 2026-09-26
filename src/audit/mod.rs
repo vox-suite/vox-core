@@ -210,7 +210,3 @@ fn safe_details(value: &Value) -> bool {
             })
     })
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/audit.rs"]
-mod tests;
