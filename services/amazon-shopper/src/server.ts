@@ -57,9 +57,10 @@ let finished: { name: string; key: string; result: amazon.Result; at: number } |
 
 /** Adds `where` (see amazon.describe) so the agent always knows where the purchase stands. */
 async function send(res: Response, result: amazon.Result, step: string, status = 200): Promise<void> {
-  const where = await amazon
-    .describe(background ? (TOOL_NAMES[background.name] ?? background.name) : null, TOOL_NAMES[step] ?? null)
-    .catch(() => null);
+  const running = background
+    ? { tool: TOOL_NAMES[background.name] ?? background.name, body: JSON.parse(background.key) as Record<string, unknown> }
+    : null;
+  const where = await amazon.describe(running, TOOL_NAMES[step] ?? null).catch(() => null);
   res.status(status).json(where ? { ...result, where } : result);
 }
 
