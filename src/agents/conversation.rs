@@ -231,23 +231,23 @@ impl ConversationAgent {
                     crate::jev::ToolDomain::TasksAndRecords => client
                         .agent(&self.model)
                         .preamble(preamble)
-                        .tool(tools::tasks::CreateTask::new(
+                        .tool(tools::spans::CreateSpan::new(
                             self.db.clone(),
                             prompt.owner,
                             self.user_events.clone().unwrap_or_default(),
                         ))
-                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
-                        .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
-                        .tool(tools::tasks::UpdateTask::new(
+                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
+                        .tool(tools::spans::GetSpan::new(self.db.clone(), prompt.owner))
+                        .tool(tools::spans::UpdateSpan::new(
                             self.db.clone(),
                             prompt.owner,
                             self.user_events.clone().unwrap_or_default(),
                         ))
-                        .tool(tools::projects::CreateProject::new(
+                        .tool(tools::collections::CreateCollection::new(
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::projects::ListProjects::new(
+                        .tool(tools::collections::ListCollections::new(
                             self.db.clone(),
                             prompt.user_id,
                         ))
@@ -282,7 +282,7 @@ impl ConversationAgent {
                     crate::jev::ToolDomain::Calendar => client
                         .agent(&self.model)
                         .preamble(preamble)
-                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
                         .tool(tools::profile::GetUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -336,12 +336,12 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .tool(tools::tasks::CreateTask::new(
+                        .tool(tools::spans::CreateSpan::new(
                             self.db.clone(),
                             prompt.owner,
                             self.user_events.clone().unwrap_or_default(),
                         ))
-                        .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
+                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
                         .tool(tools::calls::ScheduleOutboundCall::new(
                             self.db.clone(),
                             self.outbound.clone(),
@@ -387,30 +387,30 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::projects::CreateProject::new(
+                    .tool(tools::collections::CreateCollection::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::projects::ListProjects::new(
+                    .tool(tools::collections::ListCollections::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::projects::GetProject::new(
+                    .tool(tools::collections::GetCollection::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::projects::UpdateProject::new(
+                    .tool(tools::collections::UpdateCollection::new(
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::tasks::CreateTask::new(
+                    .tool(tools::spans::CreateSpan::new(
                         self.db.clone(),
                         prompt.owner,
                         self.user_events.clone().unwrap_or_default(),
                     ))
-                    .tool(tools::tasks::ListTasks::new(self.db.clone(), prompt.owner))
-                    .tool(tools::tasks::GetTask::new(self.db.clone(), prompt.owner))
-                    .tool(tools::tasks::UpdateTask::new(
+                    .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
+                    .tool(tools::spans::GetSpan::new(self.db.clone(), prompt.owner))
+                    .tool(tools::spans::UpdateSpan::new(
                         self.db.clone(),
                         prompt.owner,
                         self.user_events.clone().unwrap_or_default(),

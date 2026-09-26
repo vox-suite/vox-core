@@ -7,7 +7,7 @@ pub mod devices;
 pub mod identity;
 pub mod records;
 pub mod schemas;
-pub mod tasks;
+pub mod spans;
 
 pub use actions::*;
 pub use collections::*;
@@ -15,7 +15,7 @@ pub use devices::*;
 pub use identity::*;
 pub use records::*;
 pub use schemas::*;
-pub use tasks::*;
+pub use spans::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConcurrencyOutcome<T> {

@@ -18,7 +18,7 @@ pub enum ActionProposalState {
 pub struct ActionProposal {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub task_id: Option<Uuid>,
+    pub span_id: Option<Uuid>,
     pub job_id: Option<Uuid>,
     pub actor_key: String,
     pub connection_id: Option<Uuid>,

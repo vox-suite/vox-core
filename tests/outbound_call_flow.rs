@@ -147,7 +147,7 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
 
     assert_eq!(output["status"], "scheduled");
     let schedule_id: Uuid = output["schedule_id"].as_str().unwrap().parse().unwrap();
-    let task_id: Uuid = output["task_id"].as_str().unwrap().parse().unwrap();
+    let span_id: Uuid = output["span_id"].as_str().unwrap().parse().unwrap();
 
     let st = sqlx::query("SELECT state, instruction FROM scheduled_tasks WHERE id = $1")
         .bind(schedule_id)
@@ -159,15 +159,15 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
     assert_eq!(st_state, "active");
     assert_eq!(st_instruction, "Remind user to clean bedroom");
 
-    let t = sqlx::query("SELECT status, title, execution_type FROM tasks WHERE id = $1")
-        .bind(task_id)
+    let t = sqlx::query("SELECT status, title, execution_type FROM spans WHERE id = $1")
+        .bind(span_id)
         .fetch_one(db.pool())
         .await
         .unwrap();
     let t_status: String = t.get("status");
     let t_title: String = t.get("title");
     let t_exec: String = t.get("execution_type");
-    assert_eq!(t_status, "pending");
+    assert_eq!(t_status, "planned");
     assert_eq!(t_title, "Clean bedroom");
     assert_eq!(t_exec, "autonomous");
 
@@ -194,13 +194,13 @@ async fn schedule_outbound_call_tool_schedules_and_executes_reminder_call() {
         );
     }
 
-    let completed_task = sqlx::query("SELECT status FROM tasks WHERE id = $1")
-        .bind(task_id)
+    let completed_task = sqlx::query("SELECT status FROM spans WHERE id = $1")
+        .bind(span_id)
         .fetch_one(db.pool())
         .await
         .unwrap();
     let comp_status: String = completed_task.get("status");
-    assert_eq!(comp_status, "completed");
+    assert_eq!(comp_status, "done");
 }
 
 #[tokio::test]

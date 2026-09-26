@@ -95,7 +95,7 @@ async fn task_history_deletion_purges_tasks_and_returns_canonical_disclosure() {
         .await
         .unwrap();
 
-    assert!(delete_result.deleted_tasks_count >= 1);
+    assert!(delete_result.deleted_spans_count >= 1);
     assert_eq!(delete_result.disclosure, CANONICAL_DELETION_DISCLOSURE);
     assert!(delete_result.disclosure.contains("365 days"));
     assert!(delete_result.disclosure.contains("30 days"));
@@ -110,7 +110,7 @@ async fn task_history_deletion_purges_tasks_and_returns_canonical_disclosure() {
         .delete_task_history(&owner, true)
         .await
         .unwrap();
-    assert_eq!(idempotent_result.deleted_tasks_count, 0);
+    assert_eq!(idempotent_result.deleted_spans_count, 0);
     assert_eq!(idempotent_result.disclosure, CANONICAL_DELETION_DISCLOSURE);
 }
 
@@ -143,7 +143,7 @@ async fn portable_export_excludes_secrets_and_active_approvals() {
     let export_bundle = privacy_service
         .generate_portable_export(
             &owner,
-            &["config".into(), "preferences".into(), "tasks".into()],
+            &["config".into(), "preferences".into(), "spans".into()],
             Utc::now(),
         )
         .await
@@ -202,7 +202,7 @@ async fn imported_connections_require_fresh_authorization() {
             capability_grants: vec![],
             disclaimer: "Advisory context only".into(),
         }),
-        tasks: None,
+        spans: None,
     };
 
     let import_result = privacy_service
@@ -250,11 +250,11 @@ async fn cross_context_isolation_prevents_unauthorized_deletion_and_export() {
         .delete_task_history(&stranger, true)
         .await
         .unwrap();
-    assert_eq!(stranger_delete.deleted_tasks_count, 0);
+    assert_eq!(stranger_delete.deleted_spans_count, 0);
 
     // Owner creates an export
     let owner_export = privacy_service
-        .generate_portable_export(&owner, &["tasks".into()], Utc::now())
+        .generate_portable_export(&owner, &["spans".into()], Utc::now())
         .await
         .unwrap();
 
@@ -373,7 +373,7 @@ async fn historical_action_evidence_remains_interpretable_after_integration_remo
         .propose(
             &owner,
             vox_core::approvals::CreateProposalRequest {
-                task_id: task.id,
+                span_id: task.id,
                 task_run_id: task.run_id,
                 agent_external_key: "bot".into(),
                 capability_external_key: "ephemeral_svc.action".into(),
@@ -442,11 +442,11 @@ async fn historical_action_evidence_remains_interpretable_after_integration_remo
 
     let privacy = PrivacyService::new(db.clone(), None);
     let export = privacy
-        .generate_portable_export(&owner, &["tasks".into()], now)
+        .generate_portable_export(&owner, &["spans".into()], now)
         .await
         .unwrap();
 
-    let tasks_export = export.tasks.expect("tasks must be included");
+    let tasks_export = export.spans.expect("spans must be included");
     let recorded_exec = tasks_export
         .executions
         .iter()

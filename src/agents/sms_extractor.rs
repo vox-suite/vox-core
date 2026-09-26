@@ -17,6 +17,10 @@ pub struct ExtractedSmsEvent {
     pub category: String,
     #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
 }
 
 #[async_trait]
@@ -50,7 +54,9 @@ impl SmsExtracting for GeminiSmsExtractor {
                  {\n\
                    \"relevant\": true|false,\n\
                    \"category\": \"payment\"|\"delivery\"|\"appointment\"|\"travel\"|\"otp\"|\"other\",\n\
-                   \"title\": \"short human-readable title, under 80 characters\"\n\
+                   \"title\": \"short human-readable title, under 80 characters\",\n\
+                   \"amount\": number or null (money spent or received, only for payments),\n\
+                   \"currency\": \"ISO 4217 code like INR\" or null\n\
                  }\n\
                  Set relevant to false for personal/social messages, spam, or anything with no \
                  concrete real-world activity to log. Set category to \"otp\" for any one-time \
@@ -61,7 +67,10 @@ impl SmsExtracting for GeminiSmsExtractor {
             .build();
 
         let raw = agent
-            .prompt(format!("Sender: {}\nMessage: {}", prompt.sender, prompt.body))
+            .prompt(format!(
+                "Sender: {}\nMessage: {}",
+                prompt.sender, prompt.body
+            ))
             .await
             .map_err(|_| AgentError::Provider)?;
 

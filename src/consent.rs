@@ -25,6 +25,7 @@ pub struct ConsentStatus {
     pub granted: bool,
     pub retention_days: i32,
     pub granted_at: Option<DateTime<Utc>>,
+    pub synced_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,7 +52,7 @@ impl ConsentService {
         source: DataSource,
     ) -> Result<ConsentStatus, ConsentError> {
         let row = sqlx::query(
-            "SELECT granted_at, revoked_at, retention_days FROM data_source_consents \
+            "SELECT granted_at, revoked_at, retention_days, synced_until FROM data_source_consents \
              WHERE user_id = $1 AND data_source = $2",
         )
         .bind(user_id)
@@ -67,12 +68,14 @@ impl ConsentService {
                     granted: granted_at.is_some() && revoked_at.is_none(),
                     retention_days: row.get("retention_days"),
                     granted_at,
+                    synced_until: row.get("synced_until"),
                 }
             }
             None => ConsentStatus {
                 granted: false,
                 retention_days: 90,
                 granted_at: None,
+                synced_until: None,
             },
         })
     }
@@ -105,6 +108,7 @@ impl ConsentService {
             granted: true,
             retention_days: row.get("retention_days"),
             granted_at: row.get("granted_at"),
+            synced_until: None,
         })
     }
 
@@ -120,7 +124,30 @@ impl ConsentService {
         Ok(())
     }
 
-    pub async fn is_granted(&self, user_id: Uuid, source: DataSource) -> Result<bool, ConsentError> {
+    pub async fn is_granted(
+        &self,
+        user_id: Uuid,
+        source: DataSource,
+    ) -> Result<bool, ConsentError> {
         Ok(self.status(user_id, source).await?.granted)
+    }
+
+    /// Advances the source's server-side sync watermark, never moving it backward.
+    pub async fn advance_sync_cursor(
+        &self,
+        user_id: Uuid,
+        source: DataSource,
+        until: DateTime<Utc>,
+    ) -> Result<(), ConsentError> {
+        sqlx::query(
+            "UPDATE data_source_consents SET synced_until = GREATEST(COALESCE(synced_until, $3), $3), updated_at = now() \
+             WHERE user_id = $1 AND data_source = $2",
+        )
+        .bind(user_id)
+        .bind(source.as_str())
+        .bind(until)
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 }

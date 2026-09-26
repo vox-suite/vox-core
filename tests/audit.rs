@@ -69,7 +69,7 @@ async fn task_transitions_are_immutable_and_context_scoped() {
     assert!(
         owner_events
             .iter()
-            .any(|event| event.event_type == "task.state_changed")
+            .any(|event| event.event_type == "span.state_changed")
     );
     assert!(owner_events.iter().all(|event| {
         !event

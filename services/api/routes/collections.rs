@@ -10,7 +10,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 use vox_core::{
-    application::collections::{CollectionService, CreateCollectionInput},
+    application::collections::{
+        CollectionService, CollectionServiceError, CreateCollectionInput, UpdateCollectionInput,
+    },
     domain::identity::Actor,
 };
 
@@ -40,7 +42,7 @@ pub async fn create_collection(
     let collection = service
         .create_collection(&actor, input)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(status_for)?;
     Ok((StatusCode::CREATED, Json(collection)))
 }
 
@@ -69,6 +71,55 @@ pub async fn archive_collection(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if archived {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+fn status_for(err: CollectionServiceError) -> StatusCode {
+    match err {
+        CollectionServiceError::Invalid(_) => StatusCode::BAD_REQUEST,
+        CollectionServiceError::NotFound => StatusCode::NOT_FOUND,
+        CollectionServiceError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+pub async fn update_collection(
+    State(service): State<CollectionService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateCollectionInput>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let collection = service
+        .update_collection(&actor, id, input)
+        .await
+        .map_err(status_for)?;
+    Ok(Json(collection))
+}
+
+pub async fn add_collection_span(
+    State(service): State<CollectionService>,
+    Extension(actor): Extension<Actor>,
+    Path((id, span_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    service
+        .add_span(&actor, id, span_id)
+        .await
+        .map_err(status_for)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn remove_collection_span(
+    State(service): State<CollectionService>,
+    Extension(actor): Extension<Actor>,
+    Path((id, span_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let removed = service
+        .remove_span(&actor, id, span_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)

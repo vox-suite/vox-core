@@ -300,7 +300,7 @@ async fn cursors_are_scoped_replayable_and_subscription_secrets_are_one_time() {
     assert!(
         events
             .iter()
-            .any(|event| event.aggregate_id == task.id && event.aggregate_type == "task")
+            .any(|event| event.aggregate_id == task.id && event.aggregate_type == "span")
     );
     assert!(
         events
@@ -686,7 +686,7 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
         .propose(
             &owner,
             vox_core::approvals::CreateProposalRequest {
-                task_id: task.id,
+                span_id: task.id,
                 task_run_id: task.run_id,
                 agent_external_key: "cashier".into(),
                 capability_external_key: "payment_gw.charge".into(),
@@ -736,7 +736,7 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
         .unwrap();
 
     let initial_task_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
+        sqlx::query_scalar("SELECT count(*) FROM spans WHERE user_id = $1")
             .bind(owner.user_id.0)
             .fetch_one(db.pool())
             .await
@@ -785,7 +785,7 @@ async fn external_events_update_existing_action_without_creating_autonomous_task
             .is_err()
     );
 
-    let final_task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE user_id = $1")
+    let final_task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM spans WHERE user_id = $1")
         .bind(owner.user_id.0)
         .fetch_one(db.pool())
         .await

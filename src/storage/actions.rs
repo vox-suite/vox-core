@@ -28,7 +28,7 @@ impl ActionRepository {
             r#"
             INSERT INTO action_proposals (user_id, actor_key, capability, details, details_hash)
             VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, user_id, task_id, job_id, actor_key, connection_id, capability,
+            RETURNING id, user_id, span_id, job_id, actor_key, connection_id, capability,
                       details, details_hash, state, expires_at, created_at, updated_at
             "#,
         )
@@ -45,7 +45,7 @@ impl ActionRepository {
         Ok(ActionProposal {
             id: row.get("id"),
             user_id: row.get("user_id"),
-            task_id: row.get("task_id"),
+            span_id: row.get("span_id"),
             job_id: row.get("job_id"),
             actor_key: row.get("actor_key"),
             connection_id: row.get("connection_id"),

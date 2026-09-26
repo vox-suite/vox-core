@@ -67,7 +67,15 @@ impl SmsIngestionService {
         .fetch_one(self.db.pool())
         .await?;
 
-        self.jobs.enqueue(JobKind::ProcessSmsBatch, batch_id).await?;
+        self.jobs
+            .enqueue(JobKind::ProcessSmsBatch, batch_id)
+            .await?;
+        tracing::info!(%user_id, %batch_id, message_count = messages.len(), "sms batch received and enqueued");
+
+        let newest_received_at = messages.iter().map(|m| m.received_at).max().unwrap();
+        self.consent
+            .advance_sync_cursor(user_id, DataSource::Sms, newest_received_at)
+            .await?;
 
         Ok(batch_id)
     }

@@ -76,7 +76,14 @@ async fn main() {
             .expect("VOX_STATUS_WEBHOOK_KEY must be a 32-byte hex key");
         legacy_state = legacy_state.with_status_secret_store(Arc::new(secrets));
     }
-    let api_state = ApiState::new(legacy_state, db, device_hub, memory, user_events);
+    let api_state = ApiState::new(
+        legacy_state,
+        db,
+        device_hub,
+        memory,
+        user_events,
+        config.google_maps_api_key.clone(),
+    );
     let app = build_api_router(api_state);
 
     tracing::info!("Vox Core API listening on {}", config.bind_address);

@@ -991,7 +991,7 @@ async fn consequential_writes_http_endpoints_require_signed_host_assertion() {
     let now = Utc::now();
     let body_json = json!({
         "host_context": host_req,
-        "task_id": task.id,
+        "span_id": task.id,
         "task_run_id": task.run_id,
         "agent_external_key": "saathi",
         "connection_id": connection.id,

@@ -16,7 +16,7 @@ pub struct AuditEvent {
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: Option<Uuid>,
-    pub task_id: Option<Uuid>,
+    pub span_id: Option<Uuid>,
     pub task_run_id: Option<Uuid>,
     pub proposal_id: Option<Uuid>,
     pub approval_id: Option<Uuid>,
@@ -162,7 +162,7 @@ fn event(row: sqlx::postgres::PgRow) -> Result<AuditEvent, AuditError> {
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::parse_str(s).ok()),
-        task_id: id_from_affected(&affected, "task"),
+        span_id: id_from_affected(&affected, "span"),
         task_run_id: id_from_affected(&affected, "task_run"),
         proposal_id: id_from_affected(&affected, "proposal"),
         approval_id: id_from_affected(&affected, "approval"),

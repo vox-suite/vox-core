@@ -19,7 +19,7 @@ use uuid::Uuid;
 #[derive(Deserialize)]
 pub struct ProposeLodgingBookingRequest {
     pub host_context: HostContextRequest,
-    pub task_id: Uuid,
+    pub span_id: Uuid,
     pub task_run_id: Uuid,
     pub agent_external_key: String,
     pub connection_id: Uuid,
@@ -85,7 +85,7 @@ pub async fn propose(
     match service
         .propose_booking(
             &context,
-            request.task_id,
+            request.span_id,
             request.task_run_id,
             &request.agent_external_key,
             request.connection_id,

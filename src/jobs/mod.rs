@@ -9,8 +9,8 @@ pub enum JobKind {
     ProcessEvent,
     RunSchedule,
     SummarizeConversation,
-    EvaluateTask,
-    ExecuteTask,
+    EvaluateSpan,
+    ExecuteSpan,
     ProcessSmsBatch,
 }
 
@@ -20,8 +20,8 @@ impl JobKind {
             Self::ProcessEvent => "process_event",
             Self::RunSchedule => "run_schedule",
             Self::SummarizeConversation => "summarize_conversation",
-            Self::EvaluateTask => "evaluate_task",
-            Self::ExecuteTask => "execute_task",
+            Self::EvaluateSpan => "evaluate_span",
+            Self::ExecuteSpan => "execute_span",
             Self::ProcessSmsBatch => "process_sms_batch",
         }
     }
@@ -31,8 +31,8 @@ impl JobKind {
             "process_event" => Some(Self::ProcessEvent),
             "run_schedule" => Some(Self::RunSchedule),
             "summarize_conversation" => Some(Self::SummarizeConversation),
-            "evaluate_task" => Some(Self::EvaluateTask),
-            "execute_task" => Some(Self::ExecuteTask),
+            "evaluate_span" => Some(Self::EvaluateSpan),
+            "execute_span" => Some(Self::ExecuteSpan),
             "process_sms_batch" => Some(Self::ProcessSmsBatch),
             _ => None,
         }

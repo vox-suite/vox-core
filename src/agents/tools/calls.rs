@@ -209,9 +209,9 @@ impl Tool for ScheduleOutboundCall {
 
         let phone_number = phone.ok_or(CallToolError::NoPhoneNumber)?;
 
-        let task_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO tasks (user_id, title, instruction, status, execution_type, due_at) \
-             VALUES ($1, $2, $3, 'pending', 'autonomous', $4) \
+        let span_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO spans (user_id, title, notes, category, source, status, execution_type, start_at, due_at) \
+             VALUES ($1, $2, $3, 'call', 'agent', 'planned', 'autonomous', $4, $4) \
              RETURNING id",
         )
         .bind(self.owner.user_id.0)
@@ -222,12 +222,12 @@ impl Tool for ScheduleOutboundCall {
         .await?;
 
         let schedule_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO schedules (user_id, task_id, instruction, kind, timezone, next_run_at, state) \
+            "INSERT INTO schedules (user_id, span_id, instruction, kind, timezone, next_run_at, state) \
              VALUES ($1, $2, $3, 'once', 'UTC', $4, 'active') \
              RETURNING id",
         )
         .bind(self.owner.user_id.0)
-        .bind(task_id)
+        .bind(span_id)
         .bind(opening)
         .bind(target_time)
         .fetch_one(db.pool())
@@ -235,7 +235,7 @@ impl Tool for ScheduleOutboundCall {
 
         tracing::info!(
             schedule_id = %schedule_id,
-            task_id = %task_id,
+            span_id = %span_id,
             target_time = %target_time,
             phone_number = %phone_number,
             reason = %reason,
@@ -245,7 +245,7 @@ impl Tool for ScheduleOutboundCall {
         Ok(json!({
             "status": "scheduled",
             "schedule_id": schedule_id.to_string(),
-            "task_id": task_id.to_string(),
+            "span_id": span_id.to_string(),
             "phone_number": phone_number,
             "scheduled_time": target_time.to_rfc3339(),
             "reason": reason,

@@ -3,7 +3,7 @@ pub mod collections;
 pub mod devices;
 pub mod records;
 pub mod schemas;
-pub mod tasks;
+pub mod spans;
 /**
 * Database repositories and SQLx persistence implementations.
 */
@@ -14,5 +14,5 @@ pub use collections::*;
 pub use devices::*;
 pub use records::*;
 pub use schemas::*;
-pub use tasks::*;
+pub use spans::*;
 pub use users::*;

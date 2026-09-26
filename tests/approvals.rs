@@ -295,13 +295,13 @@ async fn prepare(
 }
 
 fn proposal(
-    task_id: Uuid,
+    span_id: Uuid,
     task_run_id: Uuid,
     connection_id: Uuid,
     expires_at: chrono::DateTime<Utc>,
 ) -> CreateProposalRequest {
     CreateProposalRequest {
-        task_id,
+        span_id,
         task_run_id,
         agent_external_key: "planner".into(),
         capability_external_key: "calendar.write".into(),

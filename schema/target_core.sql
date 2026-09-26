@@ -101,46 +101,70 @@ CREATE TABLE messages (
     CONSTRAINT messages_conversation_sequence_key UNIQUE (conversation_id, sequence_number)
 );
 
--- 7. collections: Reusable groupings (projects, trips, courses, life areas)
+-- 7. collections: Groupings of spans (trips, events, courses, life areas)
 CREATE TABLE collections (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK (length(btrim(name)) > 0),
     description TEXT NOT NULL DEFAULT '',
-    kind TEXT NOT NULL DEFAULT 'project' CHECK (kind IN ('project', 'trip', 'course', 'area')),
+    kind TEXT NOT NULL DEFAULT 'custom' CHECK (kind IN ('trip', 'event', 'course', 'area', 'custom')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT collections_metadata_is_object CHECK (jsonb_typeof(metadata) = 'object')
+    CONSTRAINT collections_id_user_key UNIQUE (id, user_id),
+    CONSTRAINT collections_metadata_is_object CHECK (jsonb_typeof(metadata) = 'object'),
+    CONSTRAINT collections_window_order CHECK (starts_at IS NULL OR ends_at IS NULL OR ends_at >= starts_at)
 );
 
--- 8. tasks: User tasks and execution intent
-CREATE TABLE tasks (
+-- 8. spans: Anything that occupies time, past, present, or planned
+CREATE TABLE spans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    collection_id UUID REFERENCES collections(id) ON DELETE SET NULL,
+    parent_id UUID,
     title TEXT NOT NULL CHECK (length(btrim(title)) > 0),
-    instruction TEXT NOT NULL CHECK (length(btrim(instruction)) > 0),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'evaluating', 'executing', 'waiting_user', 'completed', 'failed', 'cancelled')),
-    priority INTEGER NOT NULL DEFAULT 0,
-    execution_type TEXT NOT NULL DEFAULT 'manual_human' CHECK (execution_type IN ('autonomous', 'interactive', 'manual_human')),
-    feasibility_reasoning TEXT,
-    execution_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+    notes TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'general' CHECK (length(btrim(category)) > 0),
+    source TEXT NOT NULL DEFAULT 'user' CHECK (length(btrim(source)) > 0),
+    source_ref TEXT,
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'active', 'waiting_user', 'done', 'failed', 'cancelled')),
+    start_at TIMESTAMPTZ,
+    end_at TIMESTAMPTZ,
     due_at TIMESTAMPTZ,
+    priority INTEGER NOT NULL DEFAULT 0,
+    execution_type TEXT CHECK (execution_type IN ('autonomous', 'interactive', 'manual_human')),
+    execution_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(data) = 'object'),
     version INTEGER NOT NULL DEFAULT 1,
     cancellation_requested_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at TIMESTAMPTZ
+    CONSTRAINT spans_id_user_key UNIQUE (id, user_id),
+    CONSTRAINT spans_parent_owner_fk FOREIGN KEY (parent_id, user_id) REFERENCES spans(id, user_id) ON DELETE SET NULL (parent_id),
+    CONSTRAINT spans_not_own_parent CHECK (parent_id IS NULL OR parent_id <> id),
+    CONSTRAINT spans_time_order CHECK (start_at IS NULL OR end_at IS NULL OR end_at >= start_at),
+    CONSTRAINT spans_source_ref_key UNIQUE (user_id, source, source_ref)
+);
+
+CREATE TABLE collection_spans (
+    collection_id UUID NOT NULL,
+    span_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (collection_id, span_id),
+    FOREIGN KEY (collection_id, user_id) REFERENCES collections(id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (span_id, user_id) REFERENCES spans(id, user_id) ON DELETE CASCADE
 );
 
 -- 9. schedules: Temporal intent (one-off reminders or recurring ticker)
 CREATE TABLE schedules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    span_id UUID REFERENCES spans(id) ON DELETE SET NULL,
     instruction TEXT NOT NULL CHECK (length(btrim(instruction)) > 0),
     kind TEXT NOT NULL CHECK (kind IN ('once', 'recurring')),
     recurrence_expression TEXT,
@@ -159,9 +183,9 @@ CREATE TABLE schedules (
 CREATE TABLE jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('process_event', 'run_schedule', 'dispatch_action', 'summarize_conversation', 'evaluate_task', 'execute_task')),
+    kind TEXT NOT NULL CHECK (kind IN ('process_event', 'run_schedule', 'dispatch_action', 'summarize_conversation', 'evaluate_span', 'execute_span', 'process_sms_batch')),
     payload_reference_id UUID,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    span_id UUID REFERENCES spans(id) ON DELETE SET NULL,
     schedule_id UUID REFERENCES schedules(id) ON DELETE SET NULL,
     source_event_id UUID,
     occurrence_at TIMESTAMPTZ,
@@ -290,7 +314,7 @@ CREATE TABLE connections (
 CREATE TABLE action_proposals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    span_id UUID REFERENCES spans(id) ON DELETE SET NULL,
     job_id UUID REFERENCES jobs(id) ON DELETE SET NULL,
     actor_key TEXT NOT NULL,
     connection_id UUID REFERENCES connections(id) ON DELETE SET NULL,
@@ -397,8 +421,10 @@ CREATE INDEX schedules_active_idx ON schedules (next_run_at) WHERE state = 'acti
 
 CREATE INDEX messages_conv_seq_idx ON messages (conversation_id, sequence_number);
 
-CREATE INDEX tasks_user_status_idx ON tasks (user_id, status, due_at, id);
-CREATE INDEX tasks_collection_idx ON tasks (collection_id);
+CREATE INDEX spans_user_start_idx ON spans (user_id, start_at);
+CREATE INDEX spans_user_status_idx ON spans (user_id, status, due_at);
+CREATE INDEX spans_parent_idx ON spans (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX collection_spans_span_idx ON collection_spans (span_id);
 
 CREATE INDEX collections_user_kind_idx ON collections (user_id, kind, status);
 
@@ -456,12 +482,6 @@ SELECT
     id, user_id, instruction, kind AS schedule_kind, recurrence_expression, timezone, next_run_at, state, created_at, updated_at
 FROM schedules;
 
-CREATE OR REPLACE VIEW projects AS
-SELECT 
-    id, user_id, name, description, status, NULL::vector(768) AS embedding, created_at, updated_at
-FROM collections
-WHERE kind = 'project';
-
 CREATE OR REPLACE VIEW client_devices AS
 SELECT 
     id, user_id, device_identifier, platform, label AS device_name, is_active, last_seen_at, capabilities AS telemetry, created_at, updated_at
@@ -511,7 +531,8 @@ ALTER TABLE auth_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE spans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE collection_spans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_attempts ENABLE ROW LEVEL SECURITY;
@@ -534,7 +555,8 @@ CREATE POLICY "service_role_auth_sessions" ON auth_sessions FOR ALL TO service_r
 CREATE POLICY "service_role_conversations" ON conversations FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_messages" ON messages FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_collections" ON collections FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY "service_role_tasks" ON tasks FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_spans" ON spans FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_collection_spans" ON collection_spans FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_schedules" ON schedules FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_jobs" ON jobs FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_job_attempts" ON job_attempts FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -559,7 +581,8 @@ CREATE POLICY "channel_identities_user_all" ON channel_identities FOR ALL TO aut
 CREATE POLICY "auth_sessions_user_all" ON auth_sessions FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "conversations_user_all" ON conversations FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "collections_user_all" ON collections FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY "tasks_user_all" ON tasks FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "spans_user_all" ON spans FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "collection_spans_user_all" ON collection_spans FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "schedules_user_all" ON schedules FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "records_user_all" ON records FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 CREATE POLICY "devices_user_all" ON devices FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
@@ -615,5 +638,4 @@ ALTER VIEW user_goals SET (security_invoker = true);
 ALTER VIEW user_insights SET (security_invoker = true);
 ALTER VIEW events SET (security_invoker = true);
 ALTER VIEW scheduled_tasks SET (security_invoker = true);
-ALTER VIEW projects SET (security_invoker = true);
 ALTER VIEW client_devices SET (security_invoker = true);

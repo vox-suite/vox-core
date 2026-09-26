@@ -3,7 +3,7 @@
   "info": {
     "title": "Vox Core API",
     "version": "1.0.0",
-    "description": "Unified API for Vox Core: consumer identity, conversations, tasks, collections, records, schemas, jobs, events, and provider connections."
+    "description": "Unified API for Vox Core: consumer identity, conversations, spans, collections, records, schemas, jobs, events, and provider connections."
   },
   "servers": [
     {
@@ -64,31 +64,6 @@
           }
         }
       },
-      "Task": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "title": {
-            "type": "string"
-          },
-          "instruction": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "priority": {
-            "type": "integer"
-          },
-          "due_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "Collection": {
         "type": "object",
         "properties": {
@@ -102,14 +77,32 @@
           "kind": {
             "type": "string",
             "enum": [
-              "project",
               "trip",
+              "event",
               "course",
-              "area"
+              "area",
+              "custom"
             ]
           },
           "status": {
             "type": "string"
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "span_count": {
+            "type": "integer"
           }
         }
       },
@@ -147,6 +140,91 @@
           "occurred_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Span": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "active",
+              "waiting_user",
+              "done",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "execution_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "autonomous",
+              "interactive",
+              "manual_human",
+              null
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "collection_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "version": {
+            "type": "integer"
           }
         }
       }
@@ -212,9 +290,9 @@
         }
       }
     },
-    "/v1/tasks": {
+    "/v1/spans": {
       "get": {
-        "summary": "List user tasks",
+        "summary": "List spans overlapping from/to, optionally by collection_id, status, or unscheduled",
         "security": [
           {
             "SessionAuth": []
@@ -222,12 +300,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Tasks list"
+            "description": "Spans list"
           }
         }
       },
       "post": {
-        "summary": "Create user task",
+        "summary": "Create span",
         "security": [
           {
             "SessionAuth": []
@@ -235,7 +313,7 @@
         ],
         "responses": {
           "201": {
-            "description": "Task created"
+            "description": "Span created"
           }
         }
       }
@@ -264,6 +342,75 @@
         "responses": {
           "201": {
             "description": "Collection created"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}": {
+      "get": {
+        "summary": "Get collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection updated"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Archive collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Collection archived"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/spans/{span_id}": {
+      "put": {
+        "summary": "Add span to collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span added"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove span from collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span removed"
           }
         }
       }
@@ -501,67 +648,43 @@
         ]
       }
     },
-    "/v1/tasks/{id}": {
-      "patch": {
-        "summary": "Update task with optimistic concurrency",
+    "/v1/spans/{id}": {
+      "get": {
+        "summary": "Get span",
         "security": [
           {
             "SessionAuth": []
           }
         ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "expected_version"
-                ],
-                "properties": {
-                  "title": {
-                    "type": "string"
-                  },
-                  "instruction": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "type": "string"
-                  },
-                  "expected_version": {
-                    "type": "integer"
-                  }
-                }
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
-            "description": "Task updated successfully"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Task not found"
-          },
-          "409": {
-            "description": "Optimistic concurrency conflict"
+            "description": "Span"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Span updated"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span deleted"
           }
         }
       }

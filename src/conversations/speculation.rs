@@ -51,12 +51,12 @@ impl ConversationService {
         let (plan, confidence, _) = tokio::time::timeout(Duration::from_millis(800), jev.choice(
             json!({"text":text}),
             "Select only a read-only lookup explicitly requested by this text. For changes, ambiguous or incomplete requests choose none. Lists return all current items without filters.",
-            &[("none", Some("No safe lookup")), ("tasks", Some("Read current task list")), ("projects", Some("Read project list")), ("profile", Some("Read caller profile")), ("records", Some("Read personal records")), ("schedule", Some("Read upcoming schedule")), ("web", Some("Search web for live facts"))],
+            &[("none", Some("No safe lookup")), ("spans", Some("Read timeline: activities, plans, to-dos")), ("collections", Some("Read collections like trips")), ("profile", Some("Read caller profile")), ("records", Some("Read personal records")), ("schedule", Some("Read upcoming schedule")), ("web", Some("Search web for live facts"))],
         )).await.ok()?.ok()?;
         (confidence >= 0.85
             && matches!(
                 plan.as_str(),
-                "tasks" | "projects" | "profile" | "records" | "schedule" | "web"
+                "spans" | "collections" | "profile" | "records" | "schedule" | "web"
             ))
         .then_some(plan)
     }
@@ -120,8 +120,8 @@ impl ConversationService {
             }
             let sql = match tool.as_str() {
                 "schedule" => "SELECT to_jsonb(t) FROM (SELECT * FROM schedules WHERE user_id = $1 LIMIT 50) t",
-                "tasks" => "SELECT to_jsonb(t) FROM (SELECT * FROM tasks WHERE user_id = $1 LIMIT 50) t",
-                "projects" => "SELECT to_jsonb(t) FROM (SELECT * FROM collections WHERE user_id = $1 AND kind = 'project' LIMIT 50) t",
+                "spans" => "SELECT to_jsonb(t) FROM (SELECT * FROM spans WHERE user_id = $1 ORDER BY start_at DESC NULLS FIRST LIMIT 50) t",
+                "collections" => "SELECT to_jsonb(t) FROM (SELECT * FROM collections WHERE user_id = $1 AND status <> 'archived' LIMIT 50) t",
                 "profile" => "SELECT to_jsonb(t) FROM (SELECT display_name, profile_facts, persona FROM users WHERE id = $1) t",
                 "records" => "SELECT to_jsonb(t) FROM (SELECT * FROM records WHERE user_id = $1 LIMIT 50) t",
                 _ => return None,

@@ -79,7 +79,7 @@ impl ScheduleHandler {
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query(
-            "SELECT user_id, user_context_id, task_id, instruction FROM schedules WHERE id = $1",
+            "SELECT user_id, user_context_id, span_id, instruction FROM schedules WHERE id = $1",
         )
         .bind(schedule_id.0)
         .fetch_optional(self.db.pool())
@@ -91,7 +91,7 @@ impl ScheduleHandler {
             user_context_id: UserContextId(row.get("user_context_id")),
             user_id,
         };
-        let task_id: Option<uuid::Uuid> = row.get("task_id");
+        let span_id: Option<uuid::Uuid> = row.get("span_id");
         let instruction: String = row.get("instruction");
 
         if let Some(jev) = &self.jev {
@@ -190,11 +190,11 @@ impl ScheduleHandler {
         }
 
         let _ = sqlx::query(
-            "UPDATE tasks SET status = 'completed', completed_at = now(), updated_at = now() \
+            "UPDATE spans SET status = 'done', completed_at = now(), updated_at = now() \
              WHERE id = $1 AND user_context_id = $2 AND user_id = $3 \
-               AND status IN ('pending', 'executing')",
+               AND status IN ('planned', 'active')",
         )
-        .bind(task_id)
+        .bind(span_id)
         .bind(owner.user_context_id.0)
         .bind(user_id.0)
         .execute(self.db.pool())

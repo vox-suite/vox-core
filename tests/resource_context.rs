@@ -10,9 +10,9 @@ use vox_core::{
     agents::{
         AgentError,
         conversation::{ConversationPrompt, ConversationResponder},
-        tools::tasks::{
-            CreateTask, CreateTaskArgs, GetTask, GetTaskArgs, ListTasks, ListTasksArgs,
-            TaskToolError, UpdateTask, UpdateTaskArgs,
+        tools::spans::{
+            CreateSpan, CreateSpanArgs, GetSpan, GetSpanArgs, ListSpans, ListSpansArgs,
+            SpanToolError, UpdateSpan, UpdateSpanArgs,
         },
     },
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
@@ -188,7 +188,7 @@ async fn conversations_and_schedules_deny_cross_context_observation_and_mutation
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL"]
-async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
+async fn span_tools_scope_every_read_and_write_to_the_resource_owner() {
     let db = setup().await;
     let identities = IdentityService::new(db.clone());
     let alice = identities
@@ -201,99 +201,92 @@ async fn task_tools_scope_every_read_and_write_to_the_resource_owner() {
         .unwrap();
     let mut context = ToolContext::new();
 
-    let bob_project_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO projects (user_id, name) VALUES ($1, 'Bob private project') RETURNING id",
+    let bob_collection_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO collections (user_id, name) VALUES ($1, 'Bob private trip') RETURNING id",
     )
     .bind(bob.user_id.0)
     .fetch_one(db.pool())
     .await
     .unwrap();
-    let cross_owner_project = CreateTask::new(Some(db.clone()), alice, UserEventHub::default())
+    let span_args = |title: &str, collection_id: Option<String>| CreateSpanArgs {
+        title: title.into(),
+        notes: None,
+        category: None,
+        start_at: None,
+        end_at: None,
+        due_at: None,
+        status: None,
+        execution_type: None,
+        collection_name: None,
+        collection_id,
+        amount: None,
+        currency: None,
+    };
+    let cross_owner = CreateSpan::new(Some(db.clone()), alice, UserEventHub::default())
         .call(
             &mut context,
-            CreateTaskArgs {
-                title: "Must not join Bob's project".into(),
-                instruction: None,
-                project_name: None,
-                project_id: Some(bob_project_id.to_string()),
-                execution_type: None,
-                due_at: None,
-            },
+            span_args(
+                "Must not join Bob's collection",
+                Some(bob_collection_id.to_string()),
+            ),
         )
         .await;
-    assert!(matches!(
-        cross_owner_project,
-        Err(TaskToolError::NotFound(_))
-    ));
+    assert!(matches!(cross_owner, Err(SpanToolError::NotFound(_))));
 
-    let created = CreateTask::new(Some(db.clone()), alice, UserEventHub::default())
-        .call(
-            &mut context,
-            CreateTaskArgs {
-                title: "Alice private task".into(),
-                instruction: None,
-                project_name: None,
-                project_id: None,
-                execution_type: None,
-                due_at: None,
-            },
-        )
+    let created = CreateSpan::new(Some(db.clone()), alice, UserEventHub::default())
+        .call(&mut context, span_args("Alice private span", None))
         .await
         .unwrap();
-    let task_id = created["task_id"].as_str().unwrap().to_owned();
+    let span_id = created["span"]["id"].as_str().unwrap().to_owned();
 
-    let bob_list = ListTasks::new(Some(db.clone()), bob)
+    let bob_list = ListSpans::new(Some(db.clone()), bob)
         .call(
             &mut context,
-            ListTasksArgs {
-                status: Some("all".into()),
-                project_id: None,
+            ListSpansArgs {
+                from: None,
+                to: None,
+                status: None,
+                collection_id: None,
+                unscheduled: None,
                 limit: None,
             },
         )
         .await
         .unwrap();
-    assert_eq!(bob_list["tasks"].as_array().unwrap().len(), 0);
+    assert_eq!(bob_list["spans"].as_array().unwrap().len(), 0);
 
-    let bob_get = GetTask::new(Some(db.clone()), bob)
+    let bob_get = GetSpan::new(Some(db.clone()), bob)
         .call(
             &mut context,
-            GetTaskArgs {
-                task_id: Some(task_id.clone()),
-                title_query: None,
+            GetSpanArgs {
+                span_id: span_id.clone(),
             },
         )
         .await;
-    assert!(matches!(bob_get, Err(TaskToolError::NotFound(_))));
+    assert!(matches!(bob_get, Err(SpanToolError::NotFound(_))));
 
-    let bob_update = UpdateTask::new(Some(db.clone()), bob, UserEventHub::default())
-        .call(
-            &mut context,
-            UpdateTaskArgs {
-                task_id: task_id.clone(),
-                status: Some("cancelled".into()),
-                feasibility_reasoning: None,
-                execution_result: None,
-            },
-        )
+    let update = |status: &str| UpdateSpanArgs {
+        span_id: span_id.clone(),
+        title: None,
+        notes: None,
+        status: Some(status.into()),
+        start_at: None,
+        end_at: None,
+        due_at: None,
+        execution_result: None,
+    };
+    let bob_update = UpdateSpan::new(Some(db.clone()), bob, UserEventHub::default())
+        .call(&mut context, update("cancelled"))
         .await;
-    assert!(matches!(bob_update, Err(TaskToolError::NotFound(_))));
+    assert!(matches!(bob_update, Err(SpanToolError::NotFound(_))));
 
-    UpdateTask::new(Some(db.clone()), alice, UserEventHub::default())
-        .call(
-            &mut context,
-            UpdateTaskArgs {
-                task_id: task_id.clone(),
-                status: Some("completed".into()),
-                feasibility_reasoning: None,
-                execution_result: None,
-            },
-        )
+    UpdateSpan::new(Some(db.clone()), alice, UserEventHub::default())
+        .call(&mut context, update("done"))
         .await
         .unwrap();
 
-    let stored_user: Uuid = sqlx::query_scalar("SELECT user_id FROM tasks WHERE id = $1")
-        .bind(Uuid::parse_str(&task_id).unwrap())
+    let stored_user: Uuid = sqlx::query_scalar("SELECT user_id FROM spans WHERE id = $1")
+        .bind(Uuid::parse_str(&span_id).unwrap())
         .fetch_one(db.pool())
         .await
         .unwrap();

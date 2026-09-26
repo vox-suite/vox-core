@@ -177,7 +177,7 @@ async fn approved_request(
         .propose(
             context,
             CreateProposalRequest {
-                task_id: task.id,
+                span_id: task.id,
                 task_run_id: task.run_id,
                 agent_external_key: "planner".into(),
                 capability_external_key: "calendar.write".into(),

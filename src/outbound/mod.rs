@@ -16,7 +16,7 @@ pub struct OutboundCallRecord {
     pub id: Uuid,
     pub user_context_id: Option<UserContextId>,
     pub user_id: UserId,
-    pub task_id: Option<Uuid>,
+    pub span_id: Option<Uuid>,
     pub schedule_id: Option<Uuid>,
     pub phone_number: String,
     pub reason: String,
@@ -66,7 +66,7 @@ impl OutboundCallService {
         reason: &str,
         opening_instruction: &str,
         schedule_id: Option<Uuid>,
-        task_id: Option<Uuid>,
+        span_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone_clean = phone_number.trim();
         if phone_clean.is_empty() {
@@ -119,18 +119,18 @@ impl OutboundCallService {
             "opening_instruction": opening_clean,
             "conversation_id": conversation_id,
             "schedule_id": schedule_id,
-            "task_id": task_id,
+            "span_id": span_id,
         });
         let dedupe_key = format!("outbound:{}:{}", owner.user_id.0, call_id);
         let job_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO jobs (user_id, kind, payload_reference_id, task_id, schedule_id, \
+            "INSERT INTO jobs (user_id, kind, payload_reference_id, span_id, schedule_id, \
                  checkpoint, state, dedupe_key) \
              VALUES ($1, 'dispatch_action', $2, $3, $4, $5, 'running', $6) \
              RETURNING id",
         )
         .bind(owner.user_id.0)
         .bind(conversation_id)
-        .bind(task_id)
+        .bind(span_id)
         .bind(schedule_id)
         .bind(&checkpoint)
         .bind(&dedupe_key)
@@ -164,7 +164,7 @@ impl OutboundCallService {
                 "opening_instruction": opening_clean,
                 "conversation_id": conversation_id,
                 "schedule_id": schedule_id,
-                "task_id": task_id,
+                "span_id": span_id,
                 "provider_call_id": response.provider_call_id,
                 "state": "in_progress",
             });
@@ -193,7 +193,7 @@ impl OutboundCallService {
             id: call_id,
             user_context_id: Some(owner.user_context_id),
             user_id: owner.user_id,
-            task_id,
+            span_id,
             schedule_id,
             phone_number: phone_clean.to_string(),
             reason: reason_clean.to_string(),
@@ -211,7 +211,7 @@ impl OutboundCallService {
         reason: &str,
         opening_instruction: &str,
         schedule_id: Option<Uuid>,
-        task_id: Option<Uuid>,
+        span_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone: Option<String> = sqlx::query_scalar(
             "SELECT normalized_external_id FROM channel_identities \
@@ -229,7 +229,7 @@ impl OutboundCallService {
             reason,
             opening_instruction,
             schedule_id,
-            task_id,
+            span_id,
         )
         .await
     }

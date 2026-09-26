@@ -509,7 +509,7 @@ impl ExpediaLodgingService {
     pub async fn propose_booking(
         &self,
         context: &ResolvedUserContext,
-        task_id: Uuid,
+        span_id: Uuid,
         task_run_id: Uuid,
         agent_external_key: &str,
         connection_id: Uuid,
@@ -599,7 +599,7 @@ impl ExpediaLodgingService {
             .propose(
                 context,
                 CreateProposalRequest {
-                    task_id,
+                    span_id,
                     task_run_id,
                     agent_external_key: agent_external_key.into(),
                     capability_external_key: EXPEDIA_CAPABILITY_LODGING_BOOK.into(),

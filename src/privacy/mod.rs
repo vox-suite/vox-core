@@ -50,14 +50,14 @@ impl Default for DeclaredRetentionPolicy {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeleteHistoryResult {
-    pub deleted_tasks_count: usize,
+    pub deleted_spans_count: usize,
     pub deleted_conversations_count: usize,
     pub disclosure: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PruneResult {
-    pub pruned_tasks_count: usize,
+    pub pruned_spans_count: usize,
     pub pruned_conversations_count: usize,
     pub pruned_jobs_count: usize,
     pub retention_cutoff: DateTime<Utc>,
@@ -121,10 +121,13 @@ pub struct ExportedPreferences {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ExportedTask {
+pub struct ExportedSpan {
     pub id: Uuid,
     pub title: String,
+    pub category: String,
     pub status: String,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -147,8 +150,8 @@ pub struct ExportedAuditEvent {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ExportedTasks {
-    pub tasks: Vec<ExportedTask>,
+pub struct ExportedSpans {
+    pub spans: Vec<ExportedSpan>,
     pub executions: Vec<ExportedExecution>,
     pub audit_events: Vec<ExportedAuditEvent>,
 }
@@ -165,7 +168,7 @@ pub struct PortableExportBundle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferences: Option<ExportedPreferences>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<ExportedTasks>,
+    pub spans: Option<ExportedSpans>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -241,15 +244,15 @@ impl PrivacyService {
     ) -> Result<DeleteHistoryResult, PrivacyError> {
         let mut tx = self.db.pool().begin().await?;
 
-        // 1. Delete associated jobs for tasks belonging to user
+        // 1. Delete associated jobs for spans belonging to user
         let deleted_jobs = sqlx::query("DELETE FROM jobs WHERE user_context_id = $1")
             .bind(context.id.0)
             .execute(&mut *tx)
             .await?
             .rows_affected() as usize;
 
-        // 2. Delete tasks belonging to user
-        let deleted_tasks = sqlx::query("DELETE FROM tasks WHERE user_context_id = $1")
+        // 2. Delete spans belonging to user
+        let deleted_spans = sqlx::query("DELETE FROM spans WHERE user_context_id = $1")
             .bind(context.id.0)
             .execute(&mut *tx)
             .await?
@@ -284,20 +287,20 @@ impl PrivacyService {
         tracing::info!(
             user_id = %context.user_id.0,
             user_context_id = %context.id.0,
-            deleted_tasks,
+            deleted_spans,
             deleted_jobs,
             deleted_convs,
             "Executed platform-controlled task history deletion"
         );
 
         Ok(DeleteHistoryResult {
-            deleted_tasks_count: deleted_tasks,
+            deleted_spans_count: deleted_spans,
             deleted_conversations_count: deleted_convs,
             disclosure: self.policy.external_limitations_disclosure.clone(),
         })
     }
 
-    /// Prune tasks and jobs older than the declared retention policy cutoff.
+    /// Prune finished actionable spans and jobs older than the declared retention policy cutoff.
     /// Honors mandatory audit retention hold (does not touch audit events younger than audit_retention_days).
     pub async fn apply_retention_prune(
         &self,
@@ -316,9 +319,9 @@ impl PrivacyService {
                 .await?
                 .rows_affected() as usize;
 
-        // Prune completed/failed/cancelled tasks older than task_cutoff
-        let pruned_tasks = sqlx::query(
-            "DELETE FROM tasks WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at < $1",
+        // Prune finished actionable spans older than task_cutoff; lived history stays
+        let pruned_spans = sqlx::query(
+            "DELETE FROM spans WHERE execution_type IS NOT NULL AND status IN ('done', 'failed', 'cancelled') AND updated_at < $1",
         )
         .bind(task_cutoff)
         .execute(&mut *tx)
@@ -341,7 +344,7 @@ impl PrivacyService {
         tx.commit().await?;
 
         Ok(PruneResult {
-            pruned_tasks_count: pruned_tasks,
+            pruned_spans_count: pruned_spans,
             pruned_conversations_count: pruned_convs,
             pruned_jobs_count: pruned_jobs,
             retention_cutoff: task_cutoff,
@@ -372,7 +375,7 @@ impl PrivacyService {
             disclosure: self.policy.external_limitations_disclosure.clone(),
             config: None,
             preferences: None,
-            tasks: None,
+            spans: None,
         };
 
         for cat in categories {
@@ -385,9 +388,9 @@ impl PrivacyService {
                     let preferences = self.export_preferences(context).await?;
                     bundle.preferences = Some(preferences);
                 }
-                "tasks" => {
-                    let tasks = self.export_tasks(context).await?;
-                    bundle.tasks = Some(tasks);
+                "spans" => {
+                    let spans = self.export_spans(context).await?;
+                    bundle.spans = Some(spans);
                 }
                 other => {
                     return Err(PrivacyError::Invalid(format!("unknown category: {other}")));
@@ -738,23 +741,26 @@ impl PrivacyService {
         })
     }
 
-    async fn export_tasks(
+    async fn export_spans(
         &self,
         context: &ResolvedUserContext,
-    ) -> Result<ExportedTasks, PrivacyError> {
-        let task_rows = sqlx::query(
-            "SELECT id, title, status, created_at FROM tasks WHERE user_context_id = $1 ORDER BY created_at DESC LIMIT 500",
+    ) -> Result<ExportedSpans, PrivacyError> {
+        let span_rows = sqlx::query(
+            "SELECT id, title, category, status, start_at, end_at, created_at FROM spans WHERE user_context_id = $1 ORDER BY created_at DESC",
         )
         .bind(context.id.0)
         .fetch_all(self.db.pool())
         .await?;
 
-        let tasks = task_rows
+        let spans = span_rows
             .into_iter()
-            .map(|r| ExportedTask {
+            .map(|r| ExportedSpan {
                 id: r.get("id"),
                 title: r.get("title"),
+                category: r.get("category"),
                 status: r.get("status"),
+                start_at: r.get("start_at"),
+                end_at: r.get("end_at"),
                 created_at: r.get("created_at"),
             })
             .collect();
@@ -801,8 +807,8 @@ impl PrivacyService {
             })
             .collect();
 
-        Ok(ExportedTasks {
-            tasks,
+        Ok(ExportedSpans {
+            spans,
             executions,
             audit_events,
         })

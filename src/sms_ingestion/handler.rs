@@ -1,4 +1,5 @@
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -7,7 +8,9 @@ use crate::{
     agents::sms_extractor::{ExtractedSmsEvent, SmsExtracting, SmsPrompt},
     core_api_client::{DeviceDispatcher, DispatchDeviceRequest},
     db::Db,
+    domain::spans::{NewSpan, SpanStatus},
     sms_ingestion::SmsMessage,
+    storage::spans::SpanRepository,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -53,31 +56,62 @@ impl SmsBatchHandler {
         let user_id: Uuid = row.get("user_id");
         let messages_json: serde_json::Value = row.get("messages");
         let messages: Vec<SmsMessage> = serde_json::from_value(messages_json).unwrap_or_default();
+        let total = messages.len();
+        let (mut otp_skipped, mut classify_failed, mut not_relevant, mut written) = (0, 0, 0, 0);
 
         for message in messages {
             if looks_like_otp(&message.body) {
+                otp_skipped += 1;
                 continue;
             }
 
             let Some(extracted) = self.classify(user_id, &message).await else {
+                classify_failed += 1;
                 continue;
             };
 
             if !extracted.relevant || extracted.category == "otp" {
+                not_relevant += 1;
                 continue;
             }
 
-            sqlx::query(
-                "INSERT INTO device_timeline_entries (user_id, source, category, title, kind, start_at, sms_batch_id) \
-                 VALUES ($1, 'sms', $2, $3, 'completed', $4, $5)",
-            )
-            .bind(user_id)
-            .bind(&extracted.category)
-            .bind(&extracted.title)
-            .bind(message.received_at)
-            .bind(batch_id)
-            .execute(self.db.pool())
-            .await?;
+            let digest = Sha256::digest(format!(
+                "{}\n{}\n{}",
+                message.sender,
+                message.received_at.timestamp_millis(),
+                message.body
+            ));
+            let category = if extracted.category == "payment" {
+                "expense".to_string()
+            } else {
+                extracted.category
+            };
+            let title = if extracted.title.trim().is_empty() {
+                format!("SMS from {}", message.sender)
+            } else {
+                extracted.title
+            };
+            SpanRepository::new(self.db.pool().clone())
+                .record(
+                    user_id,
+                    NewSpan {
+                        title,
+                        category: Some(category),
+                        source: Some("sms".into()),
+                        source_ref: Some(hex::encode(digest)),
+                        status: Some(SpanStatus::Done),
+                        start_at: Some(message.received_at),
+                        data: Some(serde_json::json!({
+                            "sender": message.sender,
+                            "amount": extracted.amount,
+                            "currency": extracted.currency,
+                            "sms_batch_id": batch_id,
+                        })),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            written += 1;
         }
 
         sqlx::query("UPDATE sms_batches SET status = 'processed', processed_at = $1 WHERE id = $2")
@@ -85,6 +119,11 @@ impl SmsBatchHandler {
             .bind(batch_id)
             .execute(self.db.pool())
             .await?;
+
+        tracing::info!(
+            %batch_id, %user_id, total, otp_skipped, classify_failed, not_relevant, written,
+            "sms batch processed"
+        );
 
         Ok(())
     }
@@ -116,6 +155,7 @@ impl SmsBatchHandler {
                 body: message.body.clone(),
             })
             .await
+            .inspect_err(|error| tracing::warn!(%user_id, %error, "sms classification failed"))
             .ok()
     }
 }

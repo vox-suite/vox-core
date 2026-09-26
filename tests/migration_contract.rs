@@ -33,7 +33,7 @@ async fn migration_creates_the_complete_core_schema() {
         "conversations",
         "messages",
         "collections",
-        "tasks",
+        "spans",
         "schedules",
         "jobs",
         "job_attempts",
@@ -87,7 +87,7 @@ async fn migration_creates_the_complete_core_schema() {
         "auth_sessions",
         "conversations",
         "collections",
-        "tasks",
+        "spans",
         "schedules",
         "jobs",
         "data_schemas",
@@ -124,7 +124,6 @@ async fn migration_creates_the_complete_core_schema() {
     let view_names: Vec<String> = view_rows.iter().map(|row| row.get("table_name")).collect();
     for expected in [
         "scheduled_tasks",
-        "projects",
         "events",
         "user_records",
         "user_goals",

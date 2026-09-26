@@ -59,19 +59,19 @@ impl TaskExecutorHandler {
         self
     }
 
-    pub async fn handle(&self, task_id: Uuid) -> Result<(), TaskExecutorError> {
+    pub async fn handle(&self, span_id: Uuid) -> Result<(), TaskExecutorError> {
         let task_row = sqlx::query(
-            "SELECT user_id, user_context_id, title, instruction, execution_type, status \
-             FROM tasks \
+            "SELECT user_id, user_context_id, title, notes, execution_type, status \
+             FROM spans \
              WHERE id = $1",
         )
-        .bind(task_id)
+        .bind(span_id)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(TaskExecutorError::NotFound)?;
 
         let status: String = task_row.get("status");
-        if status == "completed" || status == "cancelled" {
+        if status == "done" || status == "cancelled" {
             return Ok(());
         }
 
@@ -81,10 +81,10 @@ impl TaskExecutorHandler {
             user_id,
         };
         let title: String = task_row.get("title");
-        let instruction: String = task_row.get("instruction");
+        let instruction: String = task_row.get("notes");
 
-        sqlx::query("UPDATE tasks SET status = 'executing', updated_at = now() WHERE id = $1")
-            .bind(task_id)
+        sqlx::query("UPDATE spans SET status = 'active', updated_at = now() WHERE id = $1")
+            .bind(span_id)
             .execute(self.db.pool())
             .await?;
 
@@ -117,18 +117,18 @@ impl TaskExecutorHandler {
         });
 
         sqlx::query(
-            "UPDATE tasks SET status = 'completed', \
+            "UPDATE spans SET status = 'done', \
              execution_result = $1, \
              completed_at = now(), \
              updated_at = now() \
              WHERE id = $2",
         )
         .bind(&execution_result)
-        .bind(task_id)
+        .bind(span_id)
         .execute(self.db.pool())
         .await?;
 
-        self.notify_user_via_call(owner, task_id, &title, response.trim())
+        self.notify_user_via_call(owner, span_id, &title, response.trim())
             .await?;
 
         Ok(())
@@ -137,7 +137,7 @@ impl TaskExecutorHandler {
     async fn notify_user_via_call(
         &self,
         owner: ResourceOwner,
-        task_id: Uuid,
+        span_id: Uuid,
         title: &str,
         summary: &str,
     ) -> Result<(), TaskExecutorError> {
@@ -163,7 +163,7 @@ impl TaskExecutorHandler {
             ).await
                 && urgency < 0.70 {
                     tracing::info!(
-                        task_id = %task_id,
+                        span_id = %span_id,
                         urgency,
                         "Jev System 1: task outcome is non-urgent, suppressing live outbound phone call"
                     );
@@ -178,7 +178,7 @@ impl TaskExecutorHandler {
                 title, summary
             );
             let _ = outbound
-                .initiate_call_for_user(owner, &reason, &opening, None, Some(task_id))
+                .initiate_call_for_user(owner, &reason, &opening, None, Some(span_id))
                 .await;
         }
 

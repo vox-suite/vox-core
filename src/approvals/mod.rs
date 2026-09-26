@@ -10,7 +10,7 @@ const MAX_PROPOSAL_LIFETIME: Duration = Duration::hours(24);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CreateProposalRequest {
-    pub task_id: Uuid,
+    pub span_id: Uuid,
     pub task_run_id: Uuid,
     pub agent_external_key: String,
     pub capability_external_key: String,
@@ -98,9 +98,9 @@ impl ApprovalService {
         }
         let mut tx = self.db.pool().begin().await?;
         let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1 AND user_id = $2)",
+            "SELECT EXISTS(SELECT 1 FROM spans WHERE id = $1 AND user_id = $2)",
         )
-        .bind(r.task_id)
+        .bind(r.span_id)
         .bind(context.user_id.0)
         .fetch_one(&mut *tx)
         .await?;
@@ -125,11 +125,11 @@ impl ApprovalService {
         let details_hash = hash(&r.details)?;
         let details = r.details;
         let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO action_proposals (user_id, task_id, job_id, actor_key, connection_id, capability, details, details_hash, expires_at, state) \
+            "INSERT INTO action_proposals (user_id, span_id, job_id, actor_key, connection_id, capability, details, details_hash, expires_at, state) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'proposed') RETURNING id",
         )
         .bind(context.user_id.0)
-        .bind(r.task_id)
+        .bind(r.span_id)
         .bind(r.task_run_id)
         .bind(&agent)
         .bind(Some(connection_id))

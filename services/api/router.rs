@@ -3,7 +3,7 @@
 */
 use axum::{
     Router, middleware,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 
 use crate::{
@@ -11,7 +11,10 @@ use crate::{
     openapi::get_openapi_spec,
     routes::{
         auth::exchange_token,
-        collections::{archive_collection, create_collection, get_collection, list_collections},
+        collections::{
+            add_collection_span, archive_collection, create_collection, get_collection,
+            list_collections, remove_collection_span, update_collection,
+        },
         device_socket::{DeviceSocketState, device_socket},
         devices::{
             DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result,
@@ -28,8 +31,7 @@ use crate::{
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
-        tasks::{create_task, delete_task, get_task, list_tasks, update_task},
-        timeline::get_timeline,
+        spans::{create_span, delete_span, get_span, list_spans, update_span},
     },
     state::ApiState,
 };
@@ -39,13 +41,13 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/auth/exchange", post(exchange_token))
         .with_state(state.pool.clone());
 
-    let task_routes = Router::new()
-        .route("/v1/tasks", get(list_tasks).post(create_task))
+    let span_routes = Router::new()
+        .route("/v1/spans", get(list_spans).post(create_span))
         .route(
-            "/v1/tasks/{id}",
-            get(get_task).patch(update_task).delete(delete_task),
+            "/v1/spans/{id}",
+            get(get_span).patch(update_span).delete(delete_span),
         )
-        .with_state(state.tasks.clone());
+        .with_state(state.spans.clone());
 
     let collection_routes = Router::new()
         .route(
@@ -54,7 +56,13 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .route(
             "/v1/collections/{id}",
-            get(get_collection).delete(archive_collection),
+            get(get_collection)
+                .patch(update_collection)
+                .delete(archive_collection),
+        )
+        .route(
+            "/v1/collections/{id}/spans/{span_id}",
+            put(add_collection_span).delete(remove_collection_span),
         )
         .with_state(state.collections.clone());
 
@@ -70,10 +78,6 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/schemas", post(create_schema_version))
         .route("/v1/schemas/{namespace}/{name}", get(get_schema_by_name))
         .with_state(state.schemas.clone());
-
-    let timeline_routes = Router::new()
-        .route("/v1/timeline", get(get_timeline))
-        .with_state(state.timeline.clone());
 
     let sms_routes = Router::new()
         .route("/v1/sms/batches", post(submit_batch))
@@ -148,11 +152,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.clone());
 
-    let protected_routes = task_routes
+    let protected_routes = span_routes
         .merge(collection_routes)
         .merge(record_routes)
         .merge(schema_routes)
-        .merge(timeline_routes)
         .merge(sms_routes)
         .merge(sms_consent_routes)
         .merge(location_routes)

@@ -113,6 +113,7 @@ impl Worker {
             .await?;
 
         for job in jobs {
+            tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job claimed");
             let result = match job.kind {
                 JobKind::ProcessEvent => self
                     .events
@@ -136,7 +137,7 @@ impl Worker {
                         .map_err(|_| "summary_processing"),
                     None => Err("summary_handler_unavailable"),
                 },
-                JobKind::EvaluateTask | JobKind::ExecuteTask => match &self.task_executor {
+                JobKind::EvaluateSpan | JobKind::ExecuteSpan => match &self.task_executor {
                     Some(executor) => executor
                         .handle(job.payload_reference_id)
                         .await
@@ -154,16 +155,19 @@ impl Worker {
 
             match result {
                 Ok(()) => {
+                    tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
                     self.jobs
                         .complete(job.id, &self.worker_id, Utc::now())
                         .await?
                 }
                 Err(code) if job.attempt_count >= 5 => {
+                    tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
                     self.jobs
                         .fail(job.id, &self.worker_id, Utc::now(), code)
                         .await?
                 }
                 Err(code) => {
+                    tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, attempt = job.attempt_count, "job failed, retrying");
                     let seconds = 2_i64.pow(job.attempt_count.clamp(1, 6) as u32);
                     self.jobs
                         .retry(

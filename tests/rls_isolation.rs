@@ -30,7 +30,7 @@ async fn rls_is_enabled_on_all_core_tables() {
         "conversations",
         "messages",
         "collections",
-        "tasks",
+        "spans",
         "schedules",
         "jobs",
         "job_attempts",
