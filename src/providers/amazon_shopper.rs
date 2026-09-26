@@ -124,10 +124,23 @@ pub enum PlaceDecision {
     SameTurn,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Session {
     last_active: Instant,
     checkout_turn: Option<Uuid>,
+    /// Where the purchase stands, shown to the agent each turn: it only
+    /// remembers what was said, not earlier tool results.
+    note: Option<String>,
+}
+
+impl Session {
+    fn new() -> Self {
+        Self {
+            last_active: Instant::now(),
+            checkout_turn: None,
+            note: None,
+        }
+    }
 }
 
 /// Per-user shopping state shared across agent turns: keeps short replies
@@ -165,27 +178,21 @@ impl ShopperSessions {
     /// Records shopping activity. Browsing (search, product, options) also
     /// invalidates any prepared checkout, since the cart no longer matches.
     pub fn touch(&self, user_id: Uuid) {
-        self.live(|sessions| {
-            sessions.insert(
-                user_id,
-                Session {
-                    last_active: Instant::now(),
-                    checkout_turn: None,
-                },
-            );
-        });
+        self.update(user_id, |session| session.checkout_turn = None);
     }
 
     pub fn record_checkout(&self, user_id: Uuid, turn: Uuid) {
-        self.live(|sessions| {
-            sessions.insert(
-                user_id,
-                Session {
-                    last_active: Instant::now(),
-                    checkout_turn: Some(turn),
-                },
-            );
-        });
+        self.update(user_id, |session| session.checkout_turn = Some(turn));
+    }
+
+    pub fn set_note(&self, user_id: Uuid, note: impl Into<String>) {
+        let note = note.into();
+        self.update(user_id, |session| session.note = Some(note));
+    }
+
+    /// The latest note on where the purchase stands, if a session is active.
+    pub fn note(&self, user_id: Uuid) -> Option<String> {
+        self.live(|sessions| sessions.get(&user_id).and_then(|s| s.note.clone()))
     }
 
     /// Decides whether `turn` may place the order. `Allowed` consumes the
@@ -208,6 +215,14 @@ impl ShopperSessions {
     pub fn end(&self, user_id: Uuid) {
         self.live(|sessions| {
             sessions.remove(&user_id);
+        });
+    }
+
+    fn update(&self, user_id: Uuid, f: impl FnOnce(&mut Session)) {
+        self.live(|sessions| {
+            let session = sessions.entry(user_id).or_insert_with(Session::new);
+            session.last_active = Instant::now();
+            f(session);
         });
     }
 

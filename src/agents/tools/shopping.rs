@@ -44,6 +44,56 @@ impl ShoppingContext {
     }
 }
 
+impl ShoppingContext {
+    /// Turns a helper call into the tool's output and records where the
+    /// purchase now stands for the next turn.
+    fn finish(&self, tool: &str, result: Result<Value, ShopperError>) -> Value {
+        let value = outcome(tool, result);
+        if let Some(note) = state_note(tool, &value) {
+            self.sessions.set_note(self.user_id.0, note);
+        }
+        value
+    }
+}
+
+/// A short note on where the purchase stands after `tool`, shown to the agent
+/// at the start of the next turn: it keeps only the spoken conversation, so
+/// without this it tends to start over with a new search.
+pub(crate) fn state_note(tool: &str, response: &Value) -> Option<String> {
+    let text = |key: &str| {
+        response
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    match (tool, response_status(response)) {
+        ("amazon_checkout", "ok") => Some(format!(
+            "Checkout is ready in the browser: total {}, Pay on Delivery, {}. When the user has heard the total and says yes, call amazon_place_order. Do not search again.",
+            text("total"),
+            text("delivery")
+        )),
+        ("amazon_checkout", "in_progress") | (_, "checkout_ready") => Some(
+            "Checkout is loading or already prepared in the browser. Call amazon_checkout (not amazon_search) to get the total.".into(),
+        ),
+        ("amazon_checkout", "cod_unavailable") => Some(
+            "Amazon doesn't offer cash on delivery for this order, so it can't be placed.".into(),
+        ),
+        ("amazon_open_product" | "amazon_select_options", "ok" | "partial") => Some(format!(
+            "The product page is open: {} at {}. When the user wants to buy it, call amazon_checkout.",
+            text("title").chars().take(90).collect::<String>(),
+            text("price")
+        )),
+        (_, "in_progress") => Some(format!(
+            "{tool} is still loading in the browser; call {tool} again on the user's next message."
+        )),
+        (_, "busy") => Some(
+            "The browser is still finishing the previous step; after the user's next message, repeat that step instead of starting over.".into(),
+        ),
+        _ => None,
+    }
+}
+
 /// Transport failures become a status the agent can say out loud instead of
 /// an error that ends the turn.
 fn outcome(tool: &str, result: Result<Value, ShopperError>) -> Value {
@@ -103,10 +153,9 @@ impl Tool for AmazonSearch {
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, query = %args.query, "Tool called");
         self.0.sessions.touch(self.0.user_id.0);
-        Ok(outcome(
-            Self::NAME,
-            self.0.client.search(args.query.trim()).await,
-        ))
+        Ok(self
+            .0
+            .finish(Self::NAME, self.0.client.search(args.query.trim()).await))
     }
 }
 
@@ -154,7 +203,7 @@ impl Tool for AmazonOpenProduct {
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, asin = %args.asin, "Tool called");
         self.0.sessions.touch(self.0.user_id.0);
-        Ok(outcome(
+        Ok(self.0.finish(
             Self::NAME,
             self.0.client.open_product(args.asin.trim()).await,
         ))
@@ -209,7 +258,7 @@ impl Tool for AmazonSelectOptions {
     ) -> Result<Value, ShopperError> {
         tracing::info!(tool = Self::NAME, options = ?args.options, "Tool called");
         self.0.sessions.touch(self.0.user_id.0);
-        Ok(outcome(
+        Ok(self.0.finish(
             Self::NAME,
             self.0.client.select_options(&args.options).await,
         ))
@@ -262,7 +311,9 @@ impl Tool for AmazonCheckout {
         tracing::info!(tool = Self::NAME, quantity, "Tool called");
         let user_id = self.0.user_id.0;
         self.0.sessions.touch(user_id);
-        let result = outcome(Self::NAME, self.0.client.checkout(quantity).await);
+        let result = self
+            .0
+            .finish(Self::NAME, self.0.client.checkout(quantity).await);
         if response_status(&result) == "ok" {
             self.0.sessions.record_checkout(user_id, self.0.turn);
         }
@@ -336,7 +387,7 @@ impl Tool for AmazonPlaceOrder {
             }
         }
 
-        let result = outcome(Self::NAME, self.0.client.place_order().await);
+        let result = self.0.finish(Self::NAME, self.0.client.place_order().await);
         if matches!(response_status(&result), "placed" | "dry_run") {
             self.0.sessions.end(user_id);
         }
@@ -346,3 +397,7 @@ impl Tool for AmazonPlaceOrder {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/agents_tools_shopping.rs"]
+mod tests;

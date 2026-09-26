@@ -82,3 +82,18 @@ fn reads_helper_status() {
     );
     assert_eq!(response_status(&json!({"results": []})), "");
 }
+
+#[test]
+fn note_survives_browsing_and_checkout_until_the_session_ends() {
+    let sessions = ShopperSessions::new();
+    let user = Uuid::new_v4();
+    assert_eq!(sessions.note(user), None);
+
+    sessions.set_note(user, "Checkout is ready");
+    sessions.touch(user);
+    sessions.record_checkout(user, Uuid::new_v4());
+    assert_eq!(sessions.note(user).as_deref(), Some("Checkout is ready"));
+
+    sessions.end(user);
+    assert_eq!(sessions.note(user), None);
+}

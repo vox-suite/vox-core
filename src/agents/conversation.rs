@@ -519,13 +519,26 @@ impl ConversationAgent {
         } else {
             String::new()
         };
+        // The agent only sees the spoken conversation, so tell it where an
+        // in-flight purchase stands instead of letting it start over.
+        let shopping_state = if routed_domain == crate::jev::ToolDomain::Shopping {
+            self.shopper_sessions
+                .note(prompt.user_id.0)
+                .map(|note| {
+                    format!("\nShopping state (from the browser; continue from here):\n{note}\n")
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
+            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}{}\nUser message:\n{}{}{}",
             current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
+            shopping_state,
             prompt.user_text,
             filler_instruction,
             onboarding_instruction

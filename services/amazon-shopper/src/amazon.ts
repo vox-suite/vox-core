@@ -29,7 +29,28 @@ type Checkout = {
 };
 
 type Step = 'idle' | 'product_open' | 'checkout_ready' | 'placed';
-const state: { step: Step; total: string | null } = { step: 'idle', total: null };
+const state: { step: Step; total: string | null; restartWarned: boolean } = {
+  step: 'idle',
+  total: null,
+  restartWarned: false,
+};
+
+/**
+ * The agent only remembers what was said, not tool results, so on the next
+ * turn it may start over with a search even though checkout is ready. Warn it
+ * once instead of navigating away; a second attempt in a row is taken as a
+ * real request for a different product.
+ */
+function checkoutAlreadyReady(): Result | null {
+  if (state.step !== 'checkout_ready' || state.restartWarned) return null;
+  state.restartWarned = true;
+  log('restart blocked: checkout is already ready');
+  return {
+    status: 'checkout_ready',
+    total: state.total,
+    message: `A checkout is already prepared and waiting (total ${state.total}, Pay on Delivery). Do not start over: call amazon_checkout now (it returns at once), read the total to the user and ask them to confirm. Only if the user asked for a different product, call this tool again.`,
+  };
+}
 
 const RESULT_CARD = 'div[data-component-type="s-search-result"][data-asin]:not([data-asin=""])';
 // Longer than one HTTP request's budget: if the server answers `in_progress`,
@@ -324,6 +345,8 @@ function readResults(page: Page) {
 
 export async function search(query: string): Promise<Result> {
   if (!query.trim()) return { status: 'error', message: 'query is required' };
+  const ready = checkoutAlreadyReady();
+  if (ready) return ready;
   const page = await getPage();
   await page.goto(`${config.baseUrl}/s?k=${encodeURIComponent(query.trim())}`, { waitUntil: 'commit' });
   // Right after `commit` the old page can still be unloading, which makes the
@@ -359,6 +382,8 @@ export async function search(query: string): Promise<Result> {
 export async function openProduct(asin: string): Promise<Result> {
   if (!/^[A-Z0-9]{10}$/i.test(asin.trim()))
     return { status: 'error', message: 'asin must be a 10-character Amazon ASIN' };
+  const ready = checkoutAlreadyReady();
+  if (ready) return ready;
   const page = await getPage();
   await page.goto(`${config.baseUrl}/dp/${asin.trim().toUpperCase()}`, { waitUntil: 'commit' });
   await page.locator('#productTitle').waitFor().catch(() => {});
@@ -396,6 +421,8 @@ async function waitForSelected(page: Page, dimension: string, label: string): Pr
 }
 
 export async function selectOptions(wanted: Record<string, string>): Promise<Result> {
+  const ready = checkoutAlreadyReady();
+  if (ready) return ready;
   if (state.step !== 'product_open')
     return { status: 'invalid_state', message: 'Open a product first with amazon_open_product.' };
   const page = await getPage();
@@ -454,6 +481,7 @@ const log = (message: string) => console.log(`  ${message}`);
 export async function checkout(quantity = 1): Promise<Result> {
   const page = await getPage();
   if (state.step === 'checkout_ready' && onCheckoutPage(page) && (await visible(placeButton(page)))) {
+    state.restartWarned = false;
     return { status: 'ok', ...(await readCheckout(page)), payment: 'Pay on Delivery' };
   }
 
@@ -549,6 +577,7 @@ export async function checkout(quantity = 1): Promise<Result> {
       log(`checkout: ready, total ${summary.total}`);
       state.step = 'checkout_ready';
       state.total = summary.total;
+      state.restartWarned = false;
       return { status: 'ok', ...summary, payment: 'Pay on Delivery' };
     }
 
