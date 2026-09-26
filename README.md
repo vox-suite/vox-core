@@ -106,3 +106,7 @@ TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --test admin_redis -- --includ
 ```
 
 The second command must target an isolated Redis instance. The test creates uniquely prefixed fixture keys and deletes those keys afterward.
+
+## Hackathon demo
+
+This project was built as a hackathon demo.
