@@ -66,7 +66,9 @@ async fn setup() -> (Db, ResourceOwner, String) {
         .await
         .unwrap();
 
-    (db, owner, phone)
+    // Core stores phone identities digits-only and sends them to Bridge as stored;
+    // Bridge restores the E.164 "+" before dialing.
+    (db, owner, IdentityService::normalize_phone(&phone))
 }
 
 #[tokio::test]
