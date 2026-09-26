@@ -67,7 +67,7 @@ Direct execution is **not realistically available to a new general-purpose third
 
 ### Demo-only browser path (2026-09-26)
 
-`services/amazon-shopper` lets the voice agent drive the caller's own, already logged-in amazon.in session in a visible browser for a hackathon demo. It is off unless `AMAZON_SHOPPER_URL` is set. It does not change the classification above. It depends on one person's account and browser rather than an authorized provider API, and the legal position of agent-driven shopping on Amazon is unsettled while Amazon v. Perplexity continues. It must not ship as production execution.
+`services/amazon-shopper` lets the voice agent drive the caller's own, already logged-in amazon.in session in a visible browser. It is off unless `AMAZON_SHOPPER_URL` is set. It does not change the classification above. It depends on one person's account and browser rather than an authorized provider API, and the legal position of agent-driven shopping on Amazon is unsettled while Amazon v. Perplexity continues. It must not ship as production execution.
 
 ## Expedia
 
