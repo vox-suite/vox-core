@@ -32,11 +32,22 @@ impl JobRepository {
         kind: JobKind,
         payload_reference_id: Uuid,
     ) -> Result<Uuid, JobError> {
+        self.enqueue_with_priority(kind, payload_reference_id, 0)
+            .await
+    }
+
+    pub async fn enqueue_with_priority(
+        &self,
+        kind: JobKind,
+        payload_reference_id: Uuid,
+        priority: i16,
+    ) -> Result<Uuid, JobError> {
         sqlx::query_scalar(
-            "INSERT INTO jobs (kind, payload_reference_id) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO jobs (kind, payload_reference_id, priority) VALUES ($1, $2, $3) RETURNING id",
         )
         .bind(kind.as_str())
         .bind(payload_reference_id)
+        .bind(priority)
         .fetch_one(self.db.pool())
         .await
         .map_err(Into::into)
@@ -55,13 +66,13 @@ impl JobRepository {
                 SELECT id FROM jobs \
                 WHERE (state = 'pending' AND available_at <= $1) \
                    OR (state = 'running' AND lease_expires_at <= $1) \
-                ORDER BY available_at, created_at \
+                ORDER BY priority DESC, available_at, created_at \
                 FOR UPDATE SKIP LOCKED LIMIT $2\
              ) \
              UPDATE jobs SET state = 'running', attempt_count = attempt_count + 1, \
                  lease_owner = $3, lease_expires_at = $4 \
              FROM candidates WHERE jobs.id = candidates.id \
-             RETURNING jobs.id, jobs.kind, jobs.payload_reference_id, jobs.occurrence_at, jobs.attempt_count",
+             RETURNING jobs.id, jobs.kind, jobs.payload_reference_id, jobs.occurrence_at, jobs.attempt_count, jobs.max_attempts",
         )
         .bind(now)
         .bind(limit)
@@ -78,6 +89,7 @@ impl JobRepository {
                     payload_reference_id: row.get("payload_reference_id"),
                     occurrence_at: row.get("occurrence_at"),
                     attempt_count: row.get("attempt_count"),
+                    max_attempts: row.get("max_attempts"),
                 })
             })
             .collect()

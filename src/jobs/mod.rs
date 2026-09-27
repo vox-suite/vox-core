@@ -46,4 +46,5 @@ pub struct ClaimedJob {
     pub payload_reference_id: Option<Uuid>,
     pub occurrence_at: Option<DateTime<Utc>>,
     pub attempt_count: i32,
+    pub max_attempts: i32,
 }

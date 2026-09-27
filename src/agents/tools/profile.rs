@@ -40,6 +40,14 @@ impl From<sqlx::Error> for ProfileToolError {
     }
 }
 
+fn is_plausible_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name.len() <= 80
+        && name.split_whitespace().count() <= 5
+        && !name.contains(['.', '!', '?'])
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetUserInfoArgs {
     pub include_persona: Option<bool>,
@@ -198,7 +206,10 @@ impl Tool for UpdateUserInfo {
 
         let mut tx = db.pool().begin().await?;
 
-        let display_name = facts_delta.get("name").and_then(|value| value.as_str());
+        let display_name = facts_delta
+            .get("name")
+            .and_then(|value| value.as_str())
+            .filter(|name| is_plausible_name(name));
         if let Some(persona_val) = persona_delta {
             sqlx::query(
                 "UPDATE users SET \

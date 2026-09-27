@@ -481,6 +481,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/preferences",
             post(preferences::set).get(preferences::list),
         )
+        .route("/v1/preferences/list", post(preferences::list))
         .route("/v1/preferences/{key}", delete(preferences::delete_key))
         .route(
             "/v1/agents/{agent_key}/effective-preferences",

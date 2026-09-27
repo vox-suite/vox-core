@@ -32,6 +32,9 @@ const MERGE_TABLES: &[&str] = &[
     "inbound_events",
     "audit_events",
     "user_contexts",
+    "data_source_consents",
+    "sms_batches",
+    "connected_app_pending_actions",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -98,7 +101,7 @@ pub async fn link_phone(
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             }
-            sqlx::query("UPDATE users SET status = 'disabled' WHERE id = $1")
+            sqlx::query("DELETE FROM users WHERE id = $1")
                 .bind(old_user)
                 .execute(&mut *tx)
                 .await

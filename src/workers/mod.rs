@@ -109,7 +109,7 @@ impl Worker {
 
         let jobs = self
             .jobs
-            .claim(&self.worker_id, now, Duration::seconds(30), 10)
+            .claim(&self.worker_id, now, Duration::seconds(30), 1)
             .await?;
 
         for job in jobs {
@@ -172,7 +172,7 @@ impl Worker {
                         .complete(job.id, &self.worker_id, Utc::now())
                         .await?
                 }
-                Err(code) if job.attempt_count >= 5 => {
+                Err(code) if job.attempt_count >= job.max_attempts => {
                     tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
                     self.jobs
                         .fail(job.id, &self.worker_id, Utc::now(), code)

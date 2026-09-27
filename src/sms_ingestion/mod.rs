@@ -11,6 +11,8 @@ use crate::{
     jobs::JobKind,
 };
 
+const SMS_BATCH_PRIORITY: i16 = -10;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SmsMessage {
     pub sender: String,
@@ -68,7 +70,7 @@ impl SmsIngestionService {
         .await?;
 
         self.jobs
-            .enqueue(JobKind::ProcessSmsBatch, batch_id)
+            .enqueue_with_priority(JobKind::ProcessSmsBatch, batch_id, SMS_BATCH_PRIORITY)
             .await?;
         tracing::info!(%user_id, %batch_id, message_count = messages.len(), "sms batch received and enqueued");
 
