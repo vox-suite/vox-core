@@ -1,8 +1,8 @@
 pub mod expedia;
 
-// Amazon/Uber/Zomato moved to the vox-connections crate; re-exported here so
+// Amazon/PlayStation/Uber/Zomato moved to the vox-connections crate; re-exported here so
 // existing `crate::providers::amazon::X` etc. call sites don't need to change.
-pub use vox_connections::providers::{amazon, uber, zomato};
+pub use vox_connections::providers::{amazon, playstation, uber, zomato};
 
 pub use amazon::{
     AMAZON_CAPABILITY_CATALOG_SEARCH, AMAZON_CAPABILITY_CATALOG_SEARCH_SHORT,
@@ -20,6 +20,15 @@ pub use expedia::{
     ExpediaCancellationResult, ExpediaLodgingError, ExpediaLodgingProposalDetails,
     ExpediaLodgingService, ExpediaProviderClient, ExpediaRawBookingRequest,
     ExpediaRawBookingResponse, MockExpediaProviderClient,
+};
+pub use playstation::{
+    DefaultPlayStationProviderClient, MockPlayStationProviderClient,
+    PLAYSTATION_CAPABILITY_GAME_ACTIVITY, PLAYSTATION_CAPABILITY_GAME_ACTIVITY_SHORT,
+    PLAYSTATION_CAPABILITY_RECENTLY_PLAYED, PLAYSTATION_CAPABILITY_RECENTLY_PLAYED_SHORT,
+    PLAYSTATION_CAPABILITY_USER_TITLES, PLAYSTATION_CAPABILITY_USER_TITLES_SHORT,
+    PLAYSTATION_INTEGRATION_KEY, PlayStationActivityWorker, PlayStationError, PlayStationGame,
+    PlayStationProviderClient, PlayStationRecentActivityResponse, PlayStationService,
+    PlayStationSpanInput, PlayStationSyncResult,
 };
 pub use uber::{
     DefaultUberProviderClient, MockUberProviderClient, UBER_CAPABILITY_HISTORY,
