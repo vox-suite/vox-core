@@ -2,7 +2,7 @@ use super::{AgentError, structured_json};
 use crate::config::Config;
 use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
-pub use vox_sms_schema::ExtractedSmsEvent;
+pub use vox_shared::sms::ExtractedSmsEvent;
 
 #[derive(Clone, Debug)]
 pub struct SmsPrompt {
@@ -52,7 +52,7 @@ impl SmsExtracting for GeminiSmsExtractor {
                  password, verification code, or security code message, and NEVER include the \
                  actual code digits anywhere in your response. Do not include any extra text or \
                  markdown outside of the JSON.",
-                vox_sms_schema::SMS_CATEGORIES_PROMPT
+                vox_shared::sms::SMS_CATEGORIES_PROMPT
             ))
             .build();
 
