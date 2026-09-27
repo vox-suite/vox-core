@@ -21,7 +21,7 @@ jobs:
         working-directory: vox-core
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -61,3 +61,5 @@ jobs:
           for migration_file in migrations/*.sql; do
             psql -h 127.0.0.1 -U postgres -d vox_core_migrations -v ON_ERROR_STOP=1 -f "$migration_file"
           done
+          test "$(psql -h 127.0.0.1 -U postgres -d vox_core_migrations -Atc 'SHOW server_version_num')" -ge 180000
+          psql -h 127.0.0.1 -U postgres -d vox_core_migrations -v ON_ERROR_STOP=1 -Atc "SELECT extversion FROM pg_extension WHERE extname = 'vector'" | grep -Eq '^[0-9]+\.'
