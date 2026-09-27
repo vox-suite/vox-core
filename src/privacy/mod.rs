@@ -814,60 +814,9 @@ impl PrivacyService {
         })
     }
 
-    /// Recursive canary scan preventing credentials, secret tokens, passwords, or active approvals from escaping.
+    /// Reject credentials and active approvals using the shared connector boundary scanner.
     pub fn scan_for_prohibited_content(value: &Value) -> Result<(), PrivacyError> {
-        match value {
-            Value::Object(map) => {
-                for (k, v) in map {
-                    let lower = k.to_ascii_lowercase();
-                    // Prohibited key patterns
-                    if lower.contains("secret")
-                        || lower.contains("password")
-                        || lower.contains("token")
-                        || (lower.contains("credential") && k != "credential_custody")
-                        || lower.contains("private_key")
-                        || lower.contains("session_id")
-                        || lower.contains("cvv")
-                        || lower.contains("card_number")
-                        || lower.contains("pin")
-                        || (lower.contains("approval") && !lower.contains("summary"))
-                    {
-                        return Err(PrivacyError::ProhibitedData(format!(
-                            "prohibited key '{k}' detected in export"
-                        )));
-                    }
-                    Self::scan_for_prohibited_content(v)?;
-                }
-            }
-            Value::Array(arr) => {
-                for v in arr {
-                    Self::scan_for_prohibited_content(v)?;
-                }
-            }
-            Value::String(s) => {
-                let lower = s.to_ascii_lowercase();
-                if lower.contains("sk_live_")
-                    || lower.contains("vox_sk_")
-                    || lower.contains("bearer ")
-                    || lower.contains("-----begin")
-                    || lower.contains("private key-----")
-                    || lower
-                        .split(|c: char| {
-                            c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';'
-                        })
-                        .any(|word| {
-                            word.starts_with("sk-")
-                                || word.starts_with("eyj")
-                                || word.starts_with("key-")
-                        })
-                {
-                    return Err(PrivacyError::ProhibitedData(
-                        "credential or token value detected in export payload".into(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        vox_connections::remote_extensions::adapters::privacy::scan_for_prohibited_content(value)
+            .map_err(PrivacyError::ProhibitedData)
     }
 }

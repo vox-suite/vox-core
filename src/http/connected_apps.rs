@@ -43,7 +43,7 @@ pub async fn authorize(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match apps.begin(&c, id, &r.redirect_uri).await {
+    match apps.begin(&c.request_context(), id, &r.redirect_uri).await {
         Ok(start) => (StatusCode::OK, Json(start)).into_response(),
         Err(e) => error(e),
     }
@@ -60,7 +60,7 @@ pub async fn callback(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match apps.complete(&c, &r.state, &r.code).await {
+    match apps.complete(&c.request_context(), &r.state, &r.code).await {
         Ok(extension) => (StatusCode::OK, Json(extension)).into_response(),
         Err(e) => error(e),
     }
@@ -77,7 +77,7 @@ pub async fn status(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match apps.connections(&c).await {
+    match apps.connections(&c.request_context()).await {
         Ok(connected) => (
             StatusCode::OK,
             Json(json!({

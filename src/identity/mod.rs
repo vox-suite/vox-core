@@ -88,6 +88,12 @@ impl ResolvedUserContext {
     }
 }
 
+impl vox_connections::identity::RequestScope for ResolvedUserContext {
+    fn request_context(&self) -> vox_connections::identity::RequestContext {
+        ResolvedUserContext::request_context(self)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
     #[error("invalid user context")]
