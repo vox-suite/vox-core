@@ -1,18 +1,18 @@
 # Platform semantic conformance
 
-`vox_core::conformance` is the executable, provider-neutral contract for Platform V1 authority and outcome semantics. It exists before the production identity, registry, grant, approval, and integration implementations so every later adapter can be measured against one vocabulary instead of defining its own.
+`vox_connections::conformance` (re-exported by `vox_core::conformance`) is the executable, provider-neutral contract for Platform V1 authority and outcome semantics. It exists before the production identity, registry, grant, approval, and integration implementations so every later adapter can be measured against one vocabulary instead of defining its own.
 
-The current fixture version is `1`. The canonical fixture is bundled at `src/conformance/fixtures/v1.json`; changing an accepted meaning requires a new fixture version. Additive scenarios that only make an existing meaning more explicit may remain within the current version after review.
+The current fixture version is `1`. The canonical fixture is bundled in `vox-connections/src/conformance/fixtures/v1.json`; changing an accepted meaning requires a new fixture version. Additive scenarios that only make an existing meaning more explicit may remain within the current version after review.
 
 ## Run the suite
 
 ```sh
-cargo test --locked --test platform_conformance
-cargo test --locked
+cd ../vox-connections && cargo test --test host_boundary
+cd ../vox-core && cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-The integration test runs the same fixtures through both the in-process reference adapter and `JsonBoundary`, which serializes every command and result. The boundary is deliberately transport-neutral: HTTP, MCP, queues, database-backed services, and FFI implementations can all translate their public behavior into `Command` and `SemanticResult` without importing the reference state machine.
+The shared crate runs the canonical fixture through its reference adapter. `JsonBoundary` is available to exercise a serialized adapter boundary. The boundary is deliberately transport-neutral: HTTP, MCP, queues, database-backed services, and FFI implementations can all translate their public behavior into `Command` and `SemanticResult` without importing the reference state machine.
 
 To test an implementation, implement `PlatformAdapter` and pass a factory to `run_suite`. Every scenario receives a fresh adapter instance, so success cannot depend on scenario order or leaked state.
 
@@ -33,7 +33,7 @@ An action is `succeeded` only with non-empty provider evidence, `failed` only wi
 | `exact-approval-binding` | Approval is required, bound to the exact input and agent, and expires before execution. |
 | `truthful-and-idempotent-outcomes` | Unknown remains unknown, terminal claims require evidence, and retries do not create or rewrite actions. |
 
-The test suite also runs deliberately non-conforming adapters. It must fail when an adapter ignores context isolation, accepts a mismatched approval, or invents a successful result from an unknown provider observation. Those tests prove the harness itself is capable of catching the three high-risk failures called out by the Platform V1 acceptance criteria.
+Independent hosts should run the same fixture against their own adapter and include deliberately non-conforming cases for context isolation, approval binding, and unknown outcomes.
 
 ## Compatibility rule
 

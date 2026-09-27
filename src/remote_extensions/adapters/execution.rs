@@ -51,7 +51,7 @@ impl ExecutionAdapter for ExtensionExecutionAdapter {
         let authorized_endpoint = match self
             .extension_service
             .authorize_call(
-                &self.context,
+                &self.context.request_context(),
                 self.extension_id,
                 &request.capability_external_key,
             )
@@ -124,7 +124,7 @@ impl ExecutionAdapter for ExtensionExecutionAdapter {
         let authorized_endpoint = match self
             .extension_service
             .authorize_call(
-                &self.context,
+                &self.context.request_context(),
                 self.extension_id,
                 &request.capability_external_key,
             )

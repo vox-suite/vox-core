@@ -59,10 +59,7 @@ async fn main() {
         .jev_api_key
         .as_ref()
         .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
-    let connected_apps = Arc::new(vox_core::connected_apps::ConnectedAppsService::from_config(
-        db.clone(),
-        &config,
-    ));
+    let connected_apps = Arc::new(vox_core::connected_apps::from_config(db.clone(), &config));
     let mut legacy_state = AppState::with_memory_and_jev(
         db.clone(),
         agent,

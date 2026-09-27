@@ -45,10 +45,10 @@ Platform V1 authority and outcome semantics are executable without a database or
 production provider:
 
 ```sh
-cargo test --locked --test platform_conformance
+cargo test --locked
 ```
 
-See [`docs/conformance.md`](docs/conformance.md) for the versioned fixture,
+The shared `vox-connections` crate runs the canonical conformance fixture with `cargo test --test host_boundary`. See [`docs/conformance.md`](docs/conformance.md) for the versioned fixture,
 adapter contract, stable error vocabulary, and semantic coverage map.
 
 Provider integrations must follow the dated capability decisions and production
@@ -83,6 +83,10 @@ rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).
 
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
+
+## Connector boundary
+
+Reusable integration declarations, provider transports, remote extension adapters, connected-app OAuth and MCP sessions, declarative skill packages, and conformance fixtures live in [vox-connections](https://github.com/vox-suite/vox-connections). Core owns host trust, identity, agent presentation, grants and approval enforcement, durable execution, and audit. It passes a minimal request context and database pool to the shared crate. The remaining `connected_apps`, `remote_extensions`, `skills`, and `conformance` modules here are host wiring or API re-exports.
 
 ## Redis administration
 

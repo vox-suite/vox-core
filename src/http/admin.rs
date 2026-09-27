@@ -28,7 +28,9 @@ impl RedisAdmin {
     pub fn from_token(token: Option<String>) -> Result<Option<Self>, redis::RedisError> {
         let env_url = std::env::var("REDIS_URL").ok();
         Self::from_token_with_url(
-            env_url.as_deref().or(Some(crate::config::DEFAULT_REDIS_URL)),
+            env_url
+                .as_deref()
+                .or(Some(crate::config::DEFAULT_REDIS_URL)),
             token,
         )
     }

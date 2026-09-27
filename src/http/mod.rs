@@ -199,10 +199,12 @@ impl AppState {
             ))),
             reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
             remote_extensions: Some(Arc::new(
-                crate::remote_extensions::RemoteExtensionService::new(db.clone()),
+                crate::remote_extensions::RemoteExtensionService::new(db.pool().clone()),
             )),
             connected_apps: None,
-            skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
+            skills: Some(Arc::new(crate::skills::SkillService::new(
+                db.pool().clone(),
+            ))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
                 db.pool().clone(),

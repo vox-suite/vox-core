@@ -14,7 +14,7 @@ use super::{
     policy::{ToolPolicy, classify},
     selection::{AppProfile, select},
 };
-use crate::identity::UserId;
+use vox_connections::identity::UserId;
 
 const MAX_RESULT_CHARS: usize = 16_000;
 const MAX_NAME_LEN: usize = 64;

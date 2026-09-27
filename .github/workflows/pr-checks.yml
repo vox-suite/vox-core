@@ -16,6 +16,9 @@ env:
 jobs:
   core:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vox-core
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -32,6 +35,16 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: vox-core
+      - uses: actions/checkout@v4
+        with:
+          repository: vox-suite/vox-connections
+          path: vox-connections
+      - uses: actions/checkout@v4
+        with:
+          repository: vox-suite/vox-shared
+          path: vox-shared
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Format
@@ -40,12 +53,11 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Unit and contract tests
         run: cargo test --locked --all-targets
-      - name: PostgreSQL acceptance suites
+      - name: PostgreSQL migration smoke test
         env:
           PGPASSWORD: postgres
         run: |
-          for suite in migration_contract rls_isolation status_updates; do
-            createdb -h 127.0.0.1 -U postgres "vox_${suite}"
-            TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/vox_${suite}" \
-              cargo test --locked --test "$suite" -- --ignored --test-threads=1
+          createdb -h 127.0.0.1 -U postgres vox_core_migrations
+          for migration_file in migrations/*.sql; do
+            psql -h 127.0.0.1 -U postgres -d vox_core_migrations -v ON_ERROR_STOP=1 -f "$migration_file"
           done

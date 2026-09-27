@@ -115,9 +115,10 @@ impl ConversationAgent {
             db.clone(),
             bridge_client,
         )));
-        agent.connected_apps = Some(Arc::new(
-            crate::connected_apps::ConnectedAppsService::from_config(db.clone(), config),
-        ));
+        agent.connected_apps = Some(Arc::new(crate::connected_apps::from_config(
+            db.clone(),
+            config,
+        )));
         agent.db = Some(db);
         Ok(agent)
     }
@@ -208,7 +209,7 @@ impl ConversationAgent {
                 crate::connected_apps::tools::toolset(
                     apps,
                     crate::connected_apps::tools::TurnContext {
-                        user_id: prompt.user_id,
+                        user_id: vox_connections::identity::UserId(prompt.user_id.0),
                         turn,
                         message: &prompt.user_text,
                         history,

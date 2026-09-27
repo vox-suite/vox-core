@@ -56,7 +56,10 @@ pub async fn initiate(
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.initiate(&context.request_context(), r.initiation).await {
+    match connections
+        .initiate(&context.request_context(), r.initiation)
+        .await
+    {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(ConnectionError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ConnectionError::IntegrationUnavailable) => StatusCode::NOT_FOUND.into_response(),
@@ -91,7 +94,10 @@ pub async fn callback(
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.verify_callback(&context.request_context(), r.callback).await {
+    match connections
+        .verify_callback(&context.request_context(), r.callback)
+        .await
+    {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(ConnectionError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(ConnectionError::AuthorizationUnavailable) => {
