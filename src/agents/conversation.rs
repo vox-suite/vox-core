@@ -3,7 +3,6 @@
 */
 use super::{AgentError, tools};
 use crate::outbound::OutboundCallService;
-use crate::providers::{ShopperClient, ShopperSessions};
 use crate::realtime::{DeviceHub, UserEventHub};
 use crate::{
     config::Config,
@@ -20,9 +19,9 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 pub use super::prompts::{
-    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, SHOPPING_INSTRUCTIONS, VOICE_CALL_PREAMBLE,
-    WHATSAPP_PREAMBLE, is_elevenlabs_provider, is_voice_channel, onboarding_instruction,
-    preamble_for_channel, preamble_for_channel_and_tts,
+    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE,
+    is_elevenlabs_provider, is_voice_channel, onboarding_instruction, preamble_for_channel,
+    preamble_for_channel_and_tts,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -62,8 +61,6 @@ pub struct ConversationAgent {
     tts_provider: String,
     device_hub: Option<DeviceHub>,
     user_events: Option<UserEventHub>,
-    shopper: Option<ShopperClient>,
-    shopper_sessions: ShopperSessions,
     connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
 }
 
@@ -91,11 +88,6 @@ impl ConversationAgent {
         } else {
             None
         };
-        let shopper = config.amazon_shopper_url.as_ref().and_then(|url| {
-            ShopperClient::new(url.clone(), config.amazon_shopper_token.clone())
-                .inspect_err(|err| tracing::warn!(%err, "Amazon shopper disabled"))
-                .ok()
-        });
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             model: config.gemini_model.clone(),
@@ -108,8 +100,6 @@ impl ConversationAgent {
             tts_provider: config.tts_provider.clone(),
             device_hub: None,
             user_events: None,
-            shopper,
-            shopper_sessions: ShopperSessions::new(),
             connected_apps: None,
         })
     }
@@ -182,19 +172,6 @@ impl ConversationAgent {
             // A bare "yes" would otherwise route to no tools and the pending
             // device command could never be confirmed.
             crate::jev::ToolDomain::Device
-        } else if self.shopper.is_some()
-            && (self.shopper_sessions.is_active(prompt.user_id.0)
-                || mentions_shopping(&prompt.user_text))
-        {
-            // Keeps short replies ("teal, 256", "yes") on the shopping tools
-            // mid-purchase, and routes a purchase without needing Jev.
-            crate::jev::ToolDomain::Shopping
-        } else if mentions_device(&prompt.user_text) {
-            // Device state (battery, terminal output, etc.) is volatile and
-            // must be re-checked live even on a repeat question, but Jev
-            // tends to route repeats to `None` ("answerable from context")
-            // since the old answer is already in the transcript.
-            crate::jev::ToolDomain::Device
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
                 Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
@@ -265,48 +242,11 @@ impl ConversationAgent {
                     self.device_hub.clone().unwrap_or_default(),
                     turn,
                 ))
-                .tool(tools::github::ResolveGithubIssue::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                    prompt.owner,
-                    self.device_hub.clone().unwrap_or_default(),
-                    self.outbound.clone(),
-                ))
         };
         let agent =
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
                 new_agent("chat")
                     .preamble(preamble)
-                    .tool(tools::profile::UpdateUserInfo::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .dynamic_tools(connected_tools.clone())
-                    .default_max_turns(6)
-                    .build()
-            } else if let Some(shopper) = self
-                .shopper
-                .clone()
-                .filter(|_| routed_domain == crate::jev::ToolDomain::Shopping)
-            {
-                let shopping = tools::shopping::ShoppingContext::new(
-                    shopper,
-                    self.shopper_sessions.clone(),
-                    self.db.clone(),
-                    prompt.user_id,
-                    turn,
-                );
-                new_agent("shopping")
-                    .preamble(&format!("{preamble}\n{SHOPPING_INSTRUCTIONS}"))
-                    .tool(tools::shopping::AmazonSearch::new(shopping.clone()))
-                    .tool(tools::shopping::AmazonOpenProduct::new(shopping.clone()))
-                    .tool(tools::shopping::AmazonSelectOptions::new(shopping.clone()))
-                    .tool(tools::shopping::AmazonCheckout::new(shopping.clone()))
-                    .tool(tools::shopping::AmazonPlaceOrder::new(shopping))
-                    .tool(tools::profile::GetUserInfo::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
                     .tool(tools::profile::UpdateUserInfo::new(
                         self.db.clone(),
                         prompt.user_id,
@@ -568,27 +508,14 @@ impl ConversationAgent {
         } else {
             String::new()
         };
-        // The agent only sees the spoken conversation, so tell it where an
-        // in-flight purchase stands instead of letting it start over.
-        let shopping_state = if routed_domain == crate::jev::ToolDomain::Shopping {
-            self.shopper_sessions
-                .note(prompt.user_id.0)
-                .map(|note| {
-                    format!("\nShopping state (from the browser; continue from here):\n{note}\n")
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
         let current_time = chrono::Utc::now().to_rfc3339();
-        let turn_state = format!("{shopping_state}{}", connected.note);
         let input = format!(
             "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}{}\nUser message:\n{}{}{}",
             current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
-            turn_state,
+            connected.note,
             prompt.user_text,
             filler_instruction,
             onboarding_instruction
@@ -737,39 +664,6 @@ fn turn_span(prompt: &ConversationPrompt) -> tracing::Span {
             .then_some(prompt.user_text.as_str()),
         langfuse.observation.output = tracing::field::Empty,
     )
-}
-
-/// Cheap keyword check so a purchase request reaches the shopping tools
-/// without waiting on the Jev router.
-fn mentions_shopping(text: &str) -> bool {
-    let text = text.to_lowercase();
-    [
-        "amazon",
-        "buy",
-        "purchase",
-        "order me",
-        "place an order",
-        "place the order",
-    ]
-    .iter()
-    .any(|keyword| text.contains(keyword))
-}
-
-fn mentions_device(text: &str) -> bool {
-    let text = text.to_lowercase();
-    [
-        "battery",
-        "terminal",
-        "run a command",
-        "shell command",
-        "my mac",
-        "my computer",
-        "my laptop",
-        "github issue",
-        "pull request",
-    ]
-    .iter()
-    .any(|keyword| text.contains(keyword))
 }
 
 pub fn spoken_response(response: &str) -> String {

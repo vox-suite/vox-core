@@ -14,7 +14,6 @@ pub enum ToolDomain {
     TasksAndRecords,
     Calendar,
     Device,
-    Shopping,
     All,
 }
 
@@ -61,13 +60,7 @@ impl ToolRouter {
             (
                 "device",
                 Some(
-                    "Opening a terminal, running a shell command, checking status, or resolving a GitHub issue (opening a pull request) on the user's registered computer or device (e.g. their Mac, laptop)",
-                ),
-            ),
-            (
-                "shopping",
-                Some(
-                    "Buying or ordering a product (e.g. from Amazon), choosing a product's colour, size or storage, or confirming a purchase",
+                    "Opening a terminal, running a shell command, or checking status on the user's registered computer or device (e.g. their Mac, laptop)",
                 ),
             ),
             (
@@ -85,7 +78,6 @@ impl ToolRouter {
             "tasks_and_records" => ToolDomain::TasksAndRecords,
             "calendar" => ToolDomain::Calendar,
             "device" => ToolDomain::Device,
-            "shopping" => ToolDomain::Shopping,
             _ => ToolDomain::All,
         };
 

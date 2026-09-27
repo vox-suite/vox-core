@@ -2,4 +2,3 @@ target/
 .git/
 .env
 .env.*
-services/amazon-shopper/node_modules

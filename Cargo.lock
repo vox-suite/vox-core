@@ -7957,6 +7957,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vox-connections"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hex",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "vox-core"
 version = "0.1.0"
 dependencies = [
@@ -7993,6 +8009,15 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "vox-connections",
+ "vox-sms-schema",
+]
+
+[[package]]
+name = "vox-sms-schema"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

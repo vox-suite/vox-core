@@ -34,7 +34,7 @@ pub async fn create(
     let Some(context) = authenticated_context(trust, &headers, request.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match grants.grant(&context, request.grant).await {
+    match grants.grant(&context.request_context(), request.grant).await {
         Ok(grant) => (StatusCode::CREATED, Json(grant)).into_response(),
         Err(CapabilityGrantError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(CapabilityGrantError::Unavailable) => StatusCode::FORBIDDEN.into_response(),
@@ -54,7 +54,7 @@ pub async fn revoke(
     let Some(context) = authenticated_context(trust, &headers, request.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match grants.revoke(&context, request.grant).await {
+    match grants.revoke(&context.request_context(), request.grant).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(CapabilityGrantError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(CapabilityGrantError::Unavailable) => StatusCode::NOT_FOUND.into_response(),
@@ -76,7 +76,7 @@ pub async fn effective(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     match grants
-        .effective_for_agent(&context, &agent_external_key)
+        .effective_for_agent(&context.request_context(), &agent_external_key)
         .await
     {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),

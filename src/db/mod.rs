@@ -13,9 +13,22 @@ pub struct Db {
 
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
+        Self::connect_with_pool(
+            database_url,
+            crate::config::DEFAULT_DB_MAX_CONNECTIONS,
+            crate::config::DEFAULT_DB_ACQUIRE_TIMEOUT_SECS,
+        )
+        .await
+    }
+
+    pub async fn connect_with_pool(
+        database_url: &str,
+        max_connections: u32,
+        acquire_timeout_secs: u64,
+    ) -> Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
-            .max_connections(10)
-            .acquire_timeout(Duration::from_secs(5))
+            .max_connections(max_connections)
+            .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
             .connect(database_url)
             .await?;
         Ok(Self { pool })

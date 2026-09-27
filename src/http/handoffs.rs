@@ -78,7 +78,7 @@ pub async fn amazon_handoff(
 
     match service
         .create_purchase_handoff(
-            &context,
+            &context.request_context(),
             &request.agent_external_key,
             request.connection_id,
             request.handoff,
@@ -171,7 +171,7 @@ pub async fn zomato_handoff(
 
     match service
         .create_order_handoff(
-            &context,
+            &context.request_context(),
             &request.agent_external_key,
             request.connection_id,
             request.handoff,
@@ -263,7 +263,7 @@ pub async fn uber_handoff(
 
     match service
         .create_ride_handoff(
-            &context,
+            &context.request_context(),
             &request.agent_external_key,
             request.connection_id,
             request.handoff,

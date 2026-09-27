@@ -108,7 +108,7 @@ pub async fn discover_for_context(
     };
     match registry
         .discover_for_context(
-            &context,
+            &context.request_context(),
             r.agent_external_key.as_deref(),
             r.region.as_deref(),
         )

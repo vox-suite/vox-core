@@ -64,7 +64,7 @@ pub async fn read(
 
     match service
         .read_history(
-            &context,
+            &context.request_context(),
             &request.agent_external_key,
             request.connection_id,
             &request.capability_external_key,

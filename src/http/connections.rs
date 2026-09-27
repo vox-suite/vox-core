@@ -56,7 +56,7 @@ pub async fn initiate(
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.initiate(&context, r.initiation).await {
+    match connections.initiate(&context.request_context(), r.initiation).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(ConnectionError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ConnectionError::IntegrationUnavailable) => StatusCode::NOT_FOUND.into_response(),
@@ -91,7 +91,7 @@ pub async fn callback(
         }
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.verify_callback(&context, r.callback).await {
+    match connections.verify_callback(&context.request_context(), r.callback).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(ConnectionError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(ConnectionError::AuthorizationUnavailable) => {
@@ -134,7 +134,7 @@ pub async fn list(
         Ok(v) => v,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.list(&context).await {
+    match connections.list(&context.request_context()).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -160,7 +160,7 @@ pub async fn disconnect(
         Ok(v) => v,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match connections.disconnect(&context, id).await {
+    match connections.disconnect(&context.request_context(), id).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(ConnectionError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(ConnectionError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),

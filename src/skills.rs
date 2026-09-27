@@ -406,8 +406,8 @@ impl SkillService {
         agent_key: &str,
     ) -> Result<Vec<EffectiveSkill>, SkillError> {
         let agent_id = self.selected_agent_id(context, agent_key).await?;
-        let granted: Vec<String> = CapabilityGrantService::new(self.db.clone())
-            .effective_for_agent(context, agent_key)
+        let granted: Vec<String> = CapabilityGrantService::new(self.db.pool().clone())
+            .effective_for_agent(&context.request_context(), agent_key)
             .await?
             .into_iter()
             .map(|grant| grant.capability_external_key)

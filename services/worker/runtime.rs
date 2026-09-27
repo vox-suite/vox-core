@@ -30,14 +30,17 @@ pub async fn run_worker(
     config: Config,
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let db = Db::connect(&config.database_url)
-        .await
-        .expect("Vox Core database is unavailable");
+    let db = Db::connect_with_pool(
+        &config.database_url,
+        config.db_max_connections,
+        config.db_acquire_timeout_secs,
+    )
+    .await
+    .expect("Vox Core database is unavailable");
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
-    let redis_url = config.redis_url.as_deref().unwrap_or("redis://redis:6379");
-    let cache = RedisContextCache::new(redis_url)
+    let cache = RedisContextCache::new(&config.redis_url)
         .ok()
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);

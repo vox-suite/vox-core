@@ -55,7 +55,7 @@ pub enum ApprovalError {
 impl ApprovalService {
     pub fn new(db: Db) -> Self {
         Self {
-            grants: CapabilityGrantService::new(db.clone()),
+            grants: CapabilityGrantService::new(db.pool().clone()),
             db,
         }
     }
@@ -83,7 +83,7 @@ impl ApprovalService {
             .ok_or(ApprovalError::Invalid)?;
         let grants = self
             .grants
-            .effective_for_agent(context, &agent)
+            .effective_for_agent(&context.request_context(), &agent)
             .await
             .map_err(|e| match e {
                 crate::capability_grants::CapabilityGrantError::Database(err) => {

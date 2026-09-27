@@ -534,7 +534,7 @@ impl ExpediaLodgingService {
         // 2. Verify connection
         let connection =
             self.connections
-                .get(context, connection_id)
+                .get(&context.request_context(), connection_id)
                 .await
                 .map_err(|e| match e {
                     ConnectionError::NotFound => ExpediaLodgingError::ConnectionNotFound,
@@ -557,7 +557,7 @@ impl ExpediaLodgingService {
         // 3. Verify agent capability grant
         let grants = self
             .grants
-            .effective_for_agent(context, agent_external_key)
+            .effective_for_agent(&context.request_context(), agent_external_key)
             .await
             .map_err(|e| match e {
                 CapabilityGrantError::Database(err) => ExpediaLodgingError::Database(err),
@@ -794,7 +794,7 @@ impl ExpediaLodgingService {
     ) -> Result<ExpediaCancellationResult, ExpediaLodgingError> {
         let grants = self
             .grants
-            .effective_for_agent(context, agent_external_key)
+            .effective_for_agent(&context.request_context(), agent_external_key)
             .await
             .map_err(|e| match e {
                 CapabilityGrantError::Database(err) => ExpediaLodgingError::Database(err),

@@ -144,6 +144,17 @@ impl AppState {
         if let Some(j) = jev {
             conv = conv.with_jev(j);
         }
+        let mut state = Self::with_core_services(db.clone(), service_token);
+        state.conversations = Some(Arc::new(conv));
+        state.events = Some(Arc::new(EventService::new(db.clone())));
+        state.schedules = Some(Arc::new(ScheduleService::new(db)));
+        state
+    }
+
+    /// Everything both entry points build identically: every core/registry
+    /// service plus all four provider clients, keyed off just a `Db`. Adding
+    /// provider #5 (or a new core service) only means editing this one place.
+    fn with_core_services(db: Db, service_token: String) -> Self {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
@@ -163,22 +174,22 @@ impl AppState {
             execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(
                 db.clone(),
             ))),
-            conversations: Some(Arc::new(conv)),
+            conversations: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
-                db.clone(),
+                db.pool().clone(),
             ))),
             capability_grants: Some(Arc::new(
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
             )),
-            events: Some(Arc::new(EventService::new(db.clone()))),
+            events: None,
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
                 crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
             )),
             integration_registry: Some(Arc::new(
-                crate::integration_registry::IntegrationRegistry::new(db.clone()),
+                crate::integration_registry::IntegrationRegistry::new(db.pool().clone()),
             )),
-            schedules: Some(Arc::new(ScheduleService::new(db.clone()))),
+            schedules: None,
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
                 db.clone(),
             ))),
@@ -194,17 +205,17 @@ impl AppState {
             skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
             uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                db.pool().clone(),
+                crate::connections::ConnectionService::new(db.pool().clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
                 Arc::new(crate::providers::DefaultUberProviderClient::new(
                     "https://api.uber.com",
                 )),
             ))),
             expedia_write: Some(Arc::new(crate::providers::ExpediaLodgingService::new(
                 db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                crate::connections::ConnectionService::new(db.pool().clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
                 crate::approvals::ApprovalService::new(db.clone()),
                 crate::execution::ExecutionCoordinator::new(db.clone()),
                 Arc::new(crate::providers::DefaultExpediaProviderClient::new(
@@ -212,17 +223,17 @@ impl AppState {
                 )),
             ))),
             amazon: Some(Arc::new(crate::providers::AmazonService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                db.pool().clone(),
+                crate::connections::ConnectionService::new(db.pool().clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
                 Arc::new(crate::providers::DefaultAmazonProviderClient::new(
                     "https://webservices.amazon.com",
                 )),
             ))),
             zomato: Some(Arc::new(crate::providers::ZomatoService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
+                db.pool().clone(),
+                crate::connections::ConnectionService::new(db.pool().clone()),
+                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
                 Arc::new(crate::providers::DefaultZomatoProviderClient::new(
                     "https://api.zomato.com",
                 )),
@@ -250,91 +261,7 @@ impl AppState {
     }
 
     pub fn with_host_trust(db: Db, service_token: String) -> Self {
-        Self {
-            ready: Arc::new(AtomicBool::new(true)),
-            rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
-            admin: None,
-            audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
-            agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
-                db.clone(),
-            ))),
-            approvals: Some(Arc::new(crate::approvals::ApprovalService::new(db.clone()))),
-            db: Some(db.clone()),
-            durable_tasks: Some(Arc::new(crate::durable_tasks::DurableTaskService::new(
-                db.clone(),
-            ))),
-            execution_policy: Some(Arc::new(
-                crate::execution_policy::ExecutionPolicyService::new(db.clone()),
-            )),
-            execution: Some(Arc::new(crate::execution::ExecutionCoordinator::new(
-                db.clone(),
-            ))),
-            conversations: None,
-            connections: Some(Arc::new(crate::connections::ConnectionService::new(
-                db.clone(),
-            ))),
-            capability_grants: Some(Arc::new(
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
-            )),
-            events: None,
-            host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
-            identity_adapters: Some(Arc::new(
-                crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
-            )),
-            integration_registry: Some(Arc::new(
-                crate::integration_registry::IntegrationRegistry::new(db.clone()),
-            )),
-            schedules: None,
-            preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
-                db.clone(),
-            ))),
-            privacy: Some(Arc::new(crate::privacy::PrivacyService::new(
-                db.clone(),
-                None,
-            ))),
-            reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
-            remote_extensions: Some(Arc::new(
-                crate::remote_extensions::RemoteExtensionService::new(db.clone()),
-            )),
-            connected_apps: None,
-            skills: Some(Arc::new(crate::skills::SkillService::new(db.clone()))),
-            status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
-            uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
-                Arc::new(crate::providers::DefaultUberProviderClient::new(
-                    "https://api.uber.com",
-                )),
-            ))),
-            expedia_write: Some(Arc::new(crate::providers::ExpediaLodgingService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
-                crate::approvals::ApprovalService::new(db.clone()),
-                crate::execution::ExecutionCoordinator::new(db.clone()),
-                Arc::new(crate::providers::DefaultExpediaProviderClient::new(
-                    "https://api.expediagroup.com",
-                )),
-            ))),
-            amazon: Some(Arc::new(crate::providers::AmazonService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
-                Arc::new(crate::providers::DefaultAmazonProviderClient::new(
-                    "https://webservices.amazon.com",
-                )),
-            ))),
-            zomato: Some(Arc::new(crate::providers::ZomatoService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.clone()),
-                Arc::new(crate::providers::DefaultZomatoProviderClient::new(
-                    "https://api.zomato.com",
-                )),
-            ))),
-            service_token: Arc::from(service_token),
-        }
+        Self::with_core_services(db, service_token)
     }
 
     pub fn with_uber_read(
