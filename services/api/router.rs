@@ -16,9 +16,7 @@ use crate::{
             list_collections, remove_collection_span, update_collection,
         },
         device_socket::{DeviceSocketState, device_socket},
-        devices::{
-            DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result,
-        },
+        devices::{DeviceApiState, heartbeat, register_device},
         events::ingest_batch,
         identity::get_me,
         internal::dispatch_device_request,
@@ -100,13 +98,10 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let device_api_state = DeviceApiState {
         devices: state.devices.clone(),
-        pool: state.pool.clone(),
     };
     let device_routes = Router::new()
         .route("/v1/devices", post(register_device))
         .route("/v1/devices/{id}/heartbeat", post(heartbeat))
-        .route("/v1/devices/{id}/jobs/claim", post(claim_device_jobs))
-        .route("/v1/device-jobs/{id}/result", post(submit_job_result))
         .with_state(device_api_state);
 
     let device_socket_state = DeviceSocketState {
