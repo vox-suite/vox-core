@@ -20,6 +20,7 @@ pub mod handoffs;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
+pub mod library;
 pub mod packages;
 pub mod preferences;
 pub mod privacy;
@@ -361,11 +362,13 @@ pub fn router(state: AppState) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
+        .route("/v1/library/invoke", post(library::invoke))
         .route("/v1/connector-packages/publish", post(packages::publish))
         .route("/v1/connector-packages/list", post(packages::list))
         .route("/v1/connector-packages/install", post(packages::install))
         .route("/v1/connector-packages/withdraw", post(packages::withdraw))
         .route("/v1/action-proposals", post(approvals::propose))
+        .route("/v1/action-proposals/list", post(approvals::list))
         .route(
             "/v1/spending-policies",
             post(execution_policy::set_spending_policy),
@@ -374,6 +377,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/operational-quotas",
             post(execution_policy::set_operational_quota),
         )
+        .route("/v1/action-proposals/{id}/reject", post(approvals::reject))
         .route(
             "/v1/action-proposals/{id}/approve",
             post(approvals::approve),
@@ -528,6 +532,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/remote-extensions", post(remote_extensions::install))
         .route("/v1/skills/private", post(skills::publish_private))
+        .route("/v1/skills/import", post(skills::import_private))
         .route("/v1/skills/curated", post(skills::publish_curated))
         .route("/v1/skills/list", post(skills::list))
         .route("/v1/skills/{id}/versions/{version}", post(skills::version))
@@ -555,6 +560,10 @@ pub fn router(state: AppState) -> Router {
             post(connected_apps::callback),
         )
         .route("/v1/connected-apps/status", post(connected_apps::status))
+        .route(
+            "/v1/remote-extensions/{id}/connect-public",
+            post(connected_apps::connect_public),
+        )
         .route("/v1/connected-apps/read", post(connected_apps::read_tool))
         .route(
             "/v1/connected-apps/execute",

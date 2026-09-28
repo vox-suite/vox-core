@@ -28,6 +28,23 @@ pub struct ApproveRequest {
     pub details: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+pub struct ListRequest {
+    pub host_context: HostContextRequest,
+}
+pub async fn list(State(s): State<AppState>, h: HeaderMap, Json(r): Json<ListRequest>) -> Response {
+    let Some(context) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(service) = s.approvals.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.list_pending(&context).await {
+        Ok(proposals) => Json(proposals).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 pub async fn propose(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -61,6 +78,28 @@ pub async fn approve(
         service.approve(&context, id, r.details, Utc::now()).await,
         StatusCode::OK,
     )
+}
+
+pub async fn reject(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(r): Json<ListRequest>,
+) -> Response {
+    let Some(context) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(service) = s.approvals.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.reject(&context, id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(ApprovalError::NotApprovable | ApprovalError::Consumed) => {
+            StatusCode::CONFLICT.into_response()
+        }
+        Err(ApprovalError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
+    }
 }
 
 fn reply(r: Result<crate::approvals::Proposal, ApprovalError>, ok: StatusCode) -> Response {

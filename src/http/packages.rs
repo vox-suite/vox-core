@@ -135,6 +135,7 @@ mod tests {
         let mut state = AppState::new(true);
         state.service_token = Arc::from("operator-secret");
         let publish_request = || PublishPackage {
+            metadata: vox_connections::packages::PackageMetadata::oauth(),
             deployment_id: Uuid::new_v4(),
             version: 1,
             manifest: serde_json::from_value(serde_json::json!({

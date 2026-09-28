@@ -4,7 +4,7 @@
 use super::{EventId, IngestEventRequest, IngestEventResponse};
 use crate::{
     db::Db,
-    identity::{IdentityError, IdentityService},
+    identity::{IdentityError, ResolvedUserContext},
 };
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -13,7 +13,6 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct EventService {
     db: Db,
-    identities: IdentityService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,14 +27,12 @@ pub enum EventError {
 
 impl EventService {
     pub fn new(db: Db) -> Self {
-        Self {
-            identities: IdentityService::new(db.clone()),
-            db,
-        }
+        Self { db }
     }
 
     pub async fn ingest(
         &self,
+        context: ResolvedUserContext,
         request: IngestEventRequest,
     ) -> Result<IngestEventResponse, EventError> {
         if request.idempotency_key.trim().is_empty()
@@ -45,10 +42,7 @@ impl EventService {
         {
             return Err(EventError::Invalid);
         }
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
+        let owner = context.owner();
         let user_id = owner.user_id;
         let mut tx = self.db.pool().begin().await?;
         let source_id = format!(

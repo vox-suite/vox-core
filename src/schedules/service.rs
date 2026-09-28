@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     db::Db,
-    identity::{IdentityError, IdentityService},
+    identity::{IdentityError, ResolvedUserContext},
 };
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
@@ -17,7 +17,6 @@ use std::str::FromStr;
 #[derive(Clone)]
 pub struct ScheduleService {
     db: Db,
-    identities: IdentityService,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,21 +33,20 @@ pub enum ScheduleError {
 
 impl ScheduleService {
     pub fn new(db: Db) -> Self {
-        Self {
-            identities: IdentityService::new(db.clone()),
-            db,
-        }
+        Self { db }
     }
 
     pub async fn create(
         &self,
+        context: ResolvedUserContext,
         request: CreateScheduleRequest,
     ) -> Result<ScheduleResponse, ScheduleError> {
-        self.create_at(request, Utc::now()).await
+        self.create_at(context, request, Utc::now()).await
     }
 
     pub async fn create_at(
         &self,
+        context: ResolvedUserContext,
         request: CreateScheduleRequest,
         now: DateTime<Utc>,
     ) -> Result<ScheduleResponse, ScheduleError> {
@@ -60,10 +58,7 @@ impl ScheduleService {
             return Err(ScheduleError::Invalid);
         }
         let timezone = Tz::from_str(request.timezone.trim()).map_err(|_| ScheduleError::Invalid)?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
+        let owner = context.owner();
         let (next_run_at, recurrence_expression) = match request.schedule_kind {
             ScheduleKind::Once => {
                 if request.recurrence_expression.is_some() {
@@ -108,14 +103,16 @@ impl ScheduleService {
     pub async fn update(
         &self,
         id: ScheduleId,
+        context: ResolvedUserContext,
         request: UpdateScheduleRequest,
     ) -> Result<ScheduleResponse, ScheduleError> {
-        self.update_at(id, request, Utc::now()).await
+        self.update_at(id, context, request, Utc::now()).await
     }
 
     pub async fn update_at(
         &self,
         id: ScheduleId,
+        context: ResolvedUserContext,
         request: UpdateScheduleRequest,
         now: DateTime<Utc>,
     ) -> Result<ScheduleResponse, ScheduleError> {
@@ -130,10 +127,7 @@ impl ScheduleService {
         {
             return Err(ScheduleError::Invalid);
         }
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
+        let owner = context.owner();
         let row = sqlx::query(
             "SELECT kind AS schedule_kind, recurrence_expression, timezone, next_run_at, state \
              FROM schedules \

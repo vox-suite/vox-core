@@ -32,6 +32,8 @@ pub struct PromptMessage {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConversationPrompt {
+    pub context: crate::identity::ResolvedUserContext,
+    pub selected_agent: crate::agent_registry::SelectedAgent,
     pub user_id: UserId,
     pub owner: ResourceOwner,
     pub channel: String,
@@ -51,7 +53,7 @@ pub struct ConversationPrompt {
 
 pub struct ConversationAgent {
     api_key: String,
-    model: String,
+    connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     http: reqwest::Client,
     exa_api_key: String,
     google_maps_api_key: Option<String>,
@@ -89,7 +91,7 @@ impl ConversationAgent {
         };
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
-            model: config.gemini_model.clone(),
+            connected_apps: None,
             http: dependencies.http,
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
@@ -112,6 +114,10 @@ impl ConversationAgent {
         agent.outbound = Some(Arc::new(OutboundCallService::new(
             db.clone(),
             bridge_client,
+        )));
+        agent.connected_apps = Some(Arc::new(crate::connected_apps::from_config(
+            db.clone(),
+            config,
         )));
         agent.db = Some(db);
         Ok(agent)
@@ -142,6 +148,9 @@ impl ConversationAgent {
         prompt: &ConversationPrompt,
     ) -> Result<(rig::agent::Agent, String, bool), AgentError> {
         let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        if prompt.selected_agent.model_configuration.model_adapter != "gemini" {
+            return Err(AgentError::Provider);
+        }
 
         let is_voice = is_voice_channel(&prompt.channel);
         let tts = prompt.tts_provider.as_deref().unwrap_or(&self.tts_provider);
@@ -196,8 +205,14 @@ impl ConversationAgent {
             let name = format!("{kind}-agent");
             tracing::Span::current().record("gen_ai.agent.name", name.as_str());
             client
-                .agent(&self.model)
+                .agent(&prompt.selected_agent.model_configuration.model)
                 .name(&name)
+                .tool(tools::library::AgentLibrary::new(
+                    self.db.clone(),
+                    self.connected_apps.clone(),
+                    prompt.context.clone(),
+                    prompt.selected_agent.definition.external_key.clone(),
+                ))
                 .record_content_telemetry(crate::telemetry::record_content())
                 .tool(tools::terminal::OpenTerminal::new(
                     self.db.clone(),
@@ -457,6 +472,7 @@ impl ConversationAgent {
             };
 
         let mut history = String::new();
+        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse the library tool to discover enabled skills and granted integrations for this task. Load relevant skills on demand. Proposed external changes require an authenticated user decision; never report a proposal as execution.\n", prompt.selected_agent.definition.purpose));
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
