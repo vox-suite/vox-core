@@ -340,7 +340,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
             }
             Message::Close(_) => break,
             Message::Ping(payload) => {
-                let _ = out_tx.send(OutboundFrame::Pong(payload.into())).await;
+                let _ = out_tx.send(OutboundFrame::Pong(payload)).await;
             }
             _ => {}
         }
