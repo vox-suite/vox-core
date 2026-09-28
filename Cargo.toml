@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-vox-connections = { path = "../vox-connections" }
-vox-shared = { path = "../vox-shared" }
+vox-connections = { git = "https://github.com/vox-suite/vox-connections.git", branch = "main" }
+vox-shared = { git = "https://github.com/vox-suite/vox-shared.git", branch = "main" }
 axum = { version = "0.8.9", features = ["ws"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
