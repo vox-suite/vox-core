@@ -62,6 +62,7 @@ impl EventService {
         Ok(IngestEventResponse { event_id })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn ingest_for_user(
         &self,
         user_id: Uuid,

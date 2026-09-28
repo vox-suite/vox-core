@@ -273,6 +273,7 @@ impl EventHandler {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn write_span(
         &self,
         event_id: EventId,
