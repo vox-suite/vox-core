@@ -5,6 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
+use vox_connections::remote_extensions::ExtensionCapability;
 
 const MAX_PROPOSAL_LIFETIME: Duration = Duration::hours(24);
 
@@ -96,12 +97,68 @@ impl ApprovalService {
         }) {
             return Err(ApprovalError::UnauthorizedCapability);
         }
+        // A remote MCP proposal is executable only for a reviewed, currently
+        // available write tool. Bind the exact invocation into the proposal
+        // before it is ever shown to the approver.
+        let remote = sqlx::query(
+            "SELECT v.capabilities, c.tools, e.conformance_status, e.operator_enabled \
+             FROM external_connections x \
+             JOIN remote_extensions e ON e.id=x.remote_extension_id AND e.user_context_id=x.user_context_id \
+             JOIN remote_extension_versions v ON v.extension_id=e.id AND v.version=e.current_version \
+             JOIN remote_extension_credentials c ON c.extension_id=e.id \
+             WHERE x.id=$1 AND x.user_context_id=$2 AND x.authorization_state='authorized' \
+               AND e.lifecycle_state='active' AND e.consent_status='consented'",
+        )
+        .bind(connection_id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?;
+        let is_remote: bool = sqlx::query_scalar(
+            "SELECT remote_extension_id IS NOT NULL FROM external_connections \
+             WHERE id=$1 AND user_context_id=$2",
+        )
+        .bind(connection_id)
+        .bind(context.id.0)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(ApprovalError::UnauthorizedCapability)?;
+        if is_remote && remote.is_none() {
+            return Err(ApprovalError::NotApprovable);
+        }
+        if let Some(remote) = remote {
+            let invocation = r.details.get("invocation").ok_or(ApprovalError::Invalid)?;
+            if invocation.get("tool_name").and_then(Value::as_str) != Some(capability.as_str())
+                || !invocation.get("arguments").is_some_and(Value::is_object)
+                || remote.get::<String, _>("conformance_status") != "passed"
+                || !remote.get::<bool, _>("operator_enabled")
+            {
+                return Err(ApprovalError::NotApprovable);
+            }
+            let declared: Vec<ExtensionCapability> =
+                serde_json::from_value(remote.get("capabilities"))
+                    .map_err(|_| ApprovalError::NotApprovable)?;
+            if !declared.iter().any(|item| {
+                item.external_key == capability
+                    && (item.consequential || item.effect.is_consequential())
+            }) {
+                return Err(ApprovalError::NotApprovable);
+            }
+            let reported: Value = remote.get("tools");
+            if !reported.as_array().is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("name").and_then(Value::as_str) == Some(capability.as_str())
+                })
+            }) {
+                return Err(ApprovalError::NotApprovable);
+            }
+        }
         let mut tx = self.db.pool().begin().await?;
         let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM spans WHERE id = $1 AND user_id = $2)",
+            "SELECT EXISTS(SELECT 1 FROM spans WHERE id = $1 AND user_id = $2 AND user_context_id = $3)",
         )
         .bind(r.span_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_one(&mut *tx)
         .await?;
         if !task_belongs_to_context {
@@ -110,11 +167,12 @@ impl ApprovalService {
         if let Some(previous) = r.replaces_proposal_id {
             let changed = sqlx::query(
                 "UPDATE action_proposals SET state = 'rejected', updated_at = $3 \
-                 WHERE id = $1 AND user_id = $2 AND state IN ('proposed', 'approved')",
+                 WHERE id = $1 AND user_id = $2 AND user_context_id = $4 AND state IN ('proposed', 'approved')",
             )
             .bind(previous)
             .bind(context.user_id.0)
             .bind(now)
+            .bind(context.id.0)
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -125,10 +183,11 @@ impl ApprovalService {
         let details_hash = hash(&r.details)?;
         let details = r.details;
         let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO action_proposals (user_id, span_id, job_id, actor_key, connection_id, capability, details, details_hash, expires_at, state) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'proposed') RETURNING id",
+            "INSERT INTO action_proposals (user_id, user_context_id, span_id, job_id, actor_key, connection_id, capability, details, details_hash, expires_at, state) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'proposed') RETURNING id",
         )
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .bind(r.span_id)
         .bind(r.task_run_id)
         .bind(&agent)
@@ -159,10 +218,11 @@ impl ApprovalService {
         let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
             "SELECT details, details_hash, expires_at, state, capability \
-             FROM action_proposals WHERE id = $1 AND user_id = $2 FOR UPDATE",
+             FROM action_proposals WHERE id = $1 AND user_id = $2 AND user_context_id = $3 FOR UPDATE",
         )
         .bind(proposal_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApprovalError::NotFound)?;
@@ -186,13 +246,20 @@ impl ApprovalService {
             return Err(ApprovalError::NotApprovable);
         }
         let approved_hash: String = row.get("details_hash");
-        let session_evidence = serde_json::json!({});
+        let session_evidence = serde_json::json!({
+            "authority": "authenticated_host_context",
+            "user_context_id": context.id.0,
+            "host_app_id": context.subject.host_app_id.0,
+            "host_user_id": context.subject.host_user_id,
+            "organization_id": context.subject.organization_id.map(|id| id.0),
+        });
         let id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO action_approvals (proposal_id, user_id, approved_details_hash, session_evidence, approved_at) \
-             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            "INSERT INTO action_approvals (proposal_id, user_id, user_context_id, approved_details_hash, session_evidence, approved_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
         )
         .bind(proposal_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .bind(&approved_hash)
         .bind(session_evidence)
         .bind(now)
@@ -227,10 +294,11 @@ impl ApprovalService {
             "SELECT a.proposal_id, a.consumed_execution_id, a.approved_details_hash, \
                     p.details, p.details_hash, p.expires_at, p.state \
              FROM action_approvals a JOIN action_proposals p ON p.id = a.proposal_id \
-             WHERE a.id = $1 AND a.user_id = $2 FOR UPDATE OF a, p",
+             WHERE a.id = $1 AND a.user_id = $2 AND a.user_context_id = $3 AND p.user_context_id = $3 FOR UPDATE OF a, p",
         )
         .bind(approval_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApprovalError::NotFound)?;

@@ -61,7 +61,6 @@ pub struct ConversationAgent {
     tts_provider: String,
     device_hub: Option<DeviceHub>,
     user_events: Option<UserEventHub>,
-    connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -100,7 +99,6 @@ impl ConversationAgent {
             tts_provider: config.tts_provider.clone(),
             device_hub: None,
             user_events: None,
-            connected_apps: None,
         })
     }
 
@@ -114,10 +112,6 @@ impl ConversationAgent {
         agent.outbound = Some(Arc::new(OutboundCallService::new(
             db.clone(),
             bridge_client,
-        )));
-        agent.connected_apps = Some(Arc::new(crate::connected_apps::from_config(
-            db.clone(),
-            config,
         )));
         agent.db = Some(db);
         Ok(agent)
@@ -195,33 +189,6 @@ impl ConversationAgent {
             crate::jev::ToolDomain::All
         };
 
-        // Tools from apps the user connected (Swiggy, Notion, ...), offered
-        // alongside whichever built-in domain the router picked.
-        let connected = match (&self.connected_apps, is_call_opening) {
-            (Some(apps), false) => {
-                let history: Vec<&str> = prompt
-                    .recent_messages
-                    .iter()
-                    .rev()
-                    .take(6)
-                    .map(|m| m.text.as_str())
-                    .collect();
-                crate::connected_apps::tools::toolset(
-                    apps,
-                    crate::connected_apps::tools::TurnContext {
-                        user_id: vox_connections::identity::UserId(prompt.user_id.0),
-                        turn,
-                        message: &prompt.user_text,
-                        history,
-                        voice: is_voice,
-                    },
-                )
-                .await
-            }
-            _ => Default::default(),
-        };
-        let connected_tools = connected.tools;
-
         tracing::Span::current().record("vox.tool_domain", tracing::field::debug(routed_domain));
         // Names the agent after the tool set each branch gives it, so traces
         // show which one ran.
@@ -252,7 +219,6 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .dynamic_tools(connected_tools.clone())
                     .default_max_turns(6)
                     .build()
             } else if is_voice {
@@ -267,7 +233,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Maps => new_agent("maps")
@@ -284,7 +249,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::TasksAndRecords => new_agent("tasks-and-records")
@@ -335,7 +299,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => new_agent("calendar")
@@ -349,7 +312,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Device => new_agent("device")
@@ -358,7 +320,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                     _ => new_agent("voice-general")
@@ -407,7 +368,6 @@ impl ConversationAgent {
                             self.db.clone(),
                             prompt.user_id,
                         ))
-                        .dynamic_tools(connected_tools.clone())
                         .default_max_turns(6)
                         .build(),
                 }
@@ -492,7 +452,6 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .dynamic_tools(connected_tools.clone())
                     .default_max_turns(10)
                     .build()
             };
@@ -511,12 +470,11 @@ impl ConversationAgent {
         };
         let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}{}\nUser message:\n{}{}{}",
+            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
             current_time,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
-            connected.note,
             prompt.user_text,
             filler_instruction,
             onboarding_instruction
