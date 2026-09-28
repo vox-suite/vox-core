@@ -130,21 +130,26 @@ segmentation algorithm itself is a separate, follow-up spec.
 
 ### 4. Performance
 
-- Hash-partition `spans` by `user_id` (16 partitions), not range-by-time.
-  Range-partitioning on `start_at` was the original idea, but every
-  unique constraint on a range-partitioned table must include the
-  partition column — `spans_id_user_key UNIQUE (id, user_id)` would
-  have to become `(id, user_id, start_at)`, which breaks the FKs from
-  `collection_spans`, `reminders`, `sms_processed` (deleted anyway,
-  above), and the self-referential `parent_id` FK
-  (`migrations/20260923000000_initial_core.sql:1708-1709`), none of
-  which carry the referenced span's `start_at`. Hashing on `user_id`
-  needs no such rework — `user_id` is already the leading column of
-  every existing constraint and FK into `spans` — at the cost of no
-  time-based archival (out of scope; nothing today needs it). A given
-  user's rows land entirely in one partition, so the dominant query
-  (`user_id` + time range) still prunes to a single partition, and no
-  one user's growth bloats another's vacuum/index cost.
+- **No partitioning of `spans` in this pass — not range, not hash
+  either.** Range-partitioning on `start_at` was the original idea, but
+  every unique constraint on a range-partitioned table must include the
+  partition column — `spans_id_user_key UNIQUE (id, user_id)` would have
+  to become `(id, user_id, start_at)`. Hashing on `user_id` avoids that
+  specific problem (`user_id` is already the leading column of every
+  constraint into `spans`), but partitioning by *any* strategy still
+  means recreating the table, and `spans` turned out to be referenced far
+  more widely than first estimated: not just `collection_spans`/
+  `reminders`/`sms_processed` (deleted anyway, above), but also
+  `schedules.span_id`, `jobs.span_id`, `action_proposals.span_id` (all
+  composite `(span_id, user_id)` FKs), the self-referential `parent_id`
+  FK, and two triggers on `spans` itself
+  (`spans_context_compatibility`, `spans_status_event`) plus one on
+  `reminders` that inserts into `spans`
+  (`migrations/20260923000000_initial_core.sql:1704-1823`). Recreating
+  the table means reattaching all of that — real risk for a "hundreds of
+  users" scale that doesn't need it yet. Add the indexes below only;
+  partitioning becomes its own carefully-scoped project once row counts
+  actually justify that blast radius.
 - Add `spans_user_schema_idx` (above) and
   `GIN (data jsonb_path_ops)` for ad hoc field filtering.
 - No OFFSET-based pagination introduced (existing `list()` already uses
@@ -166,10 +171,25 @@ segmentation algorithm itself is a separate, follow-up spec.
 - GPS stay-point/trip segmentation algorithm itself — separate spec.
 - Any migration/backfill of existing `records`/`spans` rows — none
   needed; data is wiped and this starts fresh per explicit instruction.
-- Fingerprint/merge-duplicate logic — kept as-is, relocated to wrap the
-  System 1/2 path instead of the old SMS-specific one. OTP filtering is
-  *not* kept as-is: it moves from Rust string matching to Jev triage
-  (`ignore` action), since that's what triage already exists to do.
+- Fingerprint/merge-duplicate logic — kept, relocated to a small
+  finance-specific helper that runs after a span is written for an
+  `sms`-sourced event (not folded into the generic pipeline itself,
+  since the fingerprint/settlement semantics are finance-specific, not
+  universal). `settle_pending_due` (auto-marking a matching "due" span
+  `done` when its payment SMS arrives) is kept the same way.
+  Local-device classification (the old privacy/latency optimization that
+  tried a paired device before falling back to cloud Gemini) is dropped —
+  System 1/2 always call their respective cloud APIs; local-device
+  dispatch can come back as its own follow-up once the generic pipeline
+  exists to attach it to.
+- OTP filtering is **not** routed through Jev triage — it's already
+  handled client-side on Android (`OtpDetector.kt`, applied before
+  upload in `SmsSyncWorker.kt`), so OTP text never reaches the server at
+  all in the normal case. The server keeps the same cheap heuristic
+  (`looks_like_otp`, pure string/regex, no I/O) as a free backstop for
+  an out-of-date client, applied before an `inbound_events` row is even
+  created — cheaper than paying for a Jev triage call on something
+  already known to be noise.
 - `inbound_events` retention for *failed* rows (ones never successfully
   turned into a span) — none added here; they persist until retried.
   Only the success path deletes eagerly, per this design.
