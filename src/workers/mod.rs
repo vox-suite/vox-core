@@ -14,6 +14,7 @@ use crate::{
     summaries::handler::SummaryHandler,
 };
 use chrono::{Duration, Utc};
+use futures_util::{StreamExt, stream};
 use task_executor::TaskExecutorHandler;
 use tokio_util::sync::CancellationToken;
 use whatsapp_sweeper::WhatsAppSweeper;
@@ -83,104 +84,108 @@ impl Worker {
         }
     }
 
-    async fn run_once(&self) -> Result<(), crate::db::jobs::JobError> {
-        let now = Utc::now();
-        if let Some(ticker) = &self.ticker
-            && let Err(error) = ticker.tick(now).await
-        {
-            tracing::warn!(%error, "schedule ticker failed");
-        }
+    const JOB_CLAIM_BATCH: i64 = 20;
+    const JOB_CONCURRENCY: usize = 8;
 
-        if let Some(sweeper) = &self.wa_sweeper
-            && let Err(error) = sweeper.sweep_inactive_conversations().await
-        {
-            tracing::warn!(%error, "whatsapp sweeper failed");
-        }
-
-        if let Some(sweeper) = &self.sms_retention
-            && let Err(error) = sweeper.purge_expired().await
-        {
-            tracing::warn!(%error, "sms retention sweeper failed");
-        }
-
-        let jobs = self
-            .jobs
-            .claim(&self.worker_id, now, Duration::seconds(30), 1)
-            .await?;
-
-        for job in jobs {
-            tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job claimed");
-            let Some(reference_id) = job.payload_reference_id else {
-                tracing::error!(job_id = %job.id, kind = job.kind.as_str(), "job has no payload_reference_id; failing");
-                self.jobs
-                    .fail(
-                        job.id,
-                        &self.worker_id,
-                        Utc::now(),
-                        "missing_payload_reference_id",
-                    )
-                    .await?;
-                continue;
-            };
-            let result = match job.kind {
-                JobKind::ProcessEvent => self
-                    .events
-                    .handle(EventId(reference_id))
+    async fn handle_one(&self, job: crate::jobs::ClaimedJob) -> Result<(), crate::db::jobs::JobError> {
+        tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job claimed");
+        let Some(reference_id) = job.payload_reference_id else {
+            tracing::error!(job_id = %job.id, kind = job.kind.as_str(), "job has no payload_reference_id; failing");
+            self.jobs
+                .fail(job.id, &self.worker_id, Utc::now(), "missing_payload_reference_id")
+                .await?;
+            return Ok(());
+        };
+        let result = match job.kind {
+            JobKind::ProcessEvent => self
+                .events
+                .handle(EventId(reference_id))
+                .await
+                .map_err(|_| "event_processing"),
+            JobKind::RunSchedule => match &self.schedules {
+                Some(schedules) => match job.occurrence_at {
+                    Some(occurrence_at) => schedules
+                        .handle(ScheduleId(reference_id), occurrence_at)
+                        .await
+                        .map_err(|_| "schedule_processing"),
+                    None => Err("schedule_occurrence_missing"),
+                },
+                None => Err("schedule_handler_unavailable"),
+            },
+            JobKind::SummarizeConversation => match &self.summaries {
+                Some(summaries) => summaries
+                    .handle(ConversationId(reference_id))
                     .await
-                    .map_err(|_| "event_processing"),
-                JobKind::RunSchedule => match &self.schedules {
-                    Some(schedules) => match job.occurrence_at {
-                        Some(occurrence_at) => schedules
-                            .handle(ScheduleId(reference_id), occurrence_at)
-                            .await
-                            .map_err(|_| "schedule_processing"),
-                        None => Err("schedule_occurrence_missing"),
-                    },
-                    None => Err("schedule_handler_unavailable"),
-                },
-                JobKind::SummarizeConversation => match &self.summaries {
-                    Some(summaries) => summaries
-                        .handle(ConversationId(reference_id))
-                        .await
-                        .map_err(|_| "summary_processing"),
-                    None => Err("summary_handler_unavailable"),
-                },
-                JobKind::EvaluateSpan | JobKind::ExecuteSpan => match &self.task_executor {
-                    Some(executor) => executor
-                        .handle(reference_id)
-                        .await
-                        .map_err(|_| "task_execution"),
-                    None => Err("task_executor_unavailable"),
-                },
-            };
+                    .map_err(|_| "summary_processing"),
+                None => Err("summary_handler_unavailable"),
+            },
+            JobKind::EvaluateSpan | JobKind::ExecuteSpan => match &self.task_executor {
+                Some(executor) => executor
+                    .handle(reference_id)
+                    .await
+                    .map_err(|_| "task_execution"),
+                None => Err("task_executor_unavailable"),
+            },
+        };
 
-            match result {
-                Ok(()) => {
-                    tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
-                    self.jobs
-                        .complete(job.id, &self.worker_id, Utc::now())
-                        .await?
-                }
-                Err(code) if job.attempt_count >= job.max_attempts => {
-                    tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
-                    self.jobs
-                        .fail(job.id, &self.worker_id, Utc::now(), code)
-                        .await?
-                }
-                Err(code) => {
-                    tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, attempt = job.attempt_count, "job failed, retrying");
-                    let seconds = 2_i64.pow(job.attempt_count.clamp(1, 6) as u32);
-                    self.jobs
-                        .retry(
-                            job.id,
-                            &self.worker_id,
-                            Utc::now() + Duration::seconds(seconds),
-                            code,
-                        )
-                        .await?;
-                }
+        match result {
+            Ok(()) => {
+                tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
+                self.jobs.complete(job.id, &self.worker_id, Utc::now()).await?
+            }
+            Err(code) if job.attempt_count >= job.max_attempts => {
+                tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
+                self.jobs.fail(job.id, &self.worker_id, Utc::now(), code).await?
+            }
+            Err(code) => {
+                tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, attempt = job.attempt_count, "job failed, retrying");
+                let seconds = 2_i64.pow(job.attempt_count.clamp(1, 6) as u32);
+                self.jobs
+                    .retry(job.id, &self.worker_id, Utc::now() + Duration::seconds(seconds), code)
+                    .await?;
             }
         }
         Ok(())
+    }
+
+    async fn run_once(&self) -> Result<(), crate::db::jobs::JobError> {
+        loop {
+            let now = Utc::now();
+            if let Some(ticker) = &self.ticker
+                && let Err(error) = ticker.tick(now).await
+            {
+                tracing::warn!(%error, "schedule ticker failed");
+            }
+            if let Some(sweeper) = &self.wa_sweeper
+                && let Err(error) = sweeper.sweep_inactive_conversations().await
+            {
+                tracing::warn!(%error, "whatsapp sweeper failed");
+            }
+            if let Some(sweeper) = &self.sms_retention
+                && let Err(error) = sweeper.purge_expired().await
+            {
+                tracing::warn!(%error, "sms retention sweeper failed");
+            }
+
+            let jobs = self
+                .jobs
+                .claim(&self.worker_id, now, Duration::seconds(30), Self::JOB_CLAIM_BATCH)
+                .await?;
+            let claimed_full_batch = jobs.len() as i64 == Self::JOB_CLAIM_BATCH;
+
+            stream::iter(jobs)
+                .map(|job| self.handle_one(job))
+                .buffer_unordered(Self::JOB_CONCURRENCY)
+                .for_each(|result| async move {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "job handling failed");
+                    }
+                })
+                .await;
+
+            if !claimed_full_batch {
+                return Ok(());
+            }
+        }
     }
 }
