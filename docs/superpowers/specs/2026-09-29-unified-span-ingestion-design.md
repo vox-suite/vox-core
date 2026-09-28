@@ -46,15 +46,16 @@ either timeline rendering or future analytics.
   `validate_data_against_schema` — repointed at the new pipeline below.
 - No data migration or backfill. Existing `spans`/`records` rows are
   wiped in dev before this ships.
-- Goals and insights fold into `spans` using `category` as the
-  discriminator (`category = "goal"` / `"insight"`, with the specific
-  subject namespace still coming from `data_schemas.namespace`) instead
-  of a new `kind` column: `due_at` carries a goal's target date,
-  `status = Done` carries completion, `data` carries
-  `target_metric`/`reasoning`. `manage_user_goal` is rewritten to insert
-  into `spans` on this convention.
-  **This mapping is the one piece not walked through turn-by-turn
-  earlier — flagging it explicitly for review.**
+- Goals and insights are **not** folded into `spans`. A goal ("save
+  ₹50,000 for a TV") doesn't occupy time the way a Span does — it's a
+  standing target evaluated *against* time, with progress computed live
+  by querying spans (e.g. `SUM(data->>'amount')` for a schema/category
+  over a period), not stored state. That's the same shape the future
+  analytics/widgets sub-project needs (a named target + a query), so
+  it's deferred there rather than half-built now. `manage_user_goal` is
+  deleted, not rewritten, along with the `user_goals`/`user_insights`
+  views — goal/insight management comes back properly scoped when the
+  analytics sub-project starts.
 
 ### 2. Generalized classify + extract pipeline
 
@@ -121,6 +122,10 @@ segmentation algorithm itself is a separate, follow-up spec.
   grouped by category — separate sub-project.
 - Analytics/widget suggestion and generation (rollup tables, chart
   specs, live refresh) — separate sub-project.
+- Goal and insight tracking (target + live-computed progress query) —
+  `manage_user_goal` and the `user_goals`/`user_insights` views are
+  deleted with no replacement; rebuilt properly when the analytics
+  sub-project starts.
 - GPS stay-point/trip segmentation algorithm itself — separate spec.
 - Any migration/backfill of existing `records`/`spans` rows — none
   needed; data is wiped and this starts fresh per explicit instruction.
@@ -130,8 +135,9 @@ segmentation algorithm itself is a separate, follow-up spec.
 ## Testing
 
 None added. Any existing test that breaks because of the `records`
-table/view removal, the SMS extractor deletion, or the `manage_user_goal`
-rewrite is to be deleted, not fixed to pass around the change.
+table/view removal, the SMS extractor deletion, or the
+`manage_user_goal` deletion is to be deleted, not fixed to pass around
+the change.
 
 ## Comments
 
