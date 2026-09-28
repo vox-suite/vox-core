@@ -11,7 +11,8 @@ use crate::domain::{
 
 const SPAN_COLUMNS: &str = "s.id, s.user_id, s.parent_id, s.title, s.notes, s.category, s.source, \
     s.source_ref, s.status, s.start_at, s.end_at, s.due_at, s.priority, s.execution_type, \
-    s.execution_result, s.data, s.version, s.completed_at, s.created_at, s.updated_at, \
+    s.execution_result, s.data, s.schema_id, s.source_event_id, s.version, s.completed_at, \
+    s.created_at, s.updated_at, \
     ARRAY(SELECT cs.collection_id FROM collection_spans cs WHERE cs.span_id = s.id) AS collection_ids";
 
 #[derive(Clone)]
@@ -74,6 +75,7 @@ impl SpanRepository {
                     SELECT 1 FROM collection_spans cs WHERE cs.span_id = s.id AND cs.collection_id = $4))
                AND ($5::text IS NULL OR s.status = $5)
                AND (NOT $6 OR s.start_at IS NULL)
+               AND ($8::uuid IS NULL OR s.schema_id = $8)
              ORDER BY s.start_at NULLS LAST, s.created_at
              LIMIT $7"
         ))
@@ -84,6 +86,7 @@ impl SpanRepository {
         .bind(query.status.map(SpanStatus::as_str))
         .bind(query.unscheduled)
         .bind(query.limit.unwrap_or(500).clamp(1, 2000))
+        .bind(query.schema_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(map_span).collect())
@@ -188,9 +191,10 @@ async fn insert(
     let status = input.status.unwrap_or_default();
     let id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO spans (user_id, parent_id, title, notes, category, source, source_ref, status,
-                            start_at, end_at, due_at, priority, execution_type, data, completed_at)
+                            start_at, end_at, due_at, priority, execution_type, data, schema_id,
+                            source_event_id, completed_at)
          VALUES ($1, $2, $3, $4, COALESCE($5, 'general'), COALESCE($6, 'user'), $7, $8,
-                 $9, $10, $11, COALESCE($12, 0), $13, COALESCE($14, '{}'::jsonb),
+                 $9, $10, $11, COALESCE($12, 0), $13, COALESCE($14, '{}'::jsonb), $15, $16,
                  CASE WHEN $8 = 'done' THEN COALESCE($10, $9, now()) END)
          RETURNING id",
     )
@@ -208,6 +212,8 @@ async fn insert(
     .bind(input.priority)
     .bind(input.execution_type.map(ExecutionType::as_str))
     .bind(input.data.clone())
+    .bind(input.schema_id)
+    .bind(input.source_event_id)
     .fetch_one(&mut **tx)
     .await?;
 
@@ -295,6 +301,8 @@ fn map_span(row: PgRow) -> Span {
         execution_type: execution_type.as_deref().and_then(ExecutionType::parse),
         execution_result: row.get("execution_result"),
         data: row.get("data"),
+        schema_id: row.get("schema_id"),
+        source_event_id: row.get("source_event_id"),
         collection_ids: row.get("collection_ids"),
         version: row.get("version"),
         completed_at: row.get("completed_at"),
