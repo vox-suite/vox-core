@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_HOST_USER_ID_BYTES: usize = 512;
+const TRUSTED_CHANNEL_HOST: (&str, &str) = ("vox.standalone.deployment", "vox.standalone.bridge");
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -174,6 +175,10 @@ impl IdentityService {
             return Err(IdentityError::ScopeNotFound);
         }
 
+        if let Some(context) = self.find_linked_channel_context(subject, host_user_id).await? {
+            return Ok(context);
+        }
+
         if let Some(context) = self.find_context(subject, host_user_id).await? {
             return Ok(context);
         }
@@ -282,6 +287,72 @@ impl IdentityService {
             },
         }))
     }
+    /// The first-party bridge host asserts a phone caller (`+E.164`) or a verified
+    /// desktop account (`vox-account:<user id>`). When that identity is already
+    /// linked to a signed-in user, resolve to that user's context instead of
+    /// creating a separate anonymous user for the channel.
+    async fn find_linked_channel_context(
+        &self,
+        subject: &UserContextSubject,
+        host_user_id: &str,
+    ) -> Result<Option<ResolvedUserContext>, IdentityError> {
+        if subject.organization_id.is_some() {
+            return Ok(None);
+        }
+        let trusted = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(\
+                SELECT 1 FROM host_apps h \
+                JOIN platform_deployments d ON d.id = h.deployment_id \
+                WHERE h.deployment_id = $1 AND h.id = $2 \
+                  AND d.external_key = $3 AND h.external_key = $4\
+            )",
+        )
+        .bind(subject.deployment_id.0)
+        .bind(subject.host_app_id.0)
+        .bind(TRUSTED_CHANNEL_HOST.0)
+        .bind(TRUSTED_CHANNEL_HOST.1)
+        .fetch_one(self.db.pool())
+        .await?;
+        if !trusted {
+            return Ok(None);
+        }
+
+        let linked = if let Some(account) = host_user_id.strip_prefix("vox-account:") {
+            let Ok(user_id) = Uuid::parse_str(account) else {
+                return Ok(None);
+            };
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT id, user_id FROM user_contexts WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_optional(self.db.pool())
+            .await?
+        } else {
+            let digits: String = host_user_id.chars().filter(char::is_ascii_digit).collect();
+            if !(7..=15).contains(&digits.len()) || host_user_id.trim_start_matches('+') != digits {
+                return Ok(None);
+            }
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT c.id, c.user_id FROM channel_identities i \
+                 JOIN user_contexts c ON c.user_id = i.user_id \
+                 WHERE i.channel = 'phone' AND i.normalized_external_id = $1 \
+                   AND i.revoked_at IS NULL LIMIT 1",
+            )
+            .bind(&digits)
+            .fetch_optional(self.db.pool())
+            .await?
+        };
+
+        Ok(linked.map(|(context_id, user_id)| ResolvedUserContext {
+            id: UserContextId(context_id),
+            user_id: UserId(user_id),
+            subject: UserContextSubject {
+                host_user_id: host_user_id.to_owned(),
+                ..subject.clone()
+            },
+        }))
+    }
+
     pub async fn owner_for_user(&self, user_id: UserId) -> Result<ResourceOwner, IdentityError> {
         let context_id =
             sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
