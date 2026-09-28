@@ -30,6 +30,25 @@ hardcoded extractor like the SMS one. At "hundreds of users" scale, a
 single growing `spans` table with today's indexes won't hold up for
 either timeline rendering or future analytics.
 
+SMS ingestion also duplicates infrastructure that already exists
+generically: `sms_batches`/`sms_processed`
+(`migrations/20260928000009_sms_processing.sql`) are a bespoke intake +
+dedup ledger, but `inbound_events` (`payload_hash`, a unique constraint
+on `(source_kind, source_id, external_event_id)`, `processed_at`,
+`processing_error`) already does the same job generically, and already
+auto-enqueues a `jobs(kind = 'process_event')` row on insert
+(`events/service.rs:56-79`). That job is already picked up by
+`events/handler.rs`, which already calls into a `jev` module
+(`src/jev/event_triage.rs`, `src/jev/schema_classifier.rs`) — a cheap
+external classifier (`JevClient`, gated on `JEV_API_KEY`) that triages
+an event (ignore / store / plan-action) and matches it against
+`data_schemas`, falling back to `NOVEL_CATEGORY_SENTINEL` when nothing
+fits. This is System 1. The only missing piece is System 2: when Jev
+says novel, `events/handler.rs:146-153` just logs and returns — no
+Gemini call, no schema creation. The "Existing" match branch also still
+inserts into `records` (`events/handler.rs:125-137`), which this design
+removes.
+
 ## Design
 
 ### 1. Collapse `records` into `spans`
@@ -57,41 +76,49 @@ either timeline rendering or future analytics.
   views — goal/insight management comes back properly scoped when the
   analytics sub-project starts.
 
-### 2. Generalized classify + extract pipeline
+### 2. Finish the classify + extract pipeline that already exists
 
-- New source-agnostic module, e.g. `vox-core/src/ingestion/classify.rs`:
-  takes one raw item (`title`/`body` text, `source_kind`, `occurred_at`)
-  and returns a ready-to-insert `Span`.
-- **Step 1, no LLM:** pgvector cosine-similarity search over
-  `data_schemas.embedding`, scoped to `(user_id OR user_id IS NULL) AND
-  state = 'active'`, returning top-K candidates above a similarity
-  threshold.
-- **Step 2, one LLM call:** given the candidates (or none), a single
-  prompt that either (a) picks a candidate and extracts `data` matching
-  its `json_schema`, or (b) defines a new schema inline
-  (namespace/name/description/json_schema) and extracts into it — the
-  same single-round-trip shape `sms_extractor.rs` already uses today,
-  generalized to not hardcode the output fields.
-- Result is validated with the existing `validate_data_against_schema`;
-  on success, insert one `Span` (`schema_id` set, `category` from the
-  schema's `name`, `data` from extraction, `start_at` mapped the same
-  way `sms_ingestion/handler.rs` already maps point-in-time facts today).
-  New schemas from step 2b are persisted the same way
-  `define_data_schema` already does (versioned insert into
-  `data_schemas`).
-- `sms_ingestion/handler.rs` is rewritten to call this pipeline instead
-  of `SmsExtracting`/`GeminiSmsExtractor`; `agents/sms_extractor.rs` is
-  deleted. OTP filtering and fingerprint/merge-duplicate logic
-  (`handler.rs`) stay as pre/post steps around the generic pipeline —
-  they're dedup/spam filtering, not classification. The finance-specific
-  extraction knowledge (EMI/bill/due-date handling) becomes seed
-  `data_schemas` rows/descriptions for the finance namespace, read back
-  by the LLM in step 2, instead of being hardcoded into a Rust prompt
-  template.
+System 1 (Jev triage + schema match) is already built and already runs
+on every `inbound_events` row via the `process_event` job. This design
+finishes it rather than building a parallel pipeline:
+
+- **System 2 (new):** in `events/handler.rs`, the `Novel` branch
+  (currently just a log line) gets a real handler — one Gemini call
+  (`rig::providers::gemini`, same pattern as the deleted SMS extractor)
+  that both defines a new schema (namespace/name/description/
+  `json_schema`) via the same insert `define_data_schema` uses, and
+  extracts the payload into it in the same round trip.
+- **Existing-match branch (changed):** `events/handler.rs:125-137`'s
+  `INSERT INTO records ...` becomes `INSERT INTO spans (..., schema_id,
+  category, data, start_at, source, source_ref) ...` — `category` from
+  the schema's `name`, `start_at` from the event's `occurred_at`,
+  `source`/`source_ref` from `inbound_events.source_kind`/`id`.
+- Both branches validate with the existing
+  `validate_data_against_schema` before writing.
+- **On success (either branch):** delete the `inbound_events` row in
+  the same transaction as the `Span` insert — no reason to keep the raw
+  payload once it's been turned into a span. **On failure:** leave the
+  row in place with `processing_error` set and `processed_at` left
+  `NULL`, so it's visible and retriable; nothing is deleted until a
+  span is actually produced.
+- SMS ingestion is rewritten to call `EventService::ingest`
+  (`events/service.rs`) with `source_kind = "sms"` per message, instead
+  of its own `sms_batches` table. `sms_batches`, `sms_processed`
+  (`migrations/20260928000009_sms_processing.sql`), and
+  `agents/sms_extractor.rs` are all deleted — `inbound_events` already
+  provides the same idempotent-intake guarantee via its
+  `(source_kind, source_id, external_event_id)` unique constraint. OTP
+  filtering and fingerprint/merge-duplicate logic move into the System
+  1/2 handling path as pre/post steps (they're dedup/spam filtering,
+  not classification) — OTP messages get triaged as `ignore` by Jev
+  rather than special-cased Rust string matching, since that's exactly
+  what triage is for. The finance-specific extraction knowledge
+  (EMI/bill/due-date handling) becomes seed `data_schemas`
+  rows/descriptions for the finance namespace, read back by System 2
+  instead of being hardcoded into a Rust prompt template.
 - New sources (GPS stay/trip events, health readings, tasks) call the
-  same pipeline; no source-specific backend code beyond parsing that
-  source's raw payload into the `(title/body, source_kind, occurred_at)`
-  shape.
+  same `EventService::ingest` with their own `source_kind`; no
+  source-specific backend code beyond producing that call.
 
 ### 3. GPS as a source (client-side; algorithm out of scope here)
 
@@ -103,11 +130,21 @@ segmentation algorithm itself is a separate, follow-up spec.
 
 ### 4. Performance
 
-- Range-partition `spans` by month on `start_at` (partition key falls
-  back to `created_at` for null-`start_at` rows). Bounds per-partition
-  size as data grows, prunes on the time-bounded queries
-  `storage/spans.rs::list` already does, and lets old partitions be
-  archived or dropped independently.
+- Hash-partition `spans` by `user_id` (16 partitions), not range-by-time.
+  Range-partitioning on `start_at` was the original idea, but every
+  unique constraint on a range-partitioned table must include the
+  partition column — `spans_id_user_key UNIQUE (id, user_id)` would
+  have to become `(id, user_id, start_at)`, which breaks the FKs from
+  `collection_spans`, `reminders`, `sms_processed` (deleted anyway,
+  above), and the self-referential `parent_id` FK
+  (`migrations/20260923000000_initial_core.sql:1708-1709`), none of
+  which carry the referenced span's `start_at`. Hashing on `user_id`
+  needs no such rework — `user_id` is already the leading column of
+  every existing constraint and FK into `spans` — at the cost of no
+  time-based archival (out of scope; nothing today needs it). A given
+  user's rows land entirely in one partition, so the dominant query
+  (`user_id` + time range) still prunes to a single partition, and no
+  one user's growth bloats another's vacuum/index cost.
 - Add `spans_user_schema_idx` (above) and
   `GIN (data jsonb_path_ops)` for ad hoc field filtering.
 - No OFFSET-based pagination introduced (existing `list()` already uses
@@ -129,15 +166,20 @@ segmentation algorithm itself is a separate, follow-up spec.
 - GPS stay-point/trip segmentation algorithm itself — separate spec.
 - Any migration/backfill of existing `records`/`spans` rows — none
   needed; data is wiped and this starts fresh per explicit instruction.
-- OTP detection and duplicate-merge logic changes — kept as-is,
-  relocated to wrap the new pipeline instead of the old SMS-specific one.
+- Fingerprint/merge-duplicate logic — kept as-is, relocated to wrap the
+  System 1/2 path instead of the old SMS-specific one. OTP filtering is
+  *not* kept as-is: it moves from Rust string matching to Jev triage
+  (`ignore` action), since that's what triage already exists to do.
+- `inbound_events` retention for *failed* rows (ones never successfully
+  turned into a span) — none added here; they persist until retried.
+  Only the success path deletes eagerly, per this design.
 
 ## Testing
 
 None added. Any existing test that breaks because of the `records`
-table/view removal, the SMS extractor deletion, or the
-`manage_user_goal` deletion is to be deleted, not fixed to pass around
-the change.
+table/view removal, the SMS extractor/`sms_batches`/`sms_processed`
+deletion, or the `manage_user_goal` deletion is to be deleted, not
+fixed to pass around the change.
 
 ## Comments
 
