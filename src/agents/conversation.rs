@@ -183,6 +183,8 @@ impl ConversationAgent {
             // A bare "yes" would otherwise route to no tools and the pending
             // device command could never be confirmed.
             crate::jev::ToolDomain::Device
+        } else if is_voice && asks_for_phone_call(&prompt.user_text) {
+            crate::jev::ToolDomain::Calls
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
                 Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
@@ -344,6 +346,30 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
+                    crate::jev::ToolDomain::Calls => {
+                        tracing::Span::current().record("gen_ai.agent.name", "calls-agent");
+                        client
+                            .agent(&prompt.selected_agent.model_configuration.model)
+                            .name("calls-agent")
+                            .record_content_telemetry(crate::telemetry::record_content())
+                            .preamble(preamble)
+                            .tool(tools::calls::ScheduleOutboundCall::new(
+                                self.db.clone(),
+                                self.outbound.clone(),
+                                prompt.owner,
+                            ))
+                            .tool(tools::calls::TriggerOutboundCall::new(
+                                self.db.clone(),
+                                self.outbound.clone(),
+                                prompt.owner,
+                            ))
+                            .tool(tools::profile::UpdateUserInfo::new(
+                                self.db.clone(),
+                                prompt.user_id,
+                            ))
+                            .default_max_turns(6)
+                            .build()
+                    }
                     _ => new_agent("voice-general")
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
@@ -842,6 +868,20 @@ fn remove_markdown_links(value: &str) -> String {
     }
     output.push_str(rest);
     output
+}
+
+fn asks_for_phone_call(text: &str) -> bool {
+    let text = text.to_lowercase();
+    [
+        "call me",
+        "call back",
+        "ring me",
+        "phone me",
+        "give me a call",
+        "give me a ring",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
 }
 
 fn is_url(word: &str) -> bool {
