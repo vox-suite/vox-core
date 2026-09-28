@@ -1,17 +1,17 @@
-pub mod handler;
-pub mod retention;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
     consent::{ConsentError, ConsentService, DataSource},
-    db::{Db, jobs::JobRepository},
-    jobs::JobKind,
+    db::Db,
+    events::{EventId, service::EventService},
 };
 
-const SMS_BATCH_PRIORITY: i16 = -10;
+pub mod finance;
+pub mod retention;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SmsMessage {
@@ -28,31 +28,30 @@ pub enum SmsIngestionError {
     ConsentRequired,
     #[error("sms batch storage unavailable")]
     Database(#[from] sqlx::Error),
-    #[error("job queue unavailable")]
-    Job(#[from] crate::db::jobs::JobError),
+    #[error("event ingestion unavailable")]
+    Event(#[from] crate::events::EventError),
     #[error("consent storage unavailable")]
     Consent(#[from] ConsentError),
 }
 
 #[derive(Clone)]
 pub struct SmsIngestionService {
-    db: Db,
-    jobs: JobRepository,
+    events: EventService,
     consent: ConsentService,
 }
 
 impl SmsIngestionService {
     pub fn new(db: Db) -> Self {
-        let jobs = JobRepository::new(db.clone());
-        let consent = ConsentService::new(db.clone());
-        Self { db, jobs, consent }
+        let events = EventService::new(db.clone());
+        let consent = ConsentService::new(db);
+        Self { events, consent }
     }
 
     pub async fn submit_batch(
         &self,
         user_id: Uuid,
         messages: Vec<SmsMessage>,
-    ) -> Result<Uuid, SmsIngestionError> {
+    ) -> Result<Vec<EventId>, SmsIngestionError> {
         if messages.is_empty() {
             return Err(SmsIngestionError::Empty);
         }
@@ -60,25 +59,56 @@ impl SmsIngestionService {
             return Err(SmsIngestionError::ConsentRequired);
         }
 
-        let payload = serde_json::to_value(&messages).unwrap_or_else(|_| serde_json::json!([]));
-        let batch_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO sms_batches (user_id, messages) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(user_id)
-        .bind(payload)
-        .fetch_one(self.db.pool())
-        .await?;
-
-        self.jobs
-            .enqueue_with_priority(JobKind::ProcessSmsBatch, batch_id, SMS_BATCH_PRIORITY)
-            .await?;
-        tracing::info!(%user_id, %batch_id, message_count = messages.len(), "sms batch received and enqueued");
+        let mut event_ids = Vec::with_capacity(messages.len());
+        for message in &messages {
+            if looks_like_otp(&message.body) {
+                continue;
+            }
+            let digest = message_digest(message);
+            let payload = json!({ "sender": message.sender, "body": message.body });
+            let event_id = self
+                .events
+                .ingest_for_user(
+                    user_id,
+                    "sms",
+                    &message.sender,
+                    &digest,
+                    "sms_message",
+                    message.received_at,
+                    &payload,
+                )
+                .await?;
+            event_ids.push(event_id);
+        }
 
         let newest_received_at = messages.iter().map(|m| m.received_at).max().unwrap();
         self.consent
             .advance_sync_cursor(user_id, DataSource::Sms, newest_received_at)
             .await?;
 
-        Ok(batch_id)
+        Ok(event_ids)
     }
+}
+
+fn message_digest(message: &SmsMessage) -> String {
+    hex::encode(Sha256::digest(format!(
+        "{}\n{}\n{}",
+        message.sender,
+        message.received_at.timestamp_millis(),
+        message.body
+    )))
+}
+
+pub fn looks_like_otp(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    let mentions_code = lower.contains("otp")
+        || lower.contains("verification code")
+        || lower.contains("one-time password")
+        || lower.contains("one time password")
+        || lower.contains("security code");
+    if !mentions_code {
+        return false;
+    }
+    body.split(|c: char| !c.is_ascii_digit())
+        .any(|token| token.len() >= 4 && token.len() <= 8)
 }

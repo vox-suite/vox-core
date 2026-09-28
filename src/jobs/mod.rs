@@ -11,7 +11,6 @@ pub enum JobKind {
     SummarizeConversation,
     EvaluateSpan,
     ExecuteSpan,
-    ProcessSmsBatch,
 }
 
 impl JobKind {
@@ -22,7 +21,6 @@ impl JobKind {
             Self::SummarizeConversation => "summarize_conversation",
             Self::EvaluateSpan => "evaluate_span",
             Self::ExecuteSpan => "execute_span",
-            Self::ProcessSmsBatch => "process_sms_batch",
         }
     }
 
@@ -33,7 +31,6 @@ impl JobKind {
             "summarize_conversation" => Some(Self::SummarizeConversation),
             "evaluate_span" => Some(Self::EvaluateSpan),
             "execute_span" => Some(Self::ExecuteSpan),
-            "process_sms_batch" => Some(Self::ProcessSmsBatch),
             _ => None,
         }
     }

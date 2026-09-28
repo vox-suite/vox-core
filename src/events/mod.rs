@@ -4,6 +4,8 @@
 pub mod handler;
 pub mod service;
 
+pub use service::EventError;
+
 use crate::identity::ChannelIdentity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
