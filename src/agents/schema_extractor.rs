@@ -23,6 +23,8 @@ pub struct SchemaExtractionResult {
     pub json_schema: Value,
     pub data: Value,
     pub title: String,
+    pub color_token: i32,
+    pub icon_token: i32,
 }
 
 #[async_trait]
@@ -67,13 +69,18 @@ fn preamble(near_miss: &[SchemaDescriptor]) -> String {
            \"json_schema\": {{ standard JSON Schema object with \"properties\", \"required\", \
          and field types (string, number, boolean, array, object) }},\n\
            \"data\": {{ the extracted fields for this one event, matching json_schema.properties }},\n\
-           \"title\": \"under 80 characters, specific headline for this one event\"\n\
+           \"title\": \"under 80 characters, specific headline for this one event\",\n\
+           \"color_token\": integer 0-23, a display color slot for this category,\n\
+           \"icon_token\": integer 0-23, a display icon slot for this category\n\
          }}\n\
          Rules:\n\
          - Do not invent a near-duplicate of an existing category. Categories that were already \
          considered and rejected as not matching this event: [{near_miss_text}]. If this event is \
          actually one of those, reuse its namespace and name exactly rather than creating a new one.\n\
          - namespace and name are short snake_case.\n\
+         - color_token and icon_token are opaque slot numbers only, not real colors or icons — \
+         pick ones that feel distinct from the near-miss categories above so similar categories \
+         don't look identical; the actual color/icon each number maps to is decided elsewhere.\n\
          - Never include one-time passwords, PINs, CVVs, passwords, or full card numbers in data."
     )
 }
@@ -102,6 +109,10 @@ impl SchemaExtracting for GeminiSchemaExtractor {
             .await
             .map_err(|_| AgentError::Provider)?;
 
-        serde_json::from_str(structured_json(&raw)).map_err(|_| AgentError::InvalidStructuredOutput)
+        let mut result: SchemaExtractionResult =
+            serde_json::from_str(structured_json(&raw)).map_err(|_| AgentError::InvalidStructuredOutput)?;
+        result.color_token = result.color_token.clamp(0, 23);
+        result.icon_token = result.icon_token.clamp(0, 23);
+        Ok(result)
     }
 }

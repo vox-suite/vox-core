@@ -210,7 +210,15 @@ impl EventHandler {
         }
 
         let schema_id = match self
-            .upsert_schema(user_id, &result.namespace, &result.name, &result.description, &result.json_schema)
+            .upsert_schema(
+                user_id,
+                &result.namespace,
+                &result.name,
+                &result.description,
+                &result.json_schema,
+                result.color_token,
+                result.icon_token,
+            )
             .await
         {
             Ok(id) => id,
@@ -224,6 +232,7 @@ impl EventHandler {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn upsert_schema(
         &self,
         user_id: Uuid,
@@ -231,6 +240,8 @@ impl EventHandler {
         name: &str,
         description: &str,
         json_schema: &Value,
+        color_token: i32,
+        icon_token: i32,
     ) -> Result<Uuid, sqlx::Error> {
         if let Some(existing) = sqlx::query_scalar::<_, Uuid>(
             "SELECT id FROM data_schemas WHERE user_id = $1 AND namespace = $2 AND name = $3 \
@@ -246,8 +257,8 @@ impl EventHandler {
         }
 
         sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO data_schemas (user_id, namespace, name, version, description, json_schema) \
-             VALUES ($1, $2, $3, 1, $4, $5) \
+            "INSERT INTO data_schemas (user_id, namespace, name, version, description, json_schema, color_token, icon_token) \
+             VALUES ($1, $2, $3, 1, $4, $5, $6, $7) \
              ON CONFLICT (user_id, namespace, name, version) DO UPDATE SET description = data_schemas.description \
              RETURNING id",
         )
@@ -256,6 +267,8 @@ impl EventHandler {
         .bind(name)
         .bind(description)
         .bind(json_schema)
+        .bind(color_token)
+        .bind(icon_token)
         .fetch_one(self.db.pool())
         .await
     }
