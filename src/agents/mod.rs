@@ -4,6 +4,7 @@
 pub mod conversation;
 pub mod event_planner;
 pub mod prompts;
+pub mod schema_extractor;
 pub mod sms_extractor;
 pub mod summarizer;
 pub mod tools;
