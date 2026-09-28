@@ -3,7 +3,7 @@
 */
 use axum::{
     Router, middleware,
-    routing::{get, post, put},
+    routing::{get, post},
 };
 
 use crate::{
@@ -42,41 +42,40 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.pool.clone());
 
     let span_routes = Router::new()
-        .route("/v1/spans", get(list_spans).post(create_span))
-        .route(
-            "/v1/spans/{id}",
-            get(get_span).patch(update_span).delete(delete_span),
-        )
+        .route("/v1/spans", post(create_span))
+        .route("/v1/spans/list", post(list_spans))
+        .route("/v1/spans/{id}", post(get_span))
+        .route("/v1/spans/{id}/update", post(update_span))
+        .route("/v1/spans/{id}/delete", post(delete_span))
         .with_state(state.spans.clone());
 
     let collection_routes = Router::new()
+        .route("/v1/collections", post(create_collection))
+        .route("/v1/collections/list", post(list_collections))
+        .route("/v1/collections/{id}", post(get_collection))
+        .route("/v1/collections/{id}/update", post(update_collection))
+        .route("/v1/collections/{id}/archive", post(archive_collection))
         .route(
-            "/v1/collections",
-            get(list_collections).post(create_collection),
+            "/v1/collections/{id}/spans/{span_id}/add",
+            post(add_collection_span),
         )
         .route(
-            "/v1/collections/{id}",
-            get(get_collection)
-                .patch(update_collection)
-                .delete(archive_collection),
-        )
-        .route(
-            "/v1/collections/{id}/spans/{span_id}",
-            put(add_collection_span).delete(remove_collection_span),
+            "/v1/collections/{id}/spans/{span_id}/remove",
+            post(remove_collection_span),
         )
         .with_state(state.collections.clone());
 
     let record_routes = Router::new()
-        .route("/v1/records", get(list_records).post(create_record))
-        .route(
-            "/v1/records/{id}",
-            get(get_record).patch(update_record).delete(delete_record),
-        )
+        .route("/v1/records", post(create_record))
+        .route("/v1/records/list", post(list_records))
+        .route("/v1/records/{id}", post(get_record))
+        .route("/v1/records/{id}/update", post(update_record))
+        .route("/v1/records/{id}/delete", post(delete_record))
         .with_state(state.records.clone());
 
     let schema_routes = Router::new()
         .route("/v1/schemas", post(create_schema_version))
-        .route("/v1/schemas/{namespace}/{name}", get(get_schema_by_name))
+        .route("/v1/schemas/{namespace}/{name}", post(get_schema_by_name))
         .with_state(state.schemas.clone());
 
     let sms_routes = Router::new()
@@ -84,10 +83,9 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.sms_ingestion.clone());
 
     let sms_consent_routes = Router::new()
-        .route(
-            "/v1/sms/consent",
-            get(get_consent).post(grant_consent).delete(revoke_consent),
-        )
+        .route("/v1/sms/consent/get", post(get_consent))
+        .route("/v1/sms/consent/grant", post(grant_consent))
+        .route("/v1/sms/consent/revoke", post(revoke_consent))
         .with_state(state.consent.clone());
 
     let location_routes = Router::new()
@@ -95,11 +93,11 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.location_ingestion.clone());
 
     let location_consent_routes = Router::new()
+        .route("/v1/location/consent/get", post(get_location_consent))
+        .route("/v1/location/consent/grant", post(grant_location_consent))
         .route(
-            "/v1/location/consent",
-            get(get_location_consent)
-                .post(grant_location_consent)
-                .delete(revoke_location_consent),
+            "/v1/location/consent/revoke",
+            post(revoke_location_consent),
         )
         .with_state(state.consent.clone());
 
@@ -127,7 +125,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.pool.clone());
 
     let identity_routes = Router::new()
-        .route("/v1/me", get(get_me))
+        .route("/v1/me", post(get_me))
         .with_state(state.pool.clone());
 
     let phone_routes = Router::new()

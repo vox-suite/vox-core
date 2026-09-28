@@ -3,7 +3,7 @@
 */
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -30,7 +30,7 @@ fn status_for(err: SpanServiceError) -> StatusCode {
 pub async fn list_spans(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,
-    Query(query): Query<SpanQuery>,
+    Json(query): Json<SpanQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let spans = service
         .list_spans(&actor, &query)

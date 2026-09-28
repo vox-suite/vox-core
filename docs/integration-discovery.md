@@ -63,11 +63,11 @@ stored and interpretable.
 ## Compatibility and rollback
 
 The existing operator-only
-`GET /v1/deployments/{external_key}/capabilities` remains available to trusted
+`POST /v1/deployments/{external_key}/capabilities` remains available to trusted
 deployment operations with the operator service token. Host applications must
 use the signed-context route and must never receive that token. This change
 adds an `integration_declaration_versions` table. The operator-only
-`GET /v1/deployments/{external_key}/integrations/{integration_key}/versions`
+`POST /v1/deployments/{external_key}/integrations/{integration_key}/versions`
 returns each immutable snapshot with its version and creation time. Registering
 the same version with a different declaration or an older version fails with
 `400`; an exact retry is a no-op. A higher version disables the integration,

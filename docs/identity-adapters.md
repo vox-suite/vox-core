@@ -34,7 +34,7 @@ the host context and the adapter request. The assertion is consumed by Core, so
 reusing it is rejected. A successful authentication returns an opaque,
 ten-minute, one-time authentication token. Only its SHA-256 hash is stored.
 
-`POST /v1/identity/links` consumes two such tokens. `DELETE /v1/identity/links`
+`POST /v1/identity/links` consumes two such tokens. `POST /v1/identity/links/unlink`
 consumes two fresh tokens and removes that association. Both operations require
 two distinct verified login identities; they leave an append-only link/unlink
 event.

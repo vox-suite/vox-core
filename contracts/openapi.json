@@ -276,7 +276,7 @@
       }
     },
     "/v1/me": {
-      "get": {
+      "post": {
         "summary": "Get authenticated user profile and identities",
         "security": [
           {
@@ -291,19 +291,6 @@
       }
     },
     "/v1/spans": {
-      "get": {
-        "summary": "List spans overlapping from/to, optionally by collection_id, status, or unscheduled",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Spans list"
-          }
-        }
-      },
       "post": {
         "summary": "Create span",
         "security": [
@@ -319,19 +306,6 @@
       }
     },
     "/v1/collections": {
-      "get": {
-        "summary": "List collections",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Collections list"
-          }
-        }
-      },
       "post": {
         "summary": "Create collection",
         "security": [
@@ -347,7 +321,7 @@
       }
     },
     "/v1/collections/{id}": {
-      "get": {
+      "post": {
         "summary": "Get collection",
         "security": [
           {
@@ -359,76 +333,9 @@
             "description": "Collection"
           }
         }
-      },
-      "patch": {
-        "summary": "Update collection",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Collection updated"
-          }
-        }
-      },
-      "delete": {
-        "summary": "Archive collection",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Collection archived"
-          }
-        }
-      }
-    },
-    "/v1/collections/{id}/spans/{span_id}": {
-      "put": {
-        "summary": "Add span to collection",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Span added"
-          }
-        }
-      },
-      "delete": {
-        "summary": "Remove span from collection",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Span removed"
-          }
-        }
       }
     },
     "/v1/records": {
-      "get": {
-        "summary": "List records",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Records list"
-          }
-        }
-      },
       "post": {
         "summary": "Create record",
         "security": [
@@ -444,19 +351,6 @@
       }
     },
     "/v1/schemas": {
-      "get": {
-        "summary": "List data schemas",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Schemas list"
-          }
-        }
-      },
       "post": {
         "summary": "Create new schema version",
         "security": [
@@ -612,34 +506,8 @@
         }
       }
     },
-    "/v1/admin/redis": {
-      "get": {
-        "summary": "Admin inspect Redis keys",
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ]
-      },
-      "delete": {
-        "summary": "Admin delete Redis key",
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ]
-      },
-      "put": {
-        "summary": "Admin update Redis key",
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ]
-      }
-    },
     "/v1/admin/audit-events": {
-      "get": {
+      "post": {
         "summary": "Admin view audit logs",
         "security": [
           {
@@ -649,7 +517,7 @@
       }
     },
     "/v1/spans/{id}": {
-      "get": {
+      "post": {
         "summary": "Get span",
         "security": [
           {
@@ -659,94 +527,6 @@
         "responses": {
           "200": {
             "description": "Span"
-          }
-        }
-      },
-      "patch": {
-        "summary": "Update span",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Span updated"
-          }
-        }
-      },
-      "delete": {
-        "summary": "Delete span",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Span deleted"
-          }
-        }
-      }
-    },
-    "/v1/records/{id}": {
-      "patch": {
-        "summary": "Update record with optimistic concurrency",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "expected_version"
-                ],
-                "properties": {
-                  "data": {
-                    "type": "object"
-                  },
-                  "expected_version": {
-                    "type": "integer"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Record updated successfully"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Record not found"
-          },
-          "409": {
-            "description": "Optimistic concurrency conflict"
-          },
-          "422": {
-            "description": "Schema validation failed"
           }
         }
       }
@@ -902,6 +682,218 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/spans/list": {
+      "post": {
+        "summary": "List spans overlapping from/to, optionally by collection_id, status, or unscheduled",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spans list"
+          }
+        }
+      }
+    },
+    "/v1/collections/list": {
+      "post": {
+        "summary": "List collections",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collections list"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/update": {
+      "post": {
+        "summary": "Update collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection updated"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/archive": {
+      "post": {
+        "summary": "Archive collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Collection archived"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/spans/{span_id}/add": {
+      "post": {
+        "summary": "Add span to collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span added"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/spans/{span_id}/remove": {
+      "post": {
+        "summary": "Remove span from collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span removed"
+          }
+        }
+      }
+    },
+    "/v1/records/list": {
+      "post": {
+        "summary": "List records",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records list"
+          }
+        }
+      }
+    },
+    "/v1/schemas/{namespace}/{name}": {
+      "post": {
+        "summary": "List data schemas",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schemas list"
+          }
+        }
+      }
+    },
+    "/v1/spans/{id}/update": {
+      "post": {
+        "summary": "Update span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Span updated"
+          }
+        }
+      }
+    },
+    "/v1/spans/{id}/delete": {
+      "post": {
+        "summary": "Delete span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span deleted"
+          }
+        }
+      }
+    },
+    "/v1/records/{id}/update": {
+      "post": {
+        "summary": "Update record with optimistic concurrency",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_version"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object"
+                  },
+                  "expected_version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Record updated successfully"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Record not found"
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict"
+          },
+          "422": {
+            "description": "Schema validation failed"
           }
         }
       }

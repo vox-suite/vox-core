@@ -3,7 +3,8 @@
 */
 pub mod jobs;
 
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -26,10 +27,11 @@ impl Db {
         max_connections: u32,
         acquire_timeout_secs: u64,
     ) -> Result<Self, sqlx::Error> {
+        let options = PgConnectOptions::from_str(database_url)?.statement_cache_capacity(0);
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
-            .connect(database_url)
+            .connect_with(options)
             .await?;
         Ok(Self { pool })
     }

@@ -68,13 +68,8 @@ async fn main() {
         jev_client,
     );
     legacy_state = legacy_state.with_connected_apps(connected_apps);
-    if let Some(admin) = vox_core::http::admin::RedisAdmin::from_token_with_url(
-        Some(config.redis_url.as_str()),
-        std::env::var("VOX_ADMIN_TOKEN").ok(),
-    )
-    .expect("Vox admin Redis URL is invalid")
-    {
-        legacy_state = legacy_state.with_admin(admin);
+    if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN") {
+        legacy_state = legacy_state.with_admin_token(token);
     }
     if let Some(key) = config.status_webhook_key.as_deref() {
         let secrets = vox_core::status::EncryptedWebhookSecretStore::from_hex_key(db.clone(), key)

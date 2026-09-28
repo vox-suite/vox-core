@@ -12,14 +12,12 @@ pub struct PhoneApiState {
     pub memory: MemoryService,
 }
 
-const MERGE_TABLES: &[&str] = &[
+const CTX_MERGE_TABLES: &[&str] = &[
     "auth_identities",
     "channel_identities",
-    "auth_sessions",
     "conversations",
     "collections",
     "spans",
-    "collection_spans",
     "schedules",
     "jobs",
     "data_schemas",
@@ -31,10 +29,15 @@ const MERGE_TABLES: &[&str] = &[
     "executions",
     "inbound_events",
     "audit_events",
-    "user_contexts",
+];
+
+const USER_MERGE_TABLES: &[&str] = &[
+    "collection_spans",
     "data_source_consents",
     "sms_batches",
     "connected_app_pending_actions",
+    "client_devices",
+    "events",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -92,20 +95,69 @@ pub async fn link_phone(
         }
         Some(owner) if owner == actor.user_id => false,
         Some(old_user) => {
-            for table in MERGE_TABLES {
-                let sql = format!("UPDATE {table} SET user_id = $1 WHERE user_id = $2");
+            // Delete old auth sessions to avoid foreign key violations with auth_identities
+            sqlx::query("DELETE FROM auth_sessions WHERE user_id = $1")
+                .bind(old_user)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to delete old auth sessions: {e}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            let actor_context_id = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM user_contexts WHERE user_id = $1",
+            )
+            .bind(actor.user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch actor user_context: {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            for table in CTX_MERGE_TABLES {
+                let sql = format!(
+                    "UPDATE {table} SET user_id = $1, user_context_id = $2 WHERE user_id = $3"
+                );
                 sqlx::query(&sql)
                     .bind(actor.user_id)
+                    .bind(actor_context_id)
                     .bind(old_user)
                     .execute(&mut *tx)
                     .await
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|e| {
+                        tracing::error!("Failed to update {table}: {e}");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
             }
+
+            for table in USER_MERGE_TABLES {
+                let sql = format!("UPDATE {table} SET user_id = $1 WHERE user_id = $2");
+                let _ = sqlx::query(&sql)
+                    .bind(actor.user_id)
+                    .bind(old_user)
+                    .execute(&mut *tx)
+                    .await;
+            }
+
+            sqlx::query("DELETE FROM user_contexts WHERE user_id = $1")
+                .bind(old_user)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to delete old user_context: {e}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
             sqlx::query("DELETE FROM users WHERE id = $1")
                 .bind(old_user)
                 .execute(&mut *tx)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|e| {
+                    tracing::error!("Failed to delete old user: {e}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
             true
         }
     };
