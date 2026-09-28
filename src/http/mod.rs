@@ -259,6 +259,10 @@ impl AppState {
         &self.service_token
     }
 
+    pub fn conversations(&self) -> Option<Arc<ConversationService>> {
+        self.conversations.clone()
+    }
+
     pub fn rate_limiter(&self) -> &rate_limit::RateLimiter {
         &self.rate_limiter
     }

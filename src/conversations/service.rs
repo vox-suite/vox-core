@@ -104,6 +104,13 @@ impl ConversationService {
         self
     }
 
+    pub async fn resolve_context_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> Result<ResolvedUserContext, IdentityError> {
+        self.identities.resolve_for_user(user_id).await
+    }
+
     pub async fn respond(
         &self,
         context: ResolvedUserContext,

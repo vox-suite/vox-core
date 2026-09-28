@@ -121,6 +121,66 @@ impl IdentityService {
         raw.chars().filter(|c| c.is_ascii_digit()).collect()
     }
 
+    pub async fn resolve_for_user(&self, user_id: Uuid) -> Result<ResolvedUserContext, IdentityError> {
+        let existing = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Option<Uuid>, String)>(
+            "SELECT id, user_id, deployment_id, host_app_id, organization_id, host_user_id \
+             FROM user_contexts WHERE user_id = $1 LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        if let Some((ctx_id, uid, dep_id, app_id, org_id, host_uid)) = existing {
+            return Ok(ResolvedUserContext {
+                id: UserContextId(ctx_id),
+                user_id: UserId(uid),
+                subject: UserContextSubject {
+                    deployment_id: DeploymentId(dep_id),
+                    host_app_id: HostAppId(app_id),
+                    organization_id: org_id.map(HostOrganizationId),
+                    host_user_id: host_uid,
+                },
+            });
+        }
+
+        let ids = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT d.id, h.id FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = 'vox.standalone.deployment' \
+               AND h.external_key = 'vox.standalone.web' LIMIT 1",
+        )
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        let (deployment_id, host_app_id) = ids.ok_or(IdentityError::ScopeNotFound)?;
+        let host_user_id = format!("vox-account:{user_id}");
+
+        let (context_id, uid) = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (user_id) DO UPDATE \
+             SET host_user_id = EXCLUDED.host_user_id \
+             RETURNING id, user_id",
+        )
+        .bind(deployment_id)
+        .bind(host_app_id)
+        .bind(&host_user_id)
+        .bind(user_id)
+        .fetch_one(self.db.pool())
+        .await?;
+
+        Ok(ResolvedUserContext {
+            id: UserContextId(context_id),
+            user_id: UserId(uid),
+            subject: UserContextSubject {
+                deployment_id: DeploymentId(deployment_id),
+                host_app_id: HostAppId(host_app_id),
+                organization_id: None,
+                host_user_id,
+            },
+        })
+    }
+
     pub async fn resolve_context(
         &self,
         subject: &UserContextSubject,

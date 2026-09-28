@@ -35,6 +35,7 @@ pub struct ApiState {
     pub sms_ingestion: SmsIngestionService,
     pub location_ingestion: LocationIngestionService,
     pub consent: ConsentService,
+    pub tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
 }
 
 impl ApiState {
@@ -45,6 +46,7 @@ impl ApiState {
         memory: MemoryService,
         user_events: UserEventHub,
         google_maps_api_key: Option<String>,
+        tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
     ) -> Self {
         let pool = db.pool().clone();
         let coll_repo = CollectionRepository::new(pool.clone());
@@ -76,6 +78,7 @@ impl ApiState {
             sms_ingestion,
             location_ingestion,
             consent,
+            tts,
         }
     }
 }
