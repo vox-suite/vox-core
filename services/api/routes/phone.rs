@@ -21,7 +21,6 @@ const CTX_MERGE_TABLES: &[&str] = &[
     "schedules",
     "jobs",
     "data_schemas",
-    "records",
     "devices",
     "connections",
     "action_proposals",
@@ -34,7 +33,6 @@ const CTX_MERGE_TABLES: &[&str] = &[
 const USER_MERGE_TABLES: &[&str] = &[
     "collection_spans",
     "data_source_consents",
-    "sms_batches",
     "connected_app_pending_actions",
     "client_devices",
     "events",
