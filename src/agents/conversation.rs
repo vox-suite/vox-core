@@ -307,14 +307,7 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-                        .tool(tools::records::CreateUserRecord::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::ListUserRecords::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+
                         .tool(tools::profile::GetUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -408,14 +401,7 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-                        .tool(tools::records::CreateUserRecord::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::ListUserRecords::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+
                         .default_max_turns(6)
                         .build(),
                 }
@@ -488,18 +474,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::records::CreateUserRecord::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::records::ListUserRecords::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::records::ManageUserGoal::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
+
                     .default_max_turns(10)
                     .build()
             };
