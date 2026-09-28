@@ -20,6 +20,7 @@ pub mod handoffs;
 pub mod host_apps;
 pub mod identity_adapters;
 pub mod integration_registry;
+pub mod packages;
 pub mod preferences;
 pub mod privacy;
 pub mod rate_limit;
@@ -360,6 +361,10 @@ pub fn router(state: AppState) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
+        .route("/v1/connector-packages/publish", post(packages::publish))
+        .route("/v1/connector-packages/list", post(packages::list))
+        .route("/v1/connector-packages/install", post(packages::install))
+        .route("/v1/connector-packages/withdraw", post(packages::withdraw))
         .route("/v1/action-proposals", post(approvals::propose))
         .route(
             "/v1/spending-policies",

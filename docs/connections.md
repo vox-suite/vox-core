@@ -43,10 +43,22 @@ generic authorization-session table is dropped by a forward migration.
 ## Release gates
 
 The governed OAuth connection, selected-agent grant, exact proposal approval,
-and durable execution path are wired. The Web catalog still installs entries
-with no declared capabilities, so linking those accounts alone cannot expose
-agent tools. Authors must declare and review tool effects; discovered MCP
+and durable execution path are wired. The Web catalog now discovers immutable deployment-reviewed manifests through
+the package list/install interface. One click installs the reviewed digest
+and begins OAuth; account linking still requires an explicit agent grant. Authors must declare and review tool effects; discovered MCP
 annotations are not authority. Provider-backed account identity, actual
 scopes, provider-side revocation, independent conformance, and a common MCP
 protocol contract require validation. See the
 [architecture review](../../vox-connections/docs/architecture-review-2026-09-27.md).
+
+## Reviewed package catalog
+
+The operator token protects `/v1/connector-packages/publish` and `/withdraw`.
+Fresh signed host assertions protect `/list` and `/install`; deployment scope
+comes from the verified context. Installation takes `external_key`, `version`
+and the exact reviewed `digest`, creates no agent grants, and commits the
+extension and catalog binding atomically. Operators may attest verified
+read-only packages; consequential packages require separate behavioral
+conformance and enablement. Withdrawal clears credentials/sessions and revokes
+bound accounts/grants. See the
+[package onboarding guide](../../vox-connections/docs/packages.md).
