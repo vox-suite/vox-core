@@ -10,7 +10,7 @@ includes the same canonical key.
 The canonical key is `<integration external key>.<capability external key>`;
 for example, `calendar.read`. Host apps create grants through
 `POST /v1/capability-grants` using a fresh signed host-context assertion and
-can revoke one exact grant with `DELETE /v1/capability-grants`. They
+can revoke one exact grant with `POST /v1/capability-grants/revoke`. They
 query an agent's currently usable grants through
 `POST /v1/agents/{external_key}/effective-capability-grants`, with that same
 assertion and the host-context request in the body.

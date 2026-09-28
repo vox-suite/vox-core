@@ -5,7 +5,7 @@ use super::{AppState, auth};
 use crate::audit::{AuditError, AuditQuery};
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
@@ -24,12 +24,9 @@ pub struct QueryParams {
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<QueryParams>,
+    Json(query): Json<QueryParams>,
 ) -> axum::response::Response {
-    let Some(admin) = state.admin.as_ref() else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    if admin.token().trim().is_empty() || !auth::authorized(&headers, admin.token()) {
+    if state.admin_token.trim().is_empty() || !auth::authorized(&headers, &state.admin_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some(audit) = state.audit.as_ref() else {

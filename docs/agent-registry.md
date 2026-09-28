@@ -11,7 +11,7 @@ adapter label, model label, and non-secret JSON tuning claims. Core deliberately
 does not interpret those claims as provider credentials or authority.
 
 `POST /v1/agent-definitions`, `POST /v1/agent-selections`, and
-`GET /v1/deployments/{external_key}/agents` require the Core operator service
+`POST /v1/deployments/{external_key}/agents` require the Core operator service
 token. A deployment may select multiple agents. Re-selecting an agent creates a
 new model-configuration version while retaining its definition unchanged.
 

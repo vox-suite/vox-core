@@ -18,8 +18,7 @@ become unhealthy, but it never blocks Core work and never causes unredacted
 fallback logging. Sink credentials remain in deployment secret custody, never
 in Core's database or audit records.
 
-`GET /v1/admin/audit-events` requires `VOX_ADMIN_TOKEN` (same credential as
-the Redis admin routes), returns `Cache-Control: no-store`, and records every
+`POST /v1/admin/audit-events` requires `VOX_ADMIN_TOKEN`, returns `Cache-Control: no-store`, and records every
 successful read as `audit.accessed`. Audit events are privileged operational
 evidence, not a user-facing task-history interface.
 

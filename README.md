@@ -88,25 +88,24 @@ Database integration tests require an isolated PostgreSQL database and `TEST_DAT
 
 Reusable integration declarations, provider transports, remote extension adapters, connected-app OAuth and MCP sessions, declarative skill packages, and conformance fixtures live in [vox-connections](https://github.com/vox-suite/vox-connections). Core owns host trust, identity, agent presentation, grants and approval enforcement, durable execution, and audit. It passes a minimal request context and database pool to the shared crate. The remaining `connected_apps`, `remote_extensions`, `skills`, and `conformance` modules here are host wiring or API re-exports.
 
-## Redis administration
 
-`GET`, `PUT` and `DELETE /v1/admin/redis` are enabled when `VOX_ADMIN_TOKEN` is set. This is a dedicated admin credential, separate from `VOX_AUTH_TOKEN`. Requests without it are denied, including when admin is unconfigured. The browser never connects to this endpoint directly: Vox Web checks the Google session and exact superuser allowlist before forwarding a request from its server.
+## Deploy on Railway
 
-Query parameters:
+Deploy this repo as two services, both with an empty root directory:
 
-- `match`: Redis glob pattern, default `vox:*`, maximum 256 bytes.
-- `cursor`: unsigned 64-bit SCAN cursor represented as a string; default `0`.
-- `key`: inspect one UTF-8 key, maximum 1,024 bytes, without control characters. If provided, returns an atomic bounded value preview and metadata instead of a key listing.
+| Service | Dockerfile | Notes |
+|---|---|---|
+| `vox-core-api` | `Dockerfile` | Runs the migration baseline on boot. Binds `0.0.0.0:$PORT` (Railway injects `PORT`). |
+| `vox-core-worker` | `Dockerfile.worker` (set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker`) | No port. Needs the same database, Redis and token variables as the API. |
 
-Redis 7+ is required for `EVAL_RO`. Redis 8.2 LTS is the recommended engine and fully supported. SCAN uses a count hint of 100. Connections are reused and reconnect; admin operations have a four-second deadline and at most eight concurrent requests per API instance. String previews stop at 64 KiB. Collection string data has a total 64 KiB budget and 2 KiB per-value limit.
+Shared variables (set once as Railway shared variables):
 
-`PUT` replaces an existing string, list, hash, set or sorted set from a typed JSON value while preserving its remaining expiry. It rejects missing keys, type changes, empty collections, oversized values and unsupported types. `DELETE` removes one explicitly named key. Streams remain preview-only. Arbitrary Redis commands and key creation are not exposed.
+- `DATABASE_URL`: the Supabase transaction pooler (port 6543, `?sslmode=require`). The statement cache is disabled for it.
+- `REDIS_URL`
+- `VOX_AUTH_TOKEN`: the same value on `vox-core-api`, `vox-core-worker` and `vox-bridge`.
+- `VOX_BRIDGE_URL`: `http://vox-bridge.railway.internal:<bridge PORT>`
+- `GEMINI_API_KEY`, `EXA_API_KEY`, `GOOGLE_MAPS_API_KEY`, `VOX_ADMIN_TOKEN`
 
-Keep Redis private. Configure the HTTPS reverse proxy to route only this exact path to the Core API and omit query strings from access logs. Deployment instructions live in the sibling `vox-web/docs/deployment.md`.
+Only the edge (`vox-edge`) has a public domain. It routes `/v1/*` to `vox-core-api`. See `vox-edge/ROUTING.md` for the path protocol.
 
-```sh
-cargo test --test admin_redis
-TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --test admin_redis -- --include-ignored
-```
-
-The second command must target an isolated Redis instance. The test creates uniquely prefixed fixture keys and deletes those keys afterward.
+`vox-connections` and `vox-shared` are fetched as public git dependencies, so no sibling checkout is needed.

@@ -3,7 +3,7 @@
 */
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -24,7 +24,7 @@ pub struct ListCollectionsQuery {
 pub async fn list_collections(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
-    Query(query): Query<ListCollectionsQuery>,
+    Json(query): Json<ListCollectionsQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let collections = service

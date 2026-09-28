@@ -1,7 +1,6 @@
 /**
 * HTTP server endpoints, routing, and middleware assembly.
 */
-pub mod admin;
 pub mod agent_registry;
 pub mod approvals;
 pub mod audit;
@@ -39,7 +38,7 @@ use axum::{
     Router,
     extract::State,
     http::StatusCode,
-    routing::{delete, get, patch, post},
+    routing::{get, post},
 };
 use std::sync::{
     Arc,
@@ -50,7 +49,7 @@ use std::sync::{
 pub struct AppState {
     ready: Arc<AtomicBool>,
     pub(crate) rate_limiter: rate_limit::RateLimiter,
-    pub(crate) admin: Option<Arc<admin::RedisAdmin>>,
+    pub(crate) admin_token: Arc<str>,
     pub(crate) audit: Option<Arc<crate::audit::AuditService>>,
     pub(crate) agent_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
     pub(crate) approvals: Option<Arc<crate::approvals::ApprovalService>>,
@@ -85,7 +84,7 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(ready)),
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
-            admin: None,
+            admin_token: Arc::from(""),
             audit: None,
             agent_registry: None,
             approvals: None,
@@ -159,7 +158,7 @@ impl AppState {
         Self {
             ready: Arc::new(AtomicBool::new(true)),
             rate_limiter: rate_limit::RateLimiter::new(rate_limit::RateLimitConfig::default()),
-            admin: None,
+            admin_token: Arc::from(""),
             audit: Some(Arc::new(crate::audit::AuditService::new(db.clone()))),
             agent_registry: Some(Arc::new(crate::agent_registry::AgentRegistry::new(
                 db.clone(),
@@ -245,8 +244,8 @@ impl AppState {
         }
     }
 
-    pub fn with_admin(mut self, admin: admin::RedisAdmin) -> Self {
-        self.admin = Some(Arc::new(admin));
+    pub fn with_admin_token(mut self, token: String) -> Self {
+        self.admin_token = Arc::from(token);
         self
     }
 
@@ -353,11 +352,7 @@ pub fn router(state: AppState) -> Router {
     let rate_limiter = state.rate_limiter.clone();
 
     Router::new()
-        .route(
-            "/v1/admin/redis",
-            get(admin::browse).delete(admin::delete).put(admin::update),
-        )
-        .route("/v1/admin/audit-events", get(audit::list))
+        .route("/v1/admin/audit-events", post(audit::list))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
@@ -397,9 +392,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/connections/{id}/disconnect",
             post(connections::disconnect),
         )
+        .route("/v1/capability-grants", post(capability_grants::create))
         .route(
-            "/v1/capability-grants",
-            post(capability_grants::create).delete(capability_grants::revoke),
+            "/v1/capability-grants/revoke",
+            post(capability_grants::revoke),
         )
         .route(
             "/v1/agents/{external_key}/effective-capability-grants",
@@ -407,7 +403,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
-        .route("/v1/schedules/{id}", patch(schedules::update))
+        .route("/v1/schedules/{id}/update", post(schedules::update))
         .route("/v1/reminders", post(reminders::create_reminder))
         .route("/v1/reminders/list", post(reminders::list_reminders))
         .route("/v1/reminders/{id}", post(reminders::get_reminder))
@@ -428,15 +424,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/status-events", post(status::list))
         .route(
             "/v1/status-webhook-subscriptions",
-            post(status::create_subscription).get(status::list_subscriptions),
+            post(status::create_subscription),
+        )
+        .route(
+            "/v1/status-webhook-subscriptions/list",
+            post(status::list_subscriptions),
         )
         .route(
             "/v1/status-webhook-subscriptions/{id}/rotate",
             post(status::rotate_subscription),
         )
         .route(
-            "/v1/status-webhook-subscriptions/{id}",
-            axum::routing::delete(status::disable_subscription),
+            "/v1/status-webhook-subscriptions/{id}/disable",
+            post(status::disable_subscription),
         )
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route(
@@ -455,11 +455,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/deployments/{external_key}/capabilities",
-            get(integration_registry::discover),
+            post(integration_registry::discover),
         )
         .route(
             "/v1/deployments/{external_key}/integrations/{integration_key}/versions",
-            get(integration_registry::versions),
+            post(integration_registry::versions),
         )
         .route(
             "/v1/capabilities/discover",
@@ -467,7 +467,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/deployments/{external_key}/agents",
-            get(agent_registry::list_selected),
+            post(agent_registry::list_selected),
         )
         .route("/v1/host-apps", post(host_apps::register))
         .route("/v1/identity-adapters", post(identity_adapters::register))
@@ -479,12 +479,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/identity/authentications",
             post(identity_adapters::authenticate),
         )
-        .route(
-            "/v1/preferences",
-            post(preferences::set).get(preferences::list),
-        )
+        .route("/v1/preferences", post(preferences::set))
         .route("/v1/preferences/list", post(preferences::list))
-        .route("/v1/preferences/{key}", delete(preferences::delete_key))
+        .route("/v1/preferences/{key}/delete", post(preferences::delete_key))
         .route(
             "/v1/agents/{agent_key}/effective-preferences",
             post(preferences::effective),
@@ -504,7 +501,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/privacy/retention-policy",
-            get(privacy::get_retention_policy),
+            post(privacy::get_retention_policy),
         )
         .route(
             "/v1/privacy/retention/prune",
@@ -516,15 +513,16 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/identity/links",
-            post(identity_adapters::link).delete(identity_adapters::unlink),
+            post(identity_adapters::link),
         )
+        .route("/v1/identity/links/unlink", post(identity_adapters::unlink))
         .route(
             "/v1/host-apps/{id}/credentials",
             post(host_apps::rotate_credential),
         )
         .route(
-            "/v1/host-app-credentials/{id}",
-            delete(host_apps::revoke_credential),
+            "/v1/host-app-credentials/{id}/revoke",
+            post(host_apps::revoke_credential),
         )
         .route("/v1/remote-extensions", post(remote_extensions::install))
         .route("/v1/skills/private", post(skills::publish_private))
@@ -560,11 +558,14 @@ pub fn router(state: AppState) -> Router {
             "/v1/connected-apps/execute",
             post(connected_apps::execute_tool),
         )
+        .route("/v1/remote-extensions/{id}", post(remote_extensions::get))
         .route(
-            "/v1/remote-extensions/{id}",
-            post(remote_extensions::get)
-                .put(remote_extensions::update)
-                .delete(remote_extensions::remove),
+            "/v1/remote-extensions/{id}/update",
+            post(remote_extensions::update),
+        )
+        .route(
+            "/v1/remote-extensions/{id}/remove",
+            post(remote_extensions::remove),
         )
         .route(
             "/v1/remote-extensions/{id}/enable",

@@ -36,7 +36,7 @@ server-side credential custody.
 
 Use `POST /v1/host-apps/{host_app_id}/credentials` to issue a replacement.
 Both the old and new credentials work during a deliberate rollout overlap.
-After the host has moved, call `DELETE /v1/host-app-credentials/{credential_id}`
+After the host has moved, call `POST /v1/host-app-credentials/{credential_id}/revoke`
 with the bootstrap credential to revoke the old one. Credential rotation never
 changes the host app's ID, its deployment, or a user's existing context.
 
