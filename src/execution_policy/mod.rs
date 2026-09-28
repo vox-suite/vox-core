@@ -116,13 +116,16 @@ impl ExecutionPolicyService {
             return Err(ExecutionPolicyError::Invalid);
         }
         let owns_connection = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND user_context_id = $2
-             AND provider_key=$3 AND external_account_hash=$4)",
+            "SELECT EXISTS(SELECT 1 FROM external_connections x
+             LEFT JOIN integration_definitions i ON i.id=x.integration_id
+             LEFT JOIN remote_extensions e ON e.id=x.remote_extension_id
+             WHERE x.id=$1 AND x.user_context_id=$2
+             AND COALESCE(i.external_key,e.external_key)=$3 AND x.external_account_hash=$4)",
         )
         .bind(identity.connection_id)
         .bind(context.id.0)
         .bind(&identity.provider_external_key)
-        .bind(hex::encode(&identity.account_hash))
+        .bind(&identity.account_hash)
         .fetch_one(self.db.pool())
         .await?;
         if !owns_connection {
@@ -171,10 +174,11 @@ impl ExecutionPolicyService {
             "SELECT a.proposal_id, a.consumed_execution_id, a.approved_details_hash, p.details, p.details_hash, \
                     p.expires_at, p.state, p.capability \
              FROM action_approvals a JOIN action_proposals p ON p.id = a.proposal_id \
-             WHERE a.id = $1 AND a.user_id = $2 FOR UPDATE OF a, p",
+             WHERE a.id = $1 AND a.user_id = $2 AND a.user_context_id = $3 AND p.user_context_id = $3 FOR UPDATE OF a, p",
         )
         .bind(request.approval_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(&mut **tx)
         .await?
         .ok_or(ExecutionPolicyError::ApprovalRequired)?;

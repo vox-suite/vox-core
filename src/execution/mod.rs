@@ -102,14 +102,18 @@ impl ExecutionCoordinator {
         }
         let mut tx = self.db.pool().begin().await?;
         if let Some(row) = sqlx::query(
-            "SELECT id, state, provider_reference, confirmation_evidence FROM executions \
-             WHERE user_id = $1 AND idempotency_key = $2 FOR UPDATE",
+            "SELECT id, approval_id, state, provider_reference, confirmation_evidence FROM executions \
+             WHERE user_id = $1 AND user_context_id = $3 AND idempotency_key = $2 FOR UPDATE",
         )
         .bind(context.user_id.0)
         .bind(key)
+        .bind(context.id.0)
         .fetch_optional(&mut *tx)
         .await?
         {
+            if row.get::<Uuid, _>("approval_id") != request.approval_id {
+                return Err(ExecutionError::FreshApproval);
+            }
             let result = row_execution(row)?;
             tx.commit().await?;
             return Ok(result);
@@ -118,10 +122,11 @@ impl ExecutionCoordinator {
             "SELECT a.proposal_id, a.consumed_execution_id, p.details, p.details_hash, p.expires_at, \
                     p.state, p.capability, p.connection_id, p.actor_key \
              FROM action_approvals a JOIN action_proposals p ON p.id = a.proposal_id \
-             WHERE a.id = $1 AND a.user_id = $2 FOR UPDATE OF a, p",
+             WHERE a.id = $1 AND a.user_id = $2 AND a.user_context_id = $3 AND p.user_context_id = $3 FOR UPDATE OF a, p",
         )
         .bind(request.approval_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(ExecutionError::Unavailable)?;
@@ -152,9 +157,9 @@ impl ExecutionCoordinator {
             "identity": identity,
         });
         let connection_current = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM connections WHERE id=$1 AND user_context_id=$2
+            "SELECT id FROM external_connections WHERE id=$1 AND user_context_id=$2
              AND authorization_state='authorized' AND (expires_at IS NULL OR expires_at>$3)
-             AND $4=ANY(allowed_capabilities) FOR SHARE",
+             AND $4=ANY(authorized_capabilities) FOR SHARE",
         )
         .bind(connection_id)
         .bind(context.id.0)
@@ -169,13 +174,18 @@ impl ExecutionCoordinator {
             "SELECT g.id FROM agent_capability_grants g
              JOIN agent_definitions a ON a.id=g.agent_definition_id
              JOIN external_connections x ON x.id=g.connection_id
-             JOIN integration_definitions i ON i.id=x.integration_id
              WHERE g.user_context_id=$1 AND g.connection_id=$2
                AND g.capability_external_key=$3 AND g.state='enabled'
                AND a.external_key=$4 AND a.deployment_id=$5 AND a.state='enabled'
                AND x.user_context_id=$1 AND x.authorization_state='authorized'
-               AND (x.expires_at IS NULL OR x.expires_at>$6) AND i.state='enabled'
-             FOR SHARE OF g,a,x,i",
+               AND (x.expires_at IS NULL OR x.expires_at>$6)
+               AND (EXISTS (SELECT 1 FROM integration_definitions i
+                    WHERE i.id=x.integration_id AND i.deployment_id=$5 AND i.state='enabled')
+                 OR EXISTS (SELECT 1 FROM remote_extensions e
+                    WHERE e.id=x.remote_extension_id AND e.user_context_id=$1
+                      AND e.lifecycle_state='active' AND e.consent_status='consented'
+                      AND e.conformance_status='passed' AND e.operator_enabled))
+             FOR SHARE OF g,a,x",
         )
         .bind(context.id.0)
         .bind(connection_id)
@@ -203,11 +213,12 @@ impl ExecutionCoordinator {
             .map_err(|_| ExecutionError::Unavailable)?;
         let request_hash = hex::encode(Sha256::digest(key.as_bytes()));
         sqlx::query(
-            "INSERT INTO executions (id, user_id, approval_id, proposal_id, connection_id, idempotency_key, provider_snapshot, policy_snapshot, state) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')",
+            "INSERT INTO executions (id, user_id, user_context_id, approval_id, proposal_id, connection_id, idempotency_key, provider_snapshot, policy_snapshot, state) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')",
         )
         .bind(id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .bind(request.approval_id)
         .bind(proposal_id)
         .bind(connection_id)
@@ -269,10 +280,11 @@ impl ExecutionCoordinator {
     ) -> Result<Execution, ExecutionError> {
         let request = self.adapter_request(context, execution_id).await?;
         let row = sqlx::query(
-            "SELECT state, provider_reference FROM executions WHERE id = $1 AND user_id = $2",
+            "SELECT state, provider_reference FROM executions WHERE id = $1 AND user_id = $2 AND user_context_id = $3",
         )
         .bind(execution_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ExecutionError::Unavailable)?;
@@ -297,10 +309,11 @@ impl ExecutionCoordinator {
     ) -> Result<AdapterRequest, ExecutionError> {
         let row = sqlx::query(
             "SELECT idempotency_key, provider_snapshot FROM executions \
-             WHERE id = $1 AND user_id = $2",
+             WHERE id = $1 AND user_id = $2 AND user_context_id = $3",
         )
         .bind(execution_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ExecutionError::Unavailable)?;
@@ -334,6 +347,19 @@ impl ExecutionCoordinator {
             .await
     }
 
+    /// Records a result after a remote dispatch has begun. An ambiguous
+    /// result remains reconciling and must never trigger an automatic retry.
+    pub async fn record_dispatched_outcome(
+        &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+        outcome: AdapterOutcome,
+        now: DateTime<Utc>,
+    ) -> Result<Execution, ExecutionError> {
+        self.persist_outcome(context, execution_id, outcome, now, true)
+            .await
+    }
+
     pub async fn record_verified_external_outcome(
         &self,
         context: &ResolvedUserContext,
@@ -364,10 +390,11 @@ impl ExecutionCoordinator {
     ) -> Result<Execution, ExecutionError> {
         let row = sqlx::query(
             "SELECT id, state, provider_reference, confirmation_evidence FROM executions \
-             WHERE id = $1 AND user_id = $2",
+             WHERE id = $1 AND user_id = $2 AND user_context_id = $3",
         )
         .bind(execution_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(ExecutionError::Unavailable)?;
@@ -452,7 +479,7 @@ impl ExecutionCoordinator {
             "UPDATE executions SET state = $1, provider_reference = COALESCE($2, provider_reference), \
              confirmation_evidence = COALESCE($3, confirmation_evidence), updated_at = $4, \
              completed_at = CASE WHEN $5 THEN $4 ELSE NULL END \
-             WHERE id = $6 AND user_id = $7 AND state NOT IN ('succeeded', 'failed') \
+             WHERE id = $6 AND user_id = $7 AND user_context_id = $9 AND state NOT IN ('succeeded', 'failed') \
              AND (($8 AND state IN ('reconciling', 'in_progress')) OR (NOT $8 AND state <> 'reconciling')) \
              RETURNING id, state, provider_reference, confirmation_evidence",
         )
@@ -464,6 +491,7 @@ impl ExecutionCoordinator {
         .bind(execution_id)
         .bind(context.user_id.0)
         .bind(allow_reconciling_transition)
+        .bind(context.id.0)
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(ExecutionError::Unavailable)?;

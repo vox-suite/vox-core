@@ -53,6 +53,7 @@ pub struct ConformanceReportRequest {
 pub struct RenewConsentRequest {
     pub host_context: HostContextRequest,
     pub version: i32,
+    pub confirmed: bool,
 }
 
 #[derive(Deserialize)]
@@ -167,15 +168,24 @@ pub async fn record_conformance(
 }
 
 pub async fn renew_consent(
-    State(_s): State<AppState>,
-    _h: HeaderMap,
-    Path(_id): Path<Uuid>,
-    Json(_r): Json<RenewConsentRequest>,
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(r): Json<RenewConsentRequest>,
 ) -> Response {
-    // A host assertion proves identity, not that the user reviewed the
-    // operator/recipient diff. Keep renewal unavailable until the public
-    // consent flow can bind an explicit decision to the reviewed version.
-    StatusCode::SERVICE_UNAVAILABLE.into_response()
+    if !r.confirmed {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(service) = s.remote_extensions.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    reply(
+        service.renew_consent(&c, id, r.version).await,
+        StatusCode::OK,
+    )
 }
 
 pub async fn quarantine(
@@ -208,14 +218,7 @@ pub async fn remove(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let removed = service.remove(&c, id).await;
-    if removed.is_ok()
-        && let Some(apps) = s.connected_apps.as_ref()
-        && let Err(err) = apps.forget(id).await
-    {
-        tracing::error!(%err, extension_id = %id, "failed to delete connected app credentials");
-    }
-    reply(removed, StatusCode::OK)
+    reply(service.remove(&c, id).await, StatusCode::OK)
 }
 
 fn reply(r: Result<RemoteExtension, RemoteExtensionError>, ok: StatusCode) -> Response {

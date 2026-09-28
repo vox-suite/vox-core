@@ -504,30 +504,44 @@ impl PrivacyService {
                 .fetch_optional(&mut *tx)
                 .await?;
 
-                if let Some(int_id) = integration_id {
+                let remote_extension_id = if integration_id.is_none() {
+                    sqlx::query_scalar::<_, Uuid>(
+                        "SELECT id FROM remote_extensions WHERE user_context_id=$1 \
+                         AND external_key=$2 AND lifecycle_state<>'removed' LIMIT 1",
+                    )
+                    .bind(context.id.0)
+                    .bind(&c.integration_key)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                } else {
+                    None
+                };
+                if integration_id.is_some() || remote_extension_id.is_some() {
                     let display_str = c.account_display_id.as_deref().unwrap_or("default");
                     let mut hasher = Sha256::new();
                     hasher.update(display_str.as_bytes());
                     let account_hash = hasher.finalize().to_vec();
 
-                    sqlx::query(
+                    let inserted = sqlx::query(
                         r#"
                         INSERT INTO external_connections (
-                            user_context_id, integration_id, external_account_hash, account_display_id,
+                            user_context_id, integration_id, remote_extension_id,
+                            external_account_hash, account_display_id,
                             credential_custody, authorization_state, authorized_capabilities, created_at, updated_at
-                        ) VALUES ($1, $2, $3, $4, $5, 'pending', '{}'::text[], $6, $6)
-                        ON CONFLICT (user_context_id, integration_id, external_account_hash) DO NOTHING
+                        ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', '{}'::text[], $7, $7)
+                        ON CONFLICT DO NOTHING
                         "#,
                     )
                     .bind(context.id.0)
-                    .bind(int_id)
+                    .bind(integration_id)
+                    .bind(remote_extension_id)
                     .bind(account_hash)
                     .bind(&c.account_display_id)
                     .bind(&c.credential_custody)
                     .bind(now)
                     .execute(&mut *tx)
                     .await?;
-                    imported_conns += 1;
+                    imported_conns += inserted.rows_affected() as usize;
                 }
             }
         }
@@ -654,9 +668,11 @@ impl PrivacyService {
         // 3. User connections (account references only - strictly NO credentials)
         let conn_rows = sqlx::query(
             r#"
-            SELECT i.external_key, c.account_display_id, c.credential_custody
+            SELECT COALESCE(i.external_key,e.external_key) AS external_key,
+                   c.account_display_id, c.credential_custody
             FROM external_connections c
-            JOIN integration_definitions i ON i.id = c.integration_id
+            LEFT JOIN integration_definitions i ON i.id = c.integration_id
+            LEFT JOIN remote_extensions e ON e.id = c.remote_extension_id
             WHERE c.user_context_id = $1
             "#,
         )
@@ -711,12 +727,14 @@ impl PrivacyService {
 
         let grant_rows = sqlx::query(
             r#"
-            SELECT a.external_key AS agent_key, i.external_key AS integration_key,
+            SELECT a.external_key AS agent_key,
+                   COALESCE(i.external_key,e.external_key) AS integration_key,
                    g.capability_external_key AS capability_key, g.state
             FROM agent_capability_grants g
             JOIN agent_definitions a ON a.id = g.agent_definition_id
             JOIN external_connections conn ON conn.id = g.connection_id
-            JOIN integration_definitions i ON i.id = conn.integration_id
+            LEFT JOIN integration_definitions i ON i.id = conn.integration_id
+            LEFT JOIN remote_extensions e ON e.id = conn.remote_extension_id
             WHERE g.user_context_id = $1
             "#,
         )

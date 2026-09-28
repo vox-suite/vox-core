@@ -387,9 +387,6 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
-        .route("/v1/connections/initiate", post(connections::initiate))
-        .route("/v1/connections/callback", post(connections::callback))
-        .route("/v1/connections/authorize", post(connections::authorize))
         .route("/v1/connections/list", post(connections::list))
         .route(
             "/v1/connections/{id}/disconnect",
@@ -553,6 +550,11 @@ pub fn router(state: AppState) -> Router {
             post(connected_apps::callback),
         )
         .route("/v1/connected-apps/status", post(connected_apps::status))
+        .route("/v1/connected-apps/read", post(connected_apps::read_tool))
+        .route(
+            "/v1/connected-apps/execute",
+            post(connected_apps::execute_tool),
+        )
         .route(
             "/v1/remote-extensions/{id}",
             post(remote_extensions::get)
