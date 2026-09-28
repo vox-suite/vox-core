@@ -8,7 +8,7 @@ use crate::{
         conversation::{ConversationPrompt, ConversationResponder, PromptMessage},
     },
     db::Db,
-    identity::{IdentityError, IdentityService, ResourceOwner, UserContextId, UserId},
+    identity::{IdentityError, IdentityService, ResolvedUserContext, ResourceOwner, UserId},
     memory::MemoryService,
 };
 use futures_util::{FutureExt, Stream, StreamExt, stream};
@@ -19,12 +19,6 @@ use uuid::Uuid;
 
 type OpeningTask =
     futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<(), String>>>;
-
-type ConversationCacheMap = Arc<
-    tokio::sync::RwLock<
-        std::collections::HashMap<(UserContextId, String, String), (ConversationId, UserId)>,
-    >,
->;
 
 pub type ConversationTextStream =
     Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
@@ -65,7 +59,6 @@ pub struct ConversationService {
     pub(super) jev: Option<crate::jev::JevClient>,
     pub(super) speculative: super::speculation::SpeculationCache,
     openings: Arc<tokio::sync::Mutex<std::collections::HashMap<String, OpeningTask>>>,
-    conversation_cache: ConversationCacheMap,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,7 +96,6 @@ impl ConversationService {
             jev: None,
             openings: Arc::default(),
             speculative: Default::default(),
-            conversation_cache: Arc::default(),
         }
     }
 
@@ -114,22 +106,15 @@ impl ConversationService {
 
     pub async fn respond(
         &self,
-        request: RespondRequest,
-    ) -> Result<RespondResponse, ConversationError> {
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
-        self.respond_for_owner(owner, request).await
-    }
-
-    pub async fn respond_for_owner(
-        &self,
-        owner: ResourceOwner,
+        context: ResolvedUserContext,
         mut request: RespondRequest,
     ) -> Result<RespondResponse, ConversationError> {
+        let selected_agent = self
+            .selected_agent(&context, &request.agent_external_key)
+            .await?;
+        let owner = context.owner();
+        self.wait_for_opening(owner, &request.identity, &request.external_conversation_id)
+            .await?;
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
@@ -156,6 +141,7 @@ impl ConversationService {
                 owner,
                 &request.identity.channel,
                 &request.external_conversation_id,
+                &request.agent_external_key,
             )
             .await?;
 
@@ -240,6 +226,8 @@ impl ConversationService {
         let text = self
             .agent
             .respond(ConversationPrompt {
+                context,
+                selected_agent,
                 user_id: active_user_id,
                 owner: active_owner,
                 channel: request.identity.channel.clone(),
@@ -269,27 +257,15 @@ impl ConversationService {
 
     pub async fn respond_stream(
         &self,
-        request: RespondRequest,
-    ) -> Result<ConversationTextStream, ConversationError> {
-        if crate::agents::conversation::is_voice_channel(&request.identity.channel)
-            && request.text.trim() == "The call just connected. Greet the user."
-        {
-            return self.cached_opening(request).await;
-        }
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
-            .await?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
-        self.respond_stream_for_owner(owner, request).await
-    }
-
-    pub async fn respond_stream_for_owner(
-        &self,
-        owner: ResourceOwner,
+        context: ResolvedUserContext,
         mut request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
+        let selected_agent = self
+            .selected_agent(&context, &request.agent_external_key)
+            .await?;
+        let owner = context.owner();
+        self.wait_for_opening(owner, &request.identity, &request.external_conversation_id)
+            .await?;
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
@@ -300,7 +276,7 @@ impl ConversationService {
         if crate::agents::conversation::is_voice_channel(&request.identity.channel)
             && request.text.trim() == "The call just connected. Greet the user."
         {
-            return self.cached_opening(request).await;
+            return self.cached_opening(context, request).await;
         }
         let request_started = std::time::Instant::now();
         let identity_resolved = std::time::Instant::now();
@@ -323,6 +299,7 @@ impl ConversationService {
                 owner,
                 &request.identity.channel,
                 &request.external_conversation_id,
+                &request.agent_external_key,
             )
             .await?;
 
@@ -460,6 +437,8 @@ impl ConversationService {
             );
             agent
                 .respond_stream(ConversationPrompt {
+                    context,
+                    selected_agent,
                     user_id: active_user_id,
                     owner: active_owner,
                     channel: request.identity.channel,
@@ -543,8 +522,13 @@ impl ConversationService {
         }
     }
 
-    fn opening_key(identity: &crate::identity::ChannelIdentity, external_id: &str) -> String {
+    fn opening_key(
+        owner: ResourceOwner,
+        identity: &crate::identity::ChannelIdentity,
+        external_id: &str,
+    ) -> String {
         serde_json::to_string(&(
+            owner,
             identity.channel.trim(),
             identity.external_id.trim(),
             external_id.trim(),
@@ -554,6 +538,7 @@ impl ConversationService {
 
     async fn wait_for_opening(
         &self,
+        owner: ResourceOwner,
         identity: &crate::identity::ChannelIdentity,
         external_id: &str,
     ) -> Result<(), ConversationError> {
@@ -561,7 +546,7 @@ impl ConversationService {
             .openings
             .lock()
             .await
-            .get(&Self::opening_key(identity, external_id))
+            .get(&Self::opening_key(owner, identity, external_id))
             .cloned();
         if let Some(pending) = pending
             && let Err(error) = pending.await
@@ -578,29 +563,20 @@ impl ConversationService {
 
     async fn cached_opening(
         &self,
+        context: ResolvedUserContext,
         request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
         let started = std::time::Instant::now();
-        let name = if let Some(cache) = self.memory.cache() {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                cache.get_user_by_channel(
-                    request.identity.channel.trim(),
-                    request.identity.external_id.trim(),
-                ),
-            )
-            .await
-            {
-                Ok(Ok(Some((_, info)))) => info.name,
-                Ok(Ok(None)) => None,
-                _ => {
-                    tracing::warn!("Greeting cache unavailable; using generic opening");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let owner = context.owner();
+        // A channel identity is presentation data, never a cache authority key.
+        let name = self.memory.get_user_name(owner.user_id).await?;
+        self.resolve_conversation(
+            owner,
+            &request.identity.channel,
+            &request.external_conversation_id,
+            &request.agent_external_key,
+        )
+        .await?;
         let name = name
             .as_deref()
             .map(str::trim)
@@ -610,7 +586,7 @@ impl ConversationService {
             None => "Hi there! It seems you're calling for the first time. How can I help you?"
                 .to_owned(),
         };
-        let key = Self::opening_key(&request.identity, &request.external_conversation_id);
+        let key = Self::opening_key(owner, &request.identity, &request.external_conversation_id);
         let mut openings = self.openings.lock().await;
         if !openings.contains_key(&key) {
             let service = self.clone();
@@ -618,7 +594,7 @@ impl ConversationService {
             let pending = async move {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    service.persist_opening(request, text),
+                    service.persist_opening(owner, request, text),
                 )
                 .await
                 .map_err(|_| "opening initialization timed out".to_owned())?
@@ -646,19 +622,17 @@ impl ConversationService {
 
     async fn persist_opening(
         &self,
+        owner: ResourceOwner,
         request: RespondRequest,
         greeting: String,
     ) -> Result<(), ConversationError> {
         let started = std::time::Instant::now();
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
-            .await?;
         let (conversation_id, _) = self
             .resolve_conversation(
                 owner,
                 &request.identity.channel,
                 &request.external_conversation_id,
+                &request.agent_external_key,
             )
             .await?;
         let mut tx = self.db.pool().begin().await?;
@@ -720,40 +694,28 @@ impl ConversationService {
 
     pub async fn complete(
         &self,
+        context: ResolvedUserContext,
         request: CompleteConversationRequest,
     ) -> Result<(), ConversationError> {
-        self.wait_for_opening(&request.identity, &request.external_conversation_id)
+        self.selected_agent(&context, &request.agent_external_key)
             .await?;
-        let owner = self
-            .identities
-            .resolve_legacy_owner(&request.identity)
+        let owner = context.owner();
+        self.wait_for_opening(owner, &request.identity, &request.external_conversation_id)
             .await?;
-        self.complete_for_owner(owner, request).await
-    }
-
-    pub async fn complete_for_owner(
-        &self,
-        owner: ResourceOwner,
-        request: CompleteConversationRequest,
-    ) -> Result<(), ConversationError> {
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
         {
             return Err(ConversationError::Invalid);
         }
-        self.conversation_cache.write().await.remove(&(
-            owner.user_context_id,
-            request.identity.channel.trim().to_string(),
-            request.external_conversation_id.trim().to_string(),
-        ));
         let conversation = sqlx::query(
             "SELECT id FROM conversations \
-             WHERE channel = $1 AND external_conversation_id = $2 AND user_id = $3",
+             WHERE channel = $1 AND external_conversation_id = $2 AND user_context_id = $3 AND agent_external_key = $4",
         )
         .bind(request.identity.channel.trim())
         .bind(request.external_conversation_id.trim())
-        .bind(owner.user_id.0)
+        .bind(owner.user_context_id.0)
+        .bind(&request.agent_external_key)
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -813,64 +775,36 @@ impl ConversationService {
             .collect())
     }
 
-    async fn resolve_conversation(
+    pub(super) async fn selected_agent(
+        &self,
+        context: &ResolvedUserContext,
+        key: &str,
+    ) -> Result<crate::agent_registry::SelectedAgent, ConversationError> {
+        crate::agent_registry::AgentRegistry::new(self.db.clone())
+            .selected_for_context(context, key)
+            .await
+            .map_err(|_| ConversationError::Invalid)
+    }
+
+    pub(super) async fn resolve_conversation(
         &self,
         owner: ResourceOwner,
         channel: &str,
         external_id: &str,
+        agent_key: &str,
     ) -> Result<(ConversationId, UserId), ConversationError> {
-        let cache_key = (
-            owner.user_context_id,
-            channel.trim().to_string(),
-            external_id.trim().to_string(),
-        );
-        if let Some(cached) = self.conversation_cache.read().await.get(&cache_key) {
-            return Ok(*cached);
-        }
-
-        let existing = sqlx::query(
-            "SELECT id, user_id FROM conversations \
-             WHERE user_id = $1 AND channel = $2 AND external_conversation_id = $3",
-        )
-        .bind(owner.user_id.0)
-        .bind(channel.trim())
-        .bind(external_id.trim())
-        .fetch_optional(self.db.pool())
-        .await?;
-
-        if let Some(row) = existing {
-            let conversation_id: Uuid = row.get("id");
-            let user_id: Uuid = row.get("user_id");
-            let result = (ConversationId(conversation_id), UserId(user_id));
-            self.conversation_cache
-                .write()
-                .await
-                .insert(cache_key, result);
-            return Ok(result);
-        }
-
-        let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
-            "INSERT INTO conversations (user_context_id, user_id, channel, external_conversation_id) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_context_id, channel, external_conversation_id) \
-             DO UPDATE SET updated_at = now() \
-             RETURNING id, user_id",
-        )
-        .bind(owner.user_context_id.0)
-        .bind(owner.user_id.0)
-        .bind(channel.trim())
-        .bind(external_id.trim())
-        .fetch_one(&mut *tx)
-        .await?;
-        let stored_user: Uuid = row.get("user_id");
-        tx.commit().await?;
-        let result = (ConversationId(row.get("id")), UserId(stored_user));
-        self.conversation_cache
-            .write()
-            .await
-            .insert(cache_key, result);
-        Ok(result)
+            "INSERT INTO conversations (user_context_id,user_id,channel,external_conversation_id,agent_external_key)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (user_context_id,channel,external_conversation_id)
+             DO UPDATE SET updated_at=now()
+             WHERE conversations.agent_external_key=EXCLUDED.agent_external_key
+               AND conversations.user_id=EXCLUDED.user_id AND conversations.state='active'
+             RETURNING id,user_id",
+        ).bind(owner.user_context_id.0).bind(owner.user_id.0)
+         .bind(channel.trim()).bind(external_id.trim()).bind(agent_key)
+         .fetch_optional(self.db.pool()).await?.ok_or(ConversationError::IdentityConflict)?;
+        Ok((ConversationId(row.get("id")), UserId(row.get("user_id"))))
     }
 
     pub(super) async fn append_turn(

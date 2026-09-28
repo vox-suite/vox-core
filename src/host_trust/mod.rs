@@ -146,6 +146,8 @@ pub enum HostTrustError {
     InvalidRegistration,
     #[error("host context request is invalid")]
     InvalidRequest,
+    #[error("default skill publication unavailable")]
+    Defaults(#[from] vox_connections::skills::SkillError),
     #[error("host assertion is invalid")]
     InvalidAssertion,
     #[error("host assertion is denied")]
@@ -181,6 +183,11 @@ impl HostTrustService {
         let host_app_external_key = normalize_key(&request.host_app_external_key)
             .ok_or(HostTrustError::InvalidRegistration)?;
         let allowed_origins = normalize_origins(request.allowed_origins)?;
+
+        // Seed the deployment before issuing a credential. A publication
+        // failure must never leave an undisclosed, usable host secret behind.
+        vox_connections::defaults::publish(self.db.pool().clone(), &deployment_external_key)
+            .await?;
 
         let mut tx = self.db.pool().begin().await?;
         let deployment_id = sqlx::query_scalar::<_, Uuid>(

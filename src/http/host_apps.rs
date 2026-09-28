@@ -41,7 +41,9 @@ pub async fn register(
     match host_trust.register_host_app(request).await {
         Ok(host) => (StatusCode::CREATED, Json(host)).into_response(),
         Err(HostTrustError::InvalidRegistration) => StatusCode::BAD_REQUEST.into_response(),
-        Err(HostTrustError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(HostTrustError::Database(_) | HostTrustError::Defaults(_)) => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

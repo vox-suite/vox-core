@@ -50,6 +50,40 @@ pub async fn publish_private(
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportRequest {
+    pub host_context: HostContextRequest,
+    pub files: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub preview: bool,
+}
+
+pub async fn import_private(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportRequest>,
+) -> Response {
+    let context = match context(&state, &headers, &request.host_context).await {
+        Ok(context) => context,
+        Err(status) => return status.into_response(),
+    };
+    let skill = match vox_connections::skill_format::import(&request.files) {
+        Ok(skill) => skill,
+        Err(error) => return reply_error(error),
+    };
+    if request.preview {
+        return Json(serde_json::json!({"skill":skill,"digest":vox_connections::skills::content_digest(&skill).ok()})).into_response();
+    }
+    let Some(service) = state.skills.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.publish_private(&context, skill).await {
+        Ok(skill) => (StatusCode::CREATED, Json(skill)).into_response(),
+        Err(error) => reply_error(error),
+    }
+}
+
 pub async fn publish_curated(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -120,7 +154,15 @@ pub async fn install(
         Ok(context) => context,
         Err(status) => return status.into_response(),
     };
-    match service.install(&context, id, request.version).await {
+    match service
+        .install_for_agent(
+            &context,
+            id,
+            request.version,
+            request.agent_external_key.as_deref(),
+        )
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => reply_error(error),
     }
@@ -128,6 +170,7 @@ pub async fn install(
 
 #[derive(Deserialize)]
 pub struct InstallRequest {
+    pub agent_external_key: Option<String>,
     pub host_context: HostContextRequest,
     pub version: i32,
 }

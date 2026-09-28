@@ -67,6 +67,33 @@ impl ApprovalService {
         r: CreateProposalRequest,
         now: DateTime<Utc>,
     ) -> Result<Proposal, ApprovalError> {
+        self.propose_inner(context, r, now, None).await
+    }
+
+    /// Create a proposal and its waiting task atomically. No worker can claim
+    /// an unapproved change between task creation and the approval checkpoint.
+    pub async fn propose_with_new_task(
+        &self,
+        context: &ResolvedUserContext,
+        r: CreateProposalRequest,
+        title: String,
+        now: DateTime<Utc>,
+    ) -> Result<Proposal, ApprovalError> {
+        key(&title, 1024)?;
+        crate::agent_registry::AgentRegistry::new(self.db.clone())
+            .selected_for_context(context, &r.agent_external_key)
+            .await
+            .map_err(|_| ApprovalError::Invalid)?;
+        self.propose_inner(context, r, now, Some(title)).await
+    }
+
+    async fn propose_inner(
+        &self,
+        context: &ResolvedUserContext,
+        r: CreateProposalRequest,
+        now: DateTime<Utc>,
+        new_task_title: Option<String>,
+    ) -> Result<Proposal, ApprovalError> {
         let agent = key(&r.agent_external_key, 255)?;
         let capability = key(&r.capability_external_key, 511)?;
         if !r.details.is_object()
@@ -137,28 +164,43 @@ impl ApprovalService {
             let declared: Vec<ExtensionCapability> =
                 serde_json::from_value(remote.get("capabilities"))
                     .map_err(|_| ApprovalError::NotApprovable)?;
-            if !declared.iter().any(|item| {
-                item.external_key == capability
-                    && (item.consequential || item.effect.is_consequential())
-            }) {
-                return Err(ApprovalError::NotApprovable);
+            let reviewed = declared
+                .iter()
+                .find(|item| {
+                    item.external_key == capability
+                        && (item.consequential || item.effect.is_consequential())
+                })
+                .ok_or(ApprovalError::NotApprovable)?;
+            let arguments = invocation.get("arguments").ok_or(ApprovalError::Invalid)?;
+            let validator = jsonschema::validator_for(&reviewed.input_schema)
+                .map_err(|_| ApprovalError::NotApprovable)?;
+            if !validator.is_valid(arguments) {
+                return Err(ApprovalError::Invalid);
             }
             let reported: Value = remote.get("tools");
             if !reported.as_array().is_some_and(|tools| {
                 tools.iter().any(|tool| {
                     tool.get("name").and_then(Value::as_str) == Some(capability.as_str())
+                        && tool.get("inputSchema") == Some(&reviewed.input_schema)
                 })
             }) {
                 return Err(ApprovalError::NotApprovable);
             }
         }
         let mut tx = self.db.pool().begin().await?;
+        if let Some(title) = new_task_title {
+            sqlx::query("INSERT INTO spans(id,user_id,user_context_id,title,notes,status,execution_type) VALUES($1,$2,$3,$4,'Exact connection proposal','planned','interactive')")
+                .bind(r.span_id).bind(context.user_id.0).bind(context.id.0).bind(title).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO jobs(id,user_id,user_context_id,kind,payload_reference_id,span_id,state,wait_reason,checkpoint) VALUES($1,$2,$3,'execute_span',$4,$4,'pending','approval',$5)")
+                .bind(r.task_run_id).bind(context.user_id.0).bind(context.id.0).bind(r.span_id).bind(serde_json::json!({"agent_external_key":r.agent_external_key})).execute(&mut *tx).await?;
+        }
         let task_belongs_to_context = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM spans WHERE id = $1 AND user_id = $2 AND user_context_id = $3)",
+            "SELECT EXISTS(SELECT 1 FROM spans s JOIN jobs j ON j.span_id=s.id WHERE s.id=$1 AND s.user_id=$2 AND s.user_context_id=$3 AND j.id=$4 AND j.user_context_id=$3)",
         )
         .bind(r.span_id)
         .bind(context.user_id.0)
         .bind(context.id.0)
+        .bind(r.task_run_id)
         .fetch_one(&mut *tx)
         .await?;
         if !task_belongs_to_context {
@@ -208,6 +250,37 @@ impl ApprovalService {
         })
     }
 
+    pub async fn list_pending(
+        &self,
+        context: &ResolvedUserContext,
+    ) -> Result<Vec<Proposal>, ApprovalError> {
+        let rows=sqlx::query("SELECT p.id,p.capability,p.expires_at,p.details,a.id AS approval_id FROM action_proposals p LEFT JOIN action_approvals a ON a.proposal_id=p.id AND a.user_context_id=p.user_context_id WHERE p.user_context_id=$1 AND p.user_id=$2 AND p.state IN ('proposed','approved') AND (a.id IS NULL OR a.consumed_execution_id IS NULL) AND p.expires_at>now() ORDER BY p.created_at DESC LIMIT 100")
+            .bind(context.id.0).bind(context.user_id.0).fetch_all(self.db.pool()).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Proposal {
+                id: row.get("id"),
+                capability_external_key: row.get("capability"),
+                expires_at: row.get("expires_at"),
+                details: row.get("details"),
+                approval_id: row.get("approval_id"),
+            })
+            .collect())
+    }
+
+    pub async fn reject(
+        &self,
+        context: &ResolvedUserContext,
+        proposal_id: Uuid,
+    ) -> Result<(), ApprovalError> {
+        let changed=sqlx::query("UPDATE action_proposals SET state='rejected',updated_at=now() WHERE id=$1 AND user_id=$2 AND user_context_id=$3 AND state='proposed'")
+            .bind(proposal_id).bind(context.user_id.0).bind(context.id.0).execute(self.db.pool()).await?.rows_affected();
+        if changed != 1 {
+            return Err(ApprovalError::NotApprovable);
+        }
+        Ok(())
+    }
+
     pub async fn approve(
         &self,
         context: &ResolvedUserContext,
@@ -240,6 +313,7 @@ impl ApprovalService {
             .bind(now)
             .execute(&mut *tx)
             .await?;
+            tx.commit().await?;
             return Err(ApprovalError::Expired);
         }
         if state != "proposed" {

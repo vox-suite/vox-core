@@ -19,6 +19,7 @@ USER vox
 
 COPY --from=builder --chown=vox:vox /app/target/release/vox-core-api /usr/local/bin/vox-core-api
 COPY --from=builder --chown=vox:vox /app/target/release/vox-core-worker /usr/local/bin/vox-core-worker
+COPY --from=builder --chown=vox:vox /app/target/release/vox-core-defaults /usr/local/bin/vox-core-defaults
 
 EXPOSE 3001
 CMD ["/usr/local/bin/vox-core-api"]

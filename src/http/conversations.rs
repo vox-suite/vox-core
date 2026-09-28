@@ -1,7 +1,7 @@
 /**
 * HTTP endpoints for conversation turns, audio streams, and history.
 */
-use super::{AppState, auth};
+use super::{AppState, remote_extensions::context};
 use crate::conversations::{
     CompleteConversationRequest, RespondRequest, RespondResponse, service::ConversationError,
 };
@@ -16,18 +16,21 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct AuthenticatedRespondRequest {
+    pub host_context: crate::host_trust::HostContextRequest,
     #[serde(flatten)]
     pub conversation: RespondRequest,
 }
 
 #[derive(Deserialize)]
 pub struct AuthenticatedCompleteRequest {
+    pub host_context: crate::host_trust::HostContextRequest,
     #[serde(flatten)]
     pub conversation: CompleteConversationRequest,
 }
 
 #[derive(Deserialize)]
 pub struct AuthenticatedSpeculateRequest {
+    pub host_context: crate::host_trust::HostContextRequest,
     #[serde(flatten)]
     pub conversation: crate::conversations::SpeculateRequest,
 }
@@ -37,13 +40,14 @@ pub async fn respond(
     headers: HeaderMap,
     Json(request): Json<AuthenticatedRespondRequest>,
 ) -> Response {
-    if !auth::authorized(&headers, &state.service_token) {
+    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
+    else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match service.respond(request.conversation).await {
+    match service.respond(context, request.conversation).await {
         Ok(response) => (StatusCode::OK, Json::<RespondResponse>(response)).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(ConversationError::Agent(_)) => StatusCode::BAD_GATEWAY.into_response(),
@@ -61,15 +65,16 @@ pub async fn respond_stream(
     headers: HeaderMap,
     Json(request): Json<AuthenticatedRespondRequest>,
 ) -> Response {
-    if !auth::authorized(&headers, &state.service_token) {
+    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
+    else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let started = std::time::Instant::now();
     let turn_id = request.conversation.turn_id.clone();
-    match service.respond_stream(request.conversation).await {
+    match service.respond_stream(context, request.conversation).await {
         Ok(stream) => {
             let preparation_ms = started.elapsed().as_millis();
             let mut first_text_seen = false;
@@ -129,13 +134,14 @@ pub async fn complete(
     headers: HeaderMap,
     Json(request): Json<AuthenticatedCompleteRequest>,
 ) -> Response {
-    if !auth::authorized(&headers, &state.service_token) {
+    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
+    else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match service.complete(request.conversation).await {
+    match service.complete(context, request.conversation).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -147,13 +153,14 @@ pub async fn speculate(
     headers: HeaderMap,
     Json(request): Json<AuthenticatedSpeculateRequest>,
 ) -> Response {
-    if !auth::authorized(&headers, &state.service_token) {
+    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
+    else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let Some(service) = state.conversations.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match service.speculate(request.conversation).await {
+    match service.speculate(context, request.conversation).await {
         Ok(status) => Json(serde_json::json!({"status":status})).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),

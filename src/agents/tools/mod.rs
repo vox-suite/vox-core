@@ -5,6 +5,7 @@ pub mod calls;
 pub mod collections;
 pub mod dependencies;
 pub mod google_maps;
+pub mod library;
 pub mod profile;
 pub mod records;
 pub mod spans;

@@ -95,10 +95,7 @@ pub fn build_api_router(state: ApiState) -> Router {
     let location_consent_routes = Router::new()
         .route("/v1/location/consent/get", post(get_location_consent))
         .route("/v1/location/consent/grant", post(grant_location_consent))
-        .route(
-            "/v1/location/consent/revoke",
-            post(revoke_location_consent),
-        )
+        .route("/v1/location/consent/revoke", post(revoke_location_consent))
         .with_state(state.consent.clone());
 
     let device_api_state = DeviceApiState {

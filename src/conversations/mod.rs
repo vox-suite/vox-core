@@ -14,6 +14,7 @@ pub struct ConversationId(pub Uuid);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RespondRequest {
+    pub agent_external_key: String,
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
     pub text: String,
@@ -36,12 +37,14 @@ pub struct RespondResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CompleteConversationRequest {
+    pub agent_external_key: String,
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpeculateRequest {
+    pub agent_external_key: String,
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
     pub text: String,

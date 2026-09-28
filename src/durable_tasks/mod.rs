@@ -92,21 +92,28 @@ impl DurableTaskService {
         let instruction = text(&request.instruction, 20_000)?;
         if let Some(agent) = request.agent_external_key.as_deref() {
             text(agent, 255)?;
+            crate::agent_registry::AgentRegistry::new(self.db.clone())
+                .selected_for_context(context, agent)
+                .await
+                .map_err(|_| DurableTaskError::Invalid)?;
         }
         let mut tx = self.db.pool().begin().await?;
         let span_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO spans (user_id, title, notes, status, execution_type) VALUES ($1, $2, $3, 'planned', 'interactive') RETURNING id",
+            "INSERT INTO spans (user_id, user_context_id, title, notes, status, execution_type) VALUES ($1, $4, $2, $3, 'planned', 'interactive') RETURNING id",
         )
         .bind(context.user_id.0)
         .bind(title.clone())
         .bind(instruction)
+        .bind(context.id.0)
         .fetch_one(&mut *tx)
         .await?;
         let run_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO jobs (user_id, kind, payload_reference_id, span_id, state, checkpoint) VALUES ($1, 'execute_span', $2, $2, 'pending', '{}'::jsonb) RETURNING id",
+            "INSERT INTO jobs (user_id, user_context_id, kind, payload_reference_id, span_id, state, checkpoint) VALUES ($1, $3, 'execute_span', $2, $2, 'pending', $4) RETURNING id",
         )
         .bind(context.user_id.0)
         .bind(span_id)
+        .bind(context.id.0)
+        .bind(serde_json::json!({"agent_external_key":request.agent_external_key}))
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;

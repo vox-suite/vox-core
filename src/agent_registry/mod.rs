@@ -83,6 +83,22 @@ pub enum AgentRegistryError {
 }
 
 impl AgentRegistry {
+    pub async fn selected_for_context(
+        &self,
+        context: &crate::identity::ResolvedUserContext,
+        key: &str,
+    ) -> Result<SelectedAgent, AgentRegistryError> {
+        let deployment: String =
+            sqlx::query_scalar("SELECT external_key FROM platform_deployments WHERE id=$1")
+                .bind(context.subject.deployment_id.0)
+                .fetch_one(self.db.pool())
+                .await?;
+        self.selected_for_deployment(&deployment)
+            .await?
+            .into_iter()
+            .find(|agent| agent.definition.external_key == key)
+            .ok_or(AgentRegistryError::NotFound)
+    }
     pub fn new(db: Db) -> Self {
         Self { db }
     }

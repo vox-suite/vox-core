@@ -47,3 +47,7 @@ path = "services/api/main.rs"
 [[bin]]
 name = "vox-core-worker"
 path = "services/worker/main.rs"
+
+[[bin]]
+name = "vox-core-defaults"
+path = "services/defaults/main.rs"

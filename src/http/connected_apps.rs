@@ -72,6 +72,24 @@ pub async fn authorize(
     }
 }
 
+pub async fn connect_public(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(r): Json<StatusRequest>,
+) -> Response {
+    let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(apps) = s.connected_apps.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match apps.connect_public(&c, id).await {
+        Ok(extension) => (StatusCode::OK, Json(extension)).into_response(),
+        Err(e) => error(e),
+    }
+}
+
 pub async fn callback(
     State(s): State<AppState>,
     h: HeaderMap,
