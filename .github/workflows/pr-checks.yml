@@ -63,3 +63,7 @@ jobs:
           done
           test "$(psql -h 127.0.0.1 -U postgres -d vox_core_migrations -Atc 'SHOW server_version_num')" -ge 180000
           psql -h 127.0.0.1 -U postgres -d vox_core_migrations -v ON_ERROR_STOP=1 -Atc "SELECT extversion FROM pg_extension WHERE extname = 'vector'" | grep -Eq '^[0-9]+\.'
+      - name: Shared connector lifecycle against Core schema
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_migrations
+        run: cargo test --manifest-path ../vox-connections/Cargo.toml --test postgres_integration -- --ignored
