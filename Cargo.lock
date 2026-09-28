@@ -8032,9 +8032,10 @@ dependencies = [
 [[package]]
 name = "vox-shared"
 version = "0.1.0"
-source = "git+https://github.com/vox-suite/vox-shared.git?branch=main#b42a33708e14ceb515e612933a8e7dd7b17be1eb"
+source = "git+https://github.com/vox-suite/vox-shared.git?branch=main#d6f0434eed0741a56fdeda9073d573f2bea55095"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
