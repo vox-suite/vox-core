@@ -485,7 +485,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/preferences", post(preferences::set))
         .route("/v1/preferences/list", post(preferences::list))
-        .route("/v1/preferences/{key}/delete", post(preferences::delete_key))
+        .route(
+            "/v1/preferences/{key}/delete",
+            post(preferences::delete_key),
+        )
         .route(
             "/v1/agents/{agent_key}/effective-preferences",
             post(preferences::effective),
@@ -515,10 +518,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/privacy/executions/{id}/evidence",
             post(privacy::get_action_evidence),
         )
-        .route(
-            "/v1/identity/links",
-            post(identity_adapters::link),
-        )
+        .route("/v1/identity/links", post(identity_adapters::link))
         .route("/v1/identity/links/unlink", post(identity_adapters::unlink))
         .route(
             "/v1/host-apps/{id}/credentials",

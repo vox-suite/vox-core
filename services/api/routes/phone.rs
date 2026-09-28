@@ -105,16 +105,15 @@ pub async fn link_phone(
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
 
-            let actor_context_id = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM user_contexts WHERE user_id = $1",
-            )
-            .bind(actor.user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to fetch actor user_context: {e}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            let actor_context_id =
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM user_contexts WHERE user_id = $1")
+                    .bind(actor.user_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to fetch actor user_context: {e}");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
             for table in CTX_MERGE_TABLES {
                 let sql = format!(
