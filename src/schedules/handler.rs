@@ -79,7 +79,9 @@ impl ScheduleHandler {
         occurrence_at: DateTime<Utc>,
     ) -> Result<(), ScheduleHandlerError> {
         let row = sqlx::query(
-            "SELECT user_id, user_context_id, span_id, instruction FROM schedules WHERE id = $1",
+            "SELECT s.user_id, s.user_context_id, s.span_id, s.instruction, \
+                    sp.category AS span_category, sp.title AS span_title, sp.notes AS span_notes \
+             FROM schedules s LEFT JOIN spans sp ON sp.id = s.span_id WHERE s.id = $1",
         )
         .bind(schedule_id.0)
         .fetch_optional(self.db.pool())
@@ -93,8 +95,20 @@ impl ScheduleHandler {
         };
         let span_id: Option<uuid::Uuid> = row.get("span_id");
         let instruction: String = row.get("instruction");
+        let call_span = match (
+            row.get::<Option<String>, _>("span_category").as_deref(),
+            row.get::<Option<String>, _>("span_title"),
+            row.get::<Option<String>, _>("span_notes"),
+        ) {
+            (Some("call"), Some(title), Some(notes)) if self.outbound.is_some() => {
+                Some((title, notes))
+            }
+            _ => None,
+        };
 
-        if let Some(jev) = &self.jev {
+        if call_span.is_none()
+            && let Some(jev) = &self.jev
+        {
             let state = serde_json::json!({
                 "instruction": instruction,
                 "occurrence_at": occurrence_at.to_rfc3339(),
@@ -113,18 +127,21 @@ impl ScheduleHandler {
                 }
         }
 
-        let user_context = self.memory.load(user_id).await.unwrap_or_default();
-        let planned = self
-            .planner
-            .plan(crate::agents::event_planner::EventPlanningPrompt {
-                user_id,
-                user_context,
-                event_type: "scheduled_task".into(),
-                occurred_at: occurrence_at,
-                payload: serde_json::json!({ "instruction": instruction }),
-            })
-            .await
-            .unwrap_or_default();
+        let planned = if call_span.is_some() {
+            Vec::new()
+        } else {
+            let user_context = self.memory.load(user_id).await.unwrap_or_default();
+            self.planner
+                .plan(crate::agents::event_planner::EventPlanningPrompt {
+                    user_id,
+                    user_context,
+                    event_type: "scheduled_task".into(),
+                    occurred_at: occurrence_at,
+                    payload: serde_json::json!({ "instruction": instruction }),
+                })
+                .await
+                .unwrap_or_default()
+        };
 
         if self.outbound.is_some() {
             let claimed = sqlx::query(
@@ -141,42 +158,67 @@ impl ScheduleHandler {
             }
         }
 
-        let dispatched = if !planned.is_empty() {
-            let mut sent = false;
-            for action in planned {
-                match action {
-                    crate::agents::event_planner::PlannedAction::OutboundCall {
-                        reason,
-                        opening_instruction,
-                    } => {
-                        if let Some(outbound) = &self.outbound {
-                            outbound
-                                .initiate_call_for_user(
-                                    owner,
-                                    &reason,
-                                    &opening_instruction,
-                                    Some(schedule_id.0),
-                                    None,
-                                )
-                                .await?;
-                            sent = true;
+        let dispatch = async {
+            Ok::<bool, OutboundError>(
+                if let (Some((title, notes)), Some(outbound)) = (&call_span, &self.outbound) {
+                    outbound
+                        .initiate_call_for_user(owner, title, notes, Some(schedule_id.0), span_id)
+                        .await?;
+                    true
+                } else if !planned.is_empty() {
+                    let mut sent = false;
+                    for action in planned {
+                        match action {
+                            crate::agents::event_planner::PlannedAction::OutboundCall {
+                                reason,
+                                opening_instruction,
+                            } => {
+                                if let Some(outbound) = &self.outbound {
+                                    outbound
+                                        .initiate_call_for_user(
+                                            owner,
+                                            &reason,
+                                            &opening_instruction,
+                                            Some(schedule_id.0),
+                                            None,
+                                        )
+                                        .await?;
+                                    sent = true;
+                                }
+                            }
                         }
                     }
+                    sent
+                } else if let Some(outbound) = &self.outbound {
+                    let reason = format!("Scheduled reminder: {}", instruction);
+                    let opening = format!(
+                        "Remind the user of their scheduled reminder: {}",
+                        instruction
+                    );
+                    outbound
+                        .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
+                        .await?;
+                    true
+                } else {
+                    false
+                },
+            )
+        }
+        .await;
+        let dispatched = match dispatch {
+            Ok(dispatched) => dispatched,
+            Err(error) => {
+                if outbound_not_placed(&error) {
+                    sqlx::query(
+                        "DELETE FROM schedule_occurrence_dispatches WHERE schedule_id=$1 AND occurrence_at=$2",
+                    )
+                    .bind(schedule_id.0)
+                    .bind(occurrence_at)
+                    .execute(self.db.pool())
+                    .await?;
                 }
+                return Err(error.into());
             }
-            sent
-        } else if let Some(outbound) = &self.outbound {
-            let reason = format!("Scheduled reminder: {}", instruction);
-            let opening = format!(
-                "Remind the user of their scheduled reminder: {}",
-                instruction
-            );
-            outbound
-                .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
-                .await?;
-            true
-        } else {
-            false
         };
         if dispatched {
             sqlx::query(
@@ -201,5 +243,16 @@ impl ScheduleHandler {
         .await;
 
         Ok(())
+    }
+}
+
+fn outbound_not_placed(error: &OutboundError) -> bool {
+    match error {
+        OutboundError::Database(_)
+        | OutboundError::NoPhoneNumber
+        | OutboundError::InvalidInput(_) => true,
+        OutboundError::Bridge(crate::bridge_client::BridgeError::Status { .. }) => true,
+        OutboundError::Bridge(crate::bridge_client::BridgeError::Http(error)) => error.is_connect(),
+        OutboundError::Bridge(_) => false,
     }
 }

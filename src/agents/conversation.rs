@@ -19,9 +19,9 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 pub use super::prompts::{
-    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE,
-    is_elevenlabs_provider, is_voice_channel, onboarding_instruction, preamble_for_channel,
-    preamble_for_channel_and_tts,
+    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, OUTBOUND_OPENING_INSTRUCTION,
+    VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE, is_elevenlabs_provider, is_voice_channel,
+    onboarding_instruction, preamble_for_channel, preamble_for_channel_and_tts,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -157,8 +157,15 @@ impl ConversationAgent {
         let preamble = preamble_for_channel_and_tts(&prompt.channel, Some(tts));
         let is_call_opening =
             is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
-        let onboarding_instruction =
-            onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding);
+        let is_outbound_opening = is_call_opening
+            && prompt.channel.trim().eq_ignore_ascii_case("phone")
+            && prompt.initiation_context.as_deref()
+                != Some("The call just connected. Greet the user.");
+        let onboarding_instruction = if is_outbound_opening {
+            OUTBOUND_OPENING_INSTRUCTION
+        } else {
+            onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding)
+        };
 
         // ponytail: fixed 0.55 cutoff, tune from routed-domain/confidence logs if it misfires elsewhere
         const TOOL_DOMAIN_CONFIDENCE_THRESHOLD: f64 = 0.55;
