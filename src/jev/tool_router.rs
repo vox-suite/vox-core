@@ -14,6 +14,7 @@ pub enum ToolDomain {
     TasksAndRecords,
     Calendar,
     Device,
+    Calls,
     All,
 }
 
@@ -50,7 +51,13 @@ impl ToolRouter {
             (
                 "tasks_and_records",
                 Some(
-                    "Creating or checking tasks, reminders, scheduling outbound phone calls, initiating calls, logging notes, updating facts, or personal records",
+                    "Creating or checking tasks, reminders, logging notes, updating facts, or personal records",
+                ),
+            ),
+            (
+                "phone_calls",
+                Some(
+                    "Asking the assistant to phone the user: call me, call me back, call me in a few minutes, ring me, or a reminder delivered by phone call",
                 ),
             ),
             (
@@ -78,6 +85,7 @@ impl ToolRouter {
             "tasks_and_records" => ToolDomain::TasksAndRecords,
             "calendar" => ToolDomain::Calendar,
             "device" => ToolDomain::Device,
+            "phone_calls" => ToolDomain::Calls,
             _ => ToolDomain::All,
         };
 

@@ -100,7 +100,7 @@ Deploy this repo as two services, both with an empty root directory:
 
 Shared variables (set once as Railway shared variables):
 
-- `DATABASE_URL`: the Supabase transaction pooler (port 6543, `?sslmode=require`). The statement cache is disabled for it.
+- `DATABASE_URL`: the Supabase **direct** connection (`db.<ref>.supabase.co:5432`). Do not use the transaction pooler: sqlx uses named prepared statements, which collide there. The session pooler works but caps you at 15 clients. The direct host is IPv6-only, so run `railway outbound-network ipv6 enable --service <name>` for both `vox-core-api` and `vox-core-worker` and apply the staged change.
 - `REDIS_URL`
 - `VOX_AUTH_TOKEN`: the same value on `vox-core-api`, `vox-core-worker` and `vox-bridge`.
 - `VOX_BRIDGE_URL`: `http://vox-bridge.railway.internal:<bridge PORT>`

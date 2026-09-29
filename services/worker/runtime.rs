@@ -6,12 +6,11 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use vox_core::{
     agents::{
-        event_planner::GeminiEventPlanner, sms_extractor::GeminiSmsExtractor,
+        event_planner::GeminiEventPlanner, schema_extractor::GeminiSchemaExtractor,
         summarizer::GeminiSummarizer,
     },
     bridge_client::BridgeClient,
     config::Config,
-    core_api_client::{CoreApiClient, DeviceDispatcher},
     db::{Db, jobs::JobRepository},
     events::handler::EventHandler,
     memory::{
@@ -20,7 +19,7 @@ use vox_core::{
     },
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
-    sms_ingestion::{handler::SmsBatchHandler, retention::SmsRetentionSweeper},
+    sms_ingestion::retention::SmsRetentionSweeper,
     status::{EncryptedWebhookSecretStore, StatusService},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
@@ -45,23 +44,26 @@ pub async fn run_worker(
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
 
-    let (triager, schema_classifier, jev_client) = if let Some(ref api_key) = config.jev_api_key {
-        let client = vox_core::jev::client::JevClient::new(
-            api_key.clone(),
-            Some(config.jev_base_url.clone()),
-        );
-        (
-            Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(
-                client.clone(),
-            ))),
-            Some(Arc::new(
-                vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()),
-            )),
-            Some(client),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (triager, schema_classifier, schema_extractor, jev_client) =
+        if let Some(ref api_key) = config.jev_api_key {
+            let client = vox_core::jev::client::JevClient::new(
+                api_key.clone(),
+                Some(config.jev_base_url.clone()),
+            );
+            (
+                Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(
+                    client.clone(),
+                ))),
+                Some(Arc::new(
+                    vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()),
+                )),
+                Some(Arc::new(GeminiSchemaExtractor::new(&config))
+                    as Arc<dyn vox_core::agents::schema_extractor::SchemaExtracting>),
+                Some(client),
+            )
+        } else {
+            (None, None, None, None)
+        };
 
     let bridge_client = config.bridge_url.as_ref().and_then(|url| {
         BridgeClient::new(url.clone(), config.service_token.clone())
@@ -76,6 +78,7 @@ pub async fn run_worker(
         memory.clone(),
         triager,
         schema_classifier,
+        schema_extractor,
     );
     let mut schedules =
         ScheduleHandler::with_jev(db.clone(), planner, memory.clone(), jev_client.clone());
@@ -88,13 +91,6 @@ pub async fn run_worker(
     let mut task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
     task_executor = task_executor.with_outbound(outbound);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
-    let sms_extractor = Arc::new(GeminiSmsExtractor::new(&config));
-    let device_dispatcher = config.core_api_url.as_ref().and_then(|url| {
-        CoreApiClient::new(url.clone(), config.service_token.clone())
-            .ok()
-            .map(|c| Arc::new(c) as Arc<dyn DeviceDispatcher>)
-    });
-    let sms_batches = SmsBatchHandler::new(db.clone(), sms_extractor, device_dispatcher);
     let sms_retention = SmsRetentionSweeper::new(db.clone());
 
     let worker_id = Uuid::new_v4().to_string();
@@ -134,7 +130,6 @@ pub async fn run_worker(
         summaries,
         task_executor,
         wa_sweeper,
-        sms_batches,
         sms_retention,
         worker_id,
     );

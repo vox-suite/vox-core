@@ -49,4 +49,5 @@ pub mod status;
 pub mod storage;
 pub mod summaries;
 pub mod telemetry;
+pub mod tts;
 pub mod workers;

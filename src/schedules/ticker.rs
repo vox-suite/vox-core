@@ -92,7 +92,7 @@ impl ScheduleTicker {
 
         let due_tasks = sqlx::query(
             "SELECT id, user_id FROM spans \
-             WHERE status = 'planned' AND execution_type = 'autonomous' AND due_at IS NOT NULL AND due_at <= $1 \
+             WHERE status = 'planned' AND execution_type = 'autonomous' AND category <> 'call' AND due_at IS NOT NULL AND due_at <= $1 \
              FOR UPDATE SKIP LOCKED",
         )
         .bind(now)

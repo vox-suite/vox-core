@@ -23,6 +23,8 @@ pub struct DataSchema {
     pub version: i32,
     pub description: String,
     pub json_schema: serde_json::Value,
+    pub color_token: i32,
+    pub icon_token: i32,
     pub state: SchemaState,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -101,8 +101,8 @@ impl OutboundCallService {
         .await;
 
         sqlx::query(
-            "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id) \
-             VALUES ($1, $2, $3, 'phone', $4) \
+            "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id, agent_external_key) \
+             VALUES ($1, $2, $3, 'phone', $4, 'general') \
              ON CONFLICT (user_context_id, channel, external_conversation_id) DO NOTHING",
         )
         .bind(conversation_id)
@@ -168,11 +168,14 @@ impl OutboundCallService {
                 "provider_call_id": response.provider_call_id,
                 "state": "in_progress",
             });
-            sqlx::query("UPDATE jobs SET checkpoint = $1 WHERE id = $2")
+            if let Err(error) = sqlx::query("UPDATE jobs SET checkpoint = $1 WHERE id = $2")
                 .bind(&updated)
                 .bind(job_id)
                 .execute(self.db.pool())
-                .await?;
+                .await
+            {
+                tracing::warn!(%error, call_id = %call_id, "Outbound call placed but job checkpoint update failed");
+            }
 
             Some(response.provider_call_id)
         } else {

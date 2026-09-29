@@ -58,64 +58,9 @@ Devices must periodically heartbeat to indicate availability and report resource
   }
   ```
 
-## 3. Work Claiming & Local Inference Leases
+## 3. Work Dispatch
 
-Vox Core delegates non-sensitive, local-inference tasks (e.g. classification, text extraction, local embeddings) to enrolled devices with active consent.
-
-### Claiming Jobs
-* **Endpoint:** `POST /v1/devices/{id}/jobs/claim`
-* **Request:**
-  ```json
-  {
-    "max_jobs": 1,
-    "supported_kinds": ["summarize_conversation", "evaluate_task"]
-  }
-  ```
-* **Response (200 OK):**
-  ```json
-  {
-    "jobs": [
-      {
-        "id": "job-uuid",
-        "kind": "evaluate_task",
-        "lease_generation": 1,
-        "lease_expires_at": "2026-09-23T01:05:00Z",
-        "input_reference": "{\"task_id\": \"...\", \"title\": \"Buy groceries\"}"
-      }
-    ]
-  }
-  ```
-
-### Submitting Results
-* **Endpoint:** `POST /v1/device-jobs/{id}/result`
-* **Request:**
-  ```json
-  {
-    "lease_generation": 1,
-    "outcome": "succeeded",
-    "result_reference": {
-      "feasibility": "high",
-      "suggested_due_date": "2026-09-24T18:00:00Z"
-    }
-  }
-  ```
-* **Response (200 OK):**
-  ```json
-  {
-    "accepted": true
-  }
-  ```
-
-### Job Failure or Rejection
-* **Endpoint:** `POST /v1/device-jobs/{id}/fail`
-* **Request:**
-  ```json
-  {
-    "lease_generation": 1,
-    "error_code": "model_oom",
-    "error_details": "Out of memory loading model weights"
-  }
-  ```
+Work reaches a device over its socket (`GET /v1/devices/{id}/socket`, WebSocket upgrade). Core dispatches through `POST /internal/v1/devices/dispatch`. There is no polling or claim endpoint.
 
 ## 4. Security Invariants
 - Devices never receive database connection strings or master secret keys.

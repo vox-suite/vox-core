@@ -16,7 +16,7 @@ pub async fn submit_batch(
     Extension(actor): Extension<Actor>,
     Json(body): Json<SubmitSmsBatchRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let batch_id = service
+    let event_ids = service
         .submit_batch(actor.user_id, body.messages)
         .await
         .map_err(|err| match err {
@@ -27,7 +27,10 @@ pub async fn submit_batch(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({ "batch_id": batch_id })),
+        Json(serde_json::json!({
+            "event_ids": event_ids,
+            "batch_id": event_ids.first().map(|e| e.0),
+        })),
     ))
 }
 

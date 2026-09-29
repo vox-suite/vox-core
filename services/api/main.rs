@@ -76,6 +76,14 @@ async fn main() {
             .expect("VOX_STATUS_WEBHOOK_KEY must be a 32-byte hex key");
         legacy_state = legacy_state.with_status_secret_store(Arc::new(secrets));
     }
+    let tts = config.elevenlabs_api_key.as_ref().map(|key| {
+        Arc::new(vox_core::tts::ElevenLabsClient::new(
+            key.clone(),
+            config.elevenlabs_model_id.clone(),
+            config.elevenlabs_voice_id.clone(),
+            config.elevenlabs_output_format.clone(),
+        ))
+    });
     let api_state = ApiState::new(
         legacy_state,
         db,
@@ -83,6 +91,7 @@ async fn main() {
         memory,
         user_events,
         config.google_maps_api_key.clone(),
+        tts,
     );
     let app = build_api_router(api_state);
 

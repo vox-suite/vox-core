@@ -19,9 +19,9 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 pub use super::prompts::{
-    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE,
-    is_elevenlabs_provider, is_voice_channel, onboarding_instruction, preamble_for_channel,
-    preamble_for_channel_and_tts,
+    ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, OUTBOUND_OPENING_INSTRUCTION,
+    VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE, is_elevenlabs_provider, is_voice_channel,
+    onboarding_instruction, preamble_for_channel, preamble_for_channel_and_tts,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -157,8 +157,15 @@ impl ConversationAgent {
         let preamble = preamble_for_channel_and_tts(&prompt.channel, Some(tts));
         let is_call_opening =
             is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
-        let onboarding_instruction =
-            onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding);
+        let is_outbound_opening = is_call_opening
+            && prompt.channel.trim().eq_ignore_ascii_case("phone")
+            && prompt.initiation_context.as_deref()
+                != Some("The call just connected. Greet the user.");
+        let onboarding_instruction = if is_outbound_opening {
+            OUTBOUND_OPENING_INSTRUCTION
+        } else {
+            onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding)
+        };
 
         // ponytail: fixed 0.55 cutoff, tune from routed-domain/confidence logs if it misfires elsewhere
         const TOOL_DOMAIN_CONFIDENCE_THRESHOLD: f64 = 0.55;
@@ -176,6 +183,8 @@ impl ConversationAgent {
             // A bare "yes" would otherwise route to no tools and the pending
             // device command could never be confirmed.
             crate::jev::ToolDomain::Device
+        } else if is_voice && asks_for_phone_call(&prompt.user_text) {
+            crate::jev::ToolDomain::Calls
         } else if let Some(router) = &self.tool_router {
             match router.classify(&prompt.user_text).await {
                 Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
@@ -298,14 +307,7 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-                        .tool(tools::records::CreateUserRecord::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::ListUserRecords::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+
                         .tool(tools::profile::GetUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -337,6 +339,30 @@ impl ConversationAgent {
                         ))
                         .default_max_turns(6)
                         .build(),
+                    crate::jev::ToolDomain::Calls => {
+                        tracing::Span::current().record("gen_ai.agent.name", "calls-agent");
+                        client
+                            .agent(&prompt.selected_agent.model_configuration.model)
+                            .name("calls-agent")
+                            .record_content_telemetry(crate::telemetry::record_content())
+                            .preamble(preamble)
+                            .tool(tools::calls::ScheduleOutboundCall::new(
+                                self.db.clone(),
+                                self.outbound.clone(),
+                                prompt.owner,
+                            ))
+                            .tool(tools::calls::TriggerOutboundCall::new(
+                                self.db.clone(),
+                                self.outbound.clone(),
+                                prompt.owner,
+                            ))
+                            .tool(tools::profile::UpdateUserInfo::new(
+                                self.db.clone(),
+                                prompt.user_id,
+                            ))
+                            .default_max_turns(6)
+                            .build()
+                    }
                     _ => new_agent("voice-general")
                         .preamble(preamble)
                         .tool(tools::web_search::WebSearch::new(
@@ -375,14 +401,7 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-                        .tool(tools::records::CreateUserRecord::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::records::ListUserRecords::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
+
                         .default_max_turns(6)
                         .build(),
                 }
@@ -455,18 +474,7 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-                    .tool(tools::records::CreateUserRecord::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::records::ListUserRecords::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::records::ManageUserGoal::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
+
                     .default_max_turns(10)
                     .build()
             };
@@ -835,6 +843,20 @@ fn remove_markdown_links(value: &str) -> String {
     }
     output.push_str(rest);
     output
+}
+
+fn asks_for_phone_call(text: &str) -> bool {
+    let text = text.to_lowercase();
+    [
+        "call me",
+        "call back",
+        "ring me",
+        "phone me",
+        "give me a call",
+        "give me a ring",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
 }
 
 fn is_url(word: &str) -> bool {

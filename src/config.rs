@@ -8,6 +8,9 @@ pub const DEFAULT_BIND_ADDRESS: &str = "0.0.0.0:3001";
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-3.5-flash-lite";
 pub const DEFAULT_JEV_BASE_URL: &str = "https://api.typesafe.ai/v1/systemone";
 pub const DEFAULT_TTS_PROVIDER: &str = "elevenlabs";
+pub const DEFAULT_ELEVENLABS_VOICE_ID: &str = "21m00Tcm4TlvDq8ikWAM";
+pub const DEFAULT_ELEVENLABS_MODEL_ID: &str = "eleven_v4_turbo";
+pub const DEFAULT_ELEVENLABS_OUTPUT_FORMAT: &str = "mp3_44100_128";
 pub const DEFAULT_REDIS_URL: &str = "redis://redis:6379";
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 pub const DEFAULT_DB_ACQUIRE_TIMEOUT_SECS: u64 = 5;
@@ -30,6 +33,10 @@ pub struct Config {
     pub jev_base_url: String,
     pub jev_enabled: bool,
     pub tts_provider: String,
+    pub elevenlabs_api_key: Option<String>,
+    pub elevenlabs_voice_id: String,
+    pub elevenlabs_model_id: String,
+    pub elevenlabs_output_format: String,
     pub status_webhook_key: Option<String>,
     /// 32-byte hex key that encrypts connected-app OAuth tokens at rest.
     pub credential_key: Option<String>,
@@ -95,6 +102,16 @@ impl Config {
             jev_base_url,
             jev_enabled,
             tts_provider,
+            elevenlabs_api_key: get("ELEVENLABS_API_KEY").filter(|value| !value.trim().is_empty()),
+            elevenlabs_voice_id: get("ELEVENLABS_VOICE_ID")
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_ELEVENLABS_VOICE_ID.to_string()),
+            elevenlabs_model_id: get("ELEVENLABS_MODEL_ID")
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_ELEVENLABS_MODEL_ID.to_string()),
+            elevenlabs_output_format: get("ELEVENLABS_OUTPUT_FORMAT")
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_ELEVENLABS_OUTPUT_FORMAT.to_string()),
             status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
                 .filter(|value| !value.trim().is_empty()),
             credential_key: get("VOX_CREDENTIAL_KEY").filter(|value| !value.trim().is_empty()),

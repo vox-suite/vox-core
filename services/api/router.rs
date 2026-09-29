@@ -16,9 +16,7 @@ use crate::{
             list_collections, remove_collection_span, update_collection,
         },
         device_socket::{DeviceSocketState, device_socket},
-        devices::{
-            DeviceApiState, claim_device_jobs, heartbeat, register_device, submit_job_result,
-        },
+        devices::{DeviceApiState, heartbeat, register_device},
         events::ingest_batch,
         identity::get_me,
         internal::dispatch_device_request,
@@ -32,6 +30,7 @@ use crate::{
         schemas::{create_schema_version, get_schema_by_name},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
         spans::{create_span, delete_span, get_span, list_spans, update_span},
+        voice::{VoiceSocketState, voice_socket},
     },
     state::ApiState,
 };
@@ -100,13 +99,10 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let device_api_state = DeviceApiState {
         devices: state.devices.clone(),
-        pool: state.pool.clone(),
     };
     let device_routes = Router::new()
         .route("/v1/devices", post(register_device))
         .route("/v1/devices/{id}/heartbeat", post(heartbeat))
-        .route("/v1/devices/{id}/jobs/claim", post(claim_device_jobs))
-        .route("/v1/device-jobs/{id}/result", post(submit_job_result))
         .with_state(device_api_state);
 
     let device_socket_state = DeviceSocketState {
@@ -139,6 +135,13 @@ pub fn build_api_router(state: ApiState) -> Router {
             pool: state.pool.clone(),
         });
 
+    let voice_routes = Router::new()
+        .route("/v1/me/voice/socket", get(voice_socket))
+        .with_state(VoiceSocketState {
+            conversations: state.legacy.conversations(),
+            tts: state.tts.clone(),
+        });
+
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
     let internal_routes = Router::new()
@@ -162,6 +165,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(identity_routes)
         .merge(phone_routes)
         .merge(live_routes)
+        .merge(voice_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,

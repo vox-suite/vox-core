@@ -15,3 +15,4 @@ pub mod records;
 pub mod schemas;
 pub mod sms;
 pub mod spans;
+pub mod voice;

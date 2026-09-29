@@ -284,6 +284,7 @@ impl Tool for ListSpans {
                 .as_deref()
                 .map(|raw| parse_uuid("collection_id", raw))
                 .transpose()?,
+            schema_id: None,
             status: args.status.as_deref().map(parse_status).transpose()?,
             unscheduled: args.unscheduled.unwrap_or(false),
             limit: Some(args.limit.unwrap_or(30).clamp(1, 100)),
