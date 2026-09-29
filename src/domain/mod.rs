@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod charts;
 pub mod collections;
 pub mod devices;
 /**
@@ -10,6 +11,7 @@ pub mod schemas;
 pub mod spans;
 
 pub use actions::*;
+pub use charts::*;
 pub use collections::*;
 pub use devices::*;
 pub use identity::*;
