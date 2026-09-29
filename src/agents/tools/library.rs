@@ -61,7 +61,6 @@ impl AgentLibrary {
             .await
             .map_err(|_| LibraryError)?;
         let skills = crate::skills::SkillService::new(db.pool().clone());
-        let grants = crate::capability_grants::CapabilityGrantService::new(db.pool().clone());
         match request {
             LibraryRequest::Discover => {
                 let tools = self
@@ -113,6 +112,8 @@ impl AgentLibrary {
                 disclosure,
             } => {
                 if !arguments.is_object()
+                    || serde_json::to_vec(&arguments)
+                        .map_or(true, |bytes| bytes.len() > 2 * 1024 * 1024)
                     || !disclosure.is_object()
                     || title.trim().is_empty()
                     || title.len() > 1024
@@ -120,15 +121,14 @@ impl AgentLibrary {
                 {
                     return Err(LibraryError);
                 }
-                let effective = grants
-                    .effective_for_agent(&self.context.request_context(), &self.agent)
+                let tools = self
+                    .apps
+                    .as_ref()
+                    .ok_or(LibraryError)?
+                    .tools_for_agent(&self.context, &self.agent)
                     .await
                     .map_err(|_| LibraryError)?;
-                if !effective.iter().any(|g| {
-                    g.connection_id == connection_id && g.capability_external_key == tool_name
-                }) {
-                    return Err(LibraryError);
-                }
+                validate_proposable_tool(&tools, connection_id, &tool_name, &arguments)?;
                 let tasks = crate::durable_tasks::DurableTaskService::new(db.clone());
                 let task_id = Uuid::new_v4();
                 let run_id = Uuid::new_v4();
@@ -149,6 +149,32 @@ impl AgentLibrary {
     }
 }
 
+/// Discovery is only a snapshot. Execution checks authority again, but a
+/// proposal must also describe a currently usable, reviewed consequential
+/// tool with arguments matching its pinned input schema.
+fn validate_proposable_tool(
+    tools: &[Value],
+    connection_id: Uuid,
+    name: &str,
+    arguments: &Value,
+) -> Result<(), LibraryError> {
+    let connection_key = connection_id.to_string();
+    let tool = tools
+        .iter()
+        .find(|tool| {
+            tool.get("connection_id").and_then(Value::as_str) == Some(connection_key.as_str())
+                && tool.get("name").and_then(Value::as_str) == Some(name)
+                && tool.get("approval_required").and_then(Value::as_bool) == Some(true)
+        })
+        .ok_or(LibraryError)?;
+    let schema = tool.get("input_schema").ok_or(LibraryError)?;
+    let validator = jsonschema::validator_for(schema).map_err(|_| LibraryError)?;
+    if !validator.is_valid(arguments) {
+        return Err(LibraryError);
+    }
+    Ok(())
+}
+
 impl Tool for AgentLibrary {
     const NAME: &'static str = "library";
     type Args = LibraryRequest;
@@ -166,5 +192,68 @@ impl Tool for AgentLibrary {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         self.invoke(args).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proposals_require_current_consequential_tool_and_reviewed_arguments() {
+        let connection = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let schema = json!({"type":"object","properties":{"recipient":{"type":"string"}},"required":["recipient"],"additionalProperties":false});
+        let available = vec![
+            json!({"connection_id":connection,"name":"messages.send","approval_required":true,"input_schema":schema}),
+        ];
+        assert!(
+            validate_proposable_tool(
+                &available,
+                connection,
+                "messages.send",
+                &json!({"recipient":"Asha"})
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_proposable_tool(
+                &available,
+                other,
+                "messages.send",
+                &json!({"recipient":"Asha"})
+            )
+            .is_err()
+        );
+        assert!(
+            validate_proposable_tool(
+                &available,
+                connection,
+                "messages.send",
+                &json!({"recipient":7})
+            )
+            .is_err()
+        );
+        assert!(
+            validate_proposable_tool(
+                &available,
+                connection,
+                "messages.send",
+                &json!({"recipient":"Asha","extra":true})
+            )
+            .is_err()
+        );
+        let read_only = vec![
+            json!({"connection_id":connection,"name":"messages.send","approval_required":false,"input_schema":schema}),
+        ];
+        assert!(
+            validate_proposable_tool(
+                &read_only,
+                connection,
+                "messages.send",
+                &json!({"recipient":"Asha"})
+            )
+            .is_err()
+        );
     }
 }

@@ -307,7 +307,6 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-
                         .tool(tools::profile::GetUserInfo::new(
                             self.db.clone(),
                             prompt.user_id,
@@ -401,7 +400,6 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-
                         .default_max_turns(6)
                         .build(),
                 }
@@ -474,7 +472,6 @@ impl ConversationAgent {
                         self.db.clone(),
                         prompt.user_id,
                     ))
-
                     .default_max_turns(10)
                     .build()
             };
