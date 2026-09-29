@@ -3,11 +3,13 @@
 */
 pub mod calls;
 pub mod collections;
+pub mod data_query;
 pub mod dependencies;
 pub mod google_maps;
 pub mod library;
 pub mod profile;
 pub mod records;
+pub mod space_graph;
 pub mod spans;
 pub mod terminal;
 pub mod web_search;
