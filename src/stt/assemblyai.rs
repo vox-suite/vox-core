@@ -70,22 +70,33 @@ impl AssemblyAiClient {
             .await
             .map_err(|e| format!("AssemblyAI upload response invalid: {e}"))?;
 
-        let job: TranscriptResponse = self
+        // "best" is a legacy alias AssemblyAI now rejects; omit the field so the
+        // account's default model is used unless a concrete model is configured.
+        let mut body = serde_json::json!({ "audio_url": upload.upload_url });
+        let model = self.speech_model.trim();
+        if !model.is_empty() && !model.eq_ignore_ascii_case("best") {
+            body["speech_model"] = serde_json::Value::String(model.to_string());
+        }
+        let response = self
             .http
             .post(format!(
                 "{}/v2/transcript",
                 self.endpoint.trim_end_matches('/')
             ))
             .header("authorization", &self.api_key)
-            .json(&serde_json::json!({
-                "audio_url": upload.upload_url,
-                "speech_model": self.speech_model,
-            }))
+            .json(&body)
             .send()
             .await
-            .map_err(|e| format!("AssemblyAI transcript request failed: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("AssemblyAI transcript job rejected: {e}"))?
+            .map_err(|e| format!("AssemblyAI transcript request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "AssemblyAI transcript job rejected: {status}: {}",
+                detail.chars().take(500).collect::<String>()
+            ));
+        }
+        let job: TranscriptResponse = response
             .json()
             .await
             .map_err(|e| format!("AssemblyAI transcript response invalid: {e}"))?;

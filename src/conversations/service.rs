@@ -127,10 +127,18 @@ impl ConversationService {
             || request.external_conversation_id.trim().is_empty()
             || request.text.trim().is_empty()
         {
+            tracing::warn!(
+                channel_empty = request.identity.channel.trim().is_empty(),
+                identity_empty = request.identity.external_id.trim().is_empty(),
+                conversation_id_empty = request.external_conversation_id.trim().is_empty(),
+                text_empty = request.text.trim().is_empty(),
+                "CONVERSATION_INVALID: empty request field"
+            );
             return Err(ConversationError::Invalid);
         }
         let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
+            tracing::warn!(turn_id = ?request.turn_id, revision = ?request.revision, "CONVERSATION_INVALID: stale revision");
             return Err(ConversationError::Invalid);
         }
 
@@ -278,6 +286,13 @@ impl ConversationService {
             || request.external_conversation_id.trim().is_empty()
             || request.text.trim().is_empty()
         {
+            tracing::warn!(
+                channel_empty = request.identity.channel.trim().is_empty(),
+                identity_empty = request.identity.external_id.trim().is_empty(),
+                conversation_id_empty = request.external_conversation_id.trim().is_empty(),
+                text_empty = request.text.trim().is_empty(),
+                "CONVERSATION_INVALID: empty request field"
+            );
             return Err(ConversationError::Invalid);
         }
         if crate::agents::conversation::is_voice_channel(&request.identity.channel)
@@ -289,6 +304,7 @@ impl ConversationService {
         let identity_resolved = std::time::Instant::now();
         let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
+            tracing::warn!(turn_id = ?request.turn_id, revision = ?request.revision, "CONVERSATION_INVALID: stale revision");
             return Err(ConversationError::Invalid);
         }
 
@@ -790,7 +806,15 @@ impl ConversationService {
         crate::agent_registry::AgentRegistry::new(self.db.clone())
             .selected_for_context(context, key)
             .await
-            .map_err(|_| ConversationError::Invalid)
+            .map_err(|error| {
+                tracing::warn!(
+                    %error,
+                    agent_external_key = key,
+                    deployment_id = %context.subject.deployment_id.0,
+                    "CONVERSATION_INVALID: agent not selected for deployment"
+                );
+                ConversationError::Invalid
+            })
     }
 
     pub(super) async fn resolve_conversation(
