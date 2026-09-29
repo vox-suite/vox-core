@@ -609,6 +609,7 @@ impl ConversationService {
             None => "Hi there! It seems you're calling for the first time. How can I help you?"
                 .to_owned(),
         };
+        let channel = request.identity.channel.clone();
         let key = Self::opening_key(owner, &request.identity, &request.external_conversation_id);
         let mut openings = self.openings.lock().await;
         if !openings.contains_key(&key) {
@@ -636,6 +637,8 @@ impl ConversationService {
         }
         drop(openings);
         tracing::info!(
+            user_id = %owner.user_id.0,
+            channel = %channel,
             cache_hit = name.is_some(),
             total_ms = started.elapsed().as_millis(),
             "CORE_CACHED_GREETING_METRICS"

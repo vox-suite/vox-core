@@ -88,16 +88,44 @@ impl AgentRegistry {
         context: &crate::identity::ResolvedUserContext,
         key: &str,
     ) -> Result<SelectedAgent, AgentRegistryError> {
-        let deployment: String =
-            sqlx::query_scalar("SELECT external_key FROM platform_deployments WHERE id=$1")
-                .bind(context.subject.deployment_id.0)
-                .fetch_one(self.db.pool())
-                .await?;
-        self.selected_for_deployment(&deployment)
-            .await?
-            .into_iter()
-            .find(|agent| agent.definition.external_key == key)
-            .ok_or(AgentRegistryError::NotFound)
+        let deployment_id = context.subject.deployment_id.0;
+        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Uuid, i32, String, String)>(
+            "SELECT d.id, d.external_key, d.purpose, d.requested_capability_categories, c.id, c.version, c.model_adapter, c.model \
+             FROM deployment_agent_selections s \
+             JOIN agent_definitions d ON d.id = s.agent_definition_id \
+             JOIN agent_model_configurations c ON c.id = s.model_configuration_id \
+             WHERE s.deployment_id = $1 AND d.external_key = $2 AND d.state = 'enabled'",
+        )
+        .bind(deployment_id)
+        .bind(key)
+        .fetch_optional(self.db.pool())
+        .await?
+        .ok_or(AgentRegistryError::NotFound)?;
+        let (
+            id,
+            external_key,
+            purpose,
+            requested_capability_categories,
+            model_id,
+            version,
+            model_adapter,
+            model,
+        ) = row;
+        Ok(SelectedAgent {
+            definition: AgentDefinition {
+                id,
+                deployment_id: DeploymentId(deployment_id),
+                external_key,
+                purpose,
+                requested_capability_categories,
+            },
+            model_configuration: ModelConfiguration {
+                id: model_id,
+                version,
+                model_adapter,
+                model,
+            },
+        })
     }
     pub fn new(db: Db) -> Self {
         Self { db }

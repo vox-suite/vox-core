@@ -330,10 +330,14 @@ impl HostTrustService {
             .verify_slice(&signature)
             .map_err(|_| HostTrustError::AuthenticationDenied)?;
 
-        sqlx::query("DELETE FROM host_app_assertion_nonces WHERE expires_at < $1")
-            .bind(now)
-            .execute(self.db.pool())
-            .await?;
+        // Expired nonces can never replay (the age check above rejects them), so
+        // pruning is housekeeping; do it on ~2% of requests to save a round trip.
+        if assertion.nonce.as_u128().is_multiple_of(50) {
+            sqlx::query("DELETE FROM host_app_assertion_nonces WHERE expires_at < $1")
+                .bind(now)
+                .execute(self.db.pool())
+                .await?;
+        }
         let inserted_nonce = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO host_app_assertion_nonces (credential_id, nonce, expires_at) \
              VALUES ($1, $2, $3) \
