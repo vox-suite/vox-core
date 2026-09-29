@@ -11,6 +11,10 @@ use crate::{
     openapi::get_openapi_spec,
     routes::{
         auth::exchange_token,
+        charts::{
+            ChartApiState, create_chart_board, get_chart_board, get_chart_board_data,
+            list_chart_boards, suggest_charts,
+        },
         collections::{
             add_collection_span, archive_collection, create_collection, get_collection,
             list_collections, remove_collection_span, update_collection,
@@ -27,7 +31,7 @@ use crate::{
         },
         phone::{PhoneApiState, link_phone},
         records::{create_record, delete_record, get_record, list_records, update_record},
-        schemas::{create_schema_version, get_schema_by_name},
+        schemas::{create_schema_version, get_schema_by_name, list_schemas},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
         spans::{create_span, delete_span, get_span, list_spans, update_span},
         voice::{VoiceSocketState, voice_socket},
@@ -75,6 +79,7 @@ pub fn build_api_router(state: ApiState) -> Router {
     let schema_routes = Router::new()
         .route("/v1/schemas", post(create_schema_version))
         .route("/v1/schemas/{namespace}/{name}", post(get_schema_by_name))
+        .route("/v1/me/schemas", get(list_schemas))
         .with_state(state.schemas.clone());
 
     let sms_routes = Router::new()
@@ -142,6 +147,22 @@ pub fn build_api_router(state: ApiState) -> Router {
             tts: state.tts.clone(),
         });
 
+    let chart_api_state = ChartApiState {
+        pool: state.pool.clone(),
+        charts: state.charts.clone(),
+        schemas: state.schemas.clone(),
+        suggester: state.chart_suggester.clone(),
+    };
+    let chart_routes = Router::new()
+        .route("/v1/me/charts/suggest", post(suggest_charts))
+        .route(
+            "/v1/me/charts/boards",
+            get(list_chart_boards).post(create_chart_board),
+        )
+        .route("/v1/me/charts/boards/{id}", get(get_chart_board))
+        .route("/v1/me/charts/boards/{id}/data", get(get_chart_board_data))
+        .with_state(chart_api_state);
+
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
     let internal_routes = Router::new()
@@ -166,6 +187,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(phone_routes)
         .merge(live_routes)
         .merge(voice_routes)
+        .merge(chart_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,

@@ -8,6 +8,8 @@ use crate::{
     storage::schemas::SchemaRepository,
 };
 
+use uuid::Uuid;
+
 #[derive(Debug, Deserialize)]
 pub struct CreateSchemaVersionInput {
     pub namespace: String,
@@ -64,6 +66,21 @@ impl SchemaService {
         self.repo
             .get_by_name(Some(actor.user_id), namespace, name)
             .await
+    }
+
+    pub async fn list_for_user(
+        &self,
+        actor: &Actor,
+    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+        self.repo.list_for_user(Some(actor.user_id)).await
+    }
+
+    pub async fn get_by_ids(
+        &self,
+        actor: &Actor,
+        ids: &[Uuid],
+    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+        self.repo.get_by_ids(Some(actor.user_id), ids).await
     }
 }
 

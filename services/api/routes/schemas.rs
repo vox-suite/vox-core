@@ -38,3 +38,14 @@ pub async fn get_schema_by_name(
         None => Err(StatusCode::NOT_FOUND),
     }
 }
+
+pub async fn list_schemas(
+    State(service): State<SchemaService>,
+    Extension(actor): Extension<Actor>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let schemas = service
+        .list_for_user(&actor)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(schemas))
+}

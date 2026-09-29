@@ -1,8 +1,10 @@
 /**
 * Shared application state container for API request handlers.
 */
+use std::sync::Arc;
 use sqlx::PgPool;
 use vox_core::{
+    agents::chart_suggester::SuggestingCharts,
     application::{
         collections::CollectionService, devices::DeviceService, records::RecordService,
         schemas::SchemaService, spans::SpanService,
@@ -15,8 +17,8 @@ use vox_core::{
     realtime::{DeviceHub, UserEventHub},
     sms_ingestion::SmsIngestionService,
     storage::{
-        collections::CollectionRepository, devices::DeviceRepository, records::RecordRepository,
-        schemas::SchemaRepository, spans::SpanRepository,
+        charts::ChartRepository, collections::CollectionRepository, devices::DeviceRepository,
+        records::RecordRepository, schemas::SchemaRepository, spans::SpanRepository,
     },
 };
 
@@ -36,6 +38,8 @@ pub struct ApiState {
     pub location_ingestion: LocationIngestionService,
     pub consent: ConsentService,
     pub tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
+    pub charts: ChartRepository,
+    pub chart_suggester: Arc<dyn SuggestingCharts>,
 }
 
 impl ApiState {
@@ -47,6 +51,7 @@ impl ApiState {
         user_events: UserEventHub,
         google_maps_api_key: Option<String>,
         tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
+        chart_suggester: Arc<dyn SuggestingCharts>,
     ) -> Self {
         let pool = db.pool().clone();
         let coll_repo = CollectionRepository::new(pool.clone());
@@ -54,6 +59,7 @@ impl ApiState {
         let rec_repo = RecordRepository::new(pool.clone());
         let schema_repo = SchemaRepository::new(pool.clone());
         let device_repo = DeviceRepository::new(pool.clone());
+        let chart_repo = ChartRepository::new(pool.clone());
 
         let spans = SpanService::new(span_repo, user_events.clone());
         let collections = CollectionService::new(coll_repo.clone());
@@ -79,6 +85,8 @@ impl ApiState {
             location_ingestion,
             consent,
             tts,
+            charts: chart_repo,
+            chart_suggester,
         }
     }
 }

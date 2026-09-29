@@ -64,7 +64,7 @@ async fn main() {
         db.clone(),
         agent,
         memory.clone(),
-        config.service_token,
+        config.service_token.clone(),
         jev_client,
     );
     legacy_state = legacy_state.with_connected_apps(connected_apps);
@@ -84,6 +84,9 @@ async fn main() {
             config.elevenlabs_output_format.clone(),
         ))
     });
+    let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> = Arc::new(
+        vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config),
+    );
     let api_state = ApiState::new(
         legacy_state,
         db,
@@ -92,6 +95,7 @@ async fn main() {
         user_events,
         config.google_maps_api_key.clone(),
         tts,
+        chart_suggester,
     );
     let app = build_api_router(api_state);
 

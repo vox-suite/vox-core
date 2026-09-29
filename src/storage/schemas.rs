@@ -85,6 +85,53 @@ impl SchemaRepository {
 
         Ok(row.map(map_row))
     }
+
+    pub async fn list_for_user(
+        &self,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ON (namespace, name)
+                id, user_id, owner_scope, namespace, name, version, description, json_schema, color_token, icon_token, state, created_at, updated_at
+            FROM data_schemas
+            WHERE (user_id = $1 OR user_id IS NULL)
+              AND state = 'active'
+            ORDER BY namespace, name, user_id NULLS LAST, version DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(map_row).collect())
+    }
+
+    pub async fn get_by_ids(
+        &self,
+        user_id: Option<Uuid>,
+        ids: &[Uuid],
+    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, user_id, owner_scope, namespace, name, version, description, json_schema, color_token, icon_token, state, created_at, updated_at
+            FROM data_schemas
+            WHERE (user_id = $1 OR user_id IS NULL)
+              AND id = ANY($2)
+              AND state = 'active'
+            "#,
+        )
+        .bind(user_id)
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(map_row).collect())
+    }
 }
 
 fn map_row(row: sqlx::postgres::PgRow) -> DataSchema {
