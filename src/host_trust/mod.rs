@@ -184,20 +184,22 @@ impl HostTrustService {
             .ok_or(HostTrustError::InvalidRegistration)?;
         let allowed_origins = normalize_origins(request.allowed_origins)?;
 
-        // Seed the deployment before issuing a credential. A publication
-        // failure must never leave an undisclosed, usable host secret behind.
-        vox_connections::defaults::publish(self.db.pool().clone(), &deployment_external_key)
-            .await?;
-
-        let mut tx = self.db.pool().begin().await?;
+        // Curated skills resolve the deployment by its external key. Commit
+        // that parent row first; no host credential exists at this point.
+        // A publication failure may leave an empty deployment, but never an
+        // undisclosed usable credential.
         let deployment_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO platform_deployments (external_key) VALUES ($1) \
              ON CONFLICT (external_key) DO UPDATE SET external_key = EXCLUDED.external_key \
              RETURNING id",
         )
         .bind(&deployment_external_key)
-        .fetch_one(&mut *tx)
+        .fetch_one(self.db.pool())
         .await?;
+        vox_connections::defaults::publish(self.db.pool().clone(), &deployment_external_key)
+            .await?;
+
+        let mut tx = self.db.pool().begin().await?;
         let host_app_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO host_apps (deployment_id, external_key, allowed_origins) \
              VALUES ($1, $2, $3) \
