@@ -145,6 +145,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(VoiceSocketState {
             conversations: state.legacy.conversations(),
             tts: state.tts.clone(),
+            stt: state.stt.clone(),
         });
 
     let chart_api_state = ChartApiState {

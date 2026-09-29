@@ -38,6 +38,7 @@ pub struct ApiState {
     pub location_ingestion: LocationIngestionService,
     pub consent: ConsentService,
     pub tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
+    pub stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
     pub charts: ChartRepository,
     pub chart_suggester: Arc<dyn SuggestingCharts>,
 }
@@ -52,6 +53,7 @@ impl ApiState {
         user_events: UserEventHub,
         google_maps_api_key: Option<String>,
         tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
+        stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
         chart_suggester: Arc<dyn SuggestingCharts>,
     ) -> Self {
         let pool = db.pool().clone();
@@ -86,6 +88,7 @@ impl ApiState {
             location_ingestion,
             consent,
             tts,
+            stt,
             charts: chart_repo,
             chart_suggester,
         }

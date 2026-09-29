@@ -1,8 +1,11 @@
 /**
  * Real-time bidirectional voice WebSocket endpoint for desktop and mobile clients.
  *
- * Receives transcribed text turns from local client STT, queries the Gemini agent,
- * and streams back text deltas plus high-fidelity ElevenLabs MP3 audio chunks.
+ * Clients stream raw 16-bit mono PCM audio at 16kHz for one utterance as one or
+ * more binary WebSocket frames, followed by a `Turn` text message marking the
+ * utterance complete. The server transcribes it (AssemblyAI), queries the Gemini
+ * agent, and streams back the transcript, text deltas, and high-fidelity
+ * ElevenLabs MP3 audio chunks.
  */
 use axum::{
     Extension,
@@ -23,25 +26,29 @@ use vox_core::{
     conversations::{RespondRequest, service::ConversationService},
     domain::identity::Actor,
     identity::{ChannelIdentity, ResolvedUserContext},
+    stt::AssemblyAiClient,
     tts::{ElevenLabsClient, SentenceChunker},
 };
+
+/// The sample rate (Hz) clients must resample captured mic audio to before
+/// sending it as binary PCM16 frames.
+pub const VOICE_INPUT_SAMPLE_RATE: u32 = 16000;
 
 #[derive(Clone)]
 pub struct VoiceSocketState {
     pub conversations: Option<Arc<ConversationService>>,
     pub tts: Option<Arc<ElevenLabsClient>>,
+    pub stt: Option<Arc<AssemblyAiClient>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceClientMessage {
+    /// Marks the audio sent as preceding binary frames (since the last Turn
+    /// or Interrupt) as one complete utterance ready to transcribe.
     Turn {
-        text: String,
         #[serde(default)]
         conversation_id: Option<String>,
-        #[serde(default)]
-        #[allow(dead_code)]
-        interrupted: bool,
     },
     Interrupt,
     Ping,
@@ -51,6 +58,8 @@ pub enum VoiceClientMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceServerMessage<'a> {
     Connected { format: &'a str, sample_rate: u32 },
+    /// The server's transcription of the audio for this turn.
+    UserTranscript { turn_id: &'a str, text: &'a str },
     Thinking { turn_id: &'a str },
     TextDelta { turn_id: &'a str, delta: &'a str },
     Done { turn_id: &'a str },
@@ -170,6 +179,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
 
     let mut current_turn_cancel: Option<CancellationToken> = None;
     let external_conv_id = format!("desktop:{}", actor.user_id);
+    let mut pending_audio: Vec<u8> = Vec::new();
 
     while let Some(msg) = ws_receiver.next().await {
         let msg = match msg {
@@ -193,15 +203,26 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                         if let Some(cancel) = current_turn_cancel.take() {
                             cancel.cancel();
                         }
+                        pending_audio.clear();
                         let interrupted = serde_json::to_string(&VoiceServerMessage::Interrupted)
                             .unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
                     }
-                    Ok(VoiceClientMessage::Turn {
-                        text,
-                        conversation_id,
-                        ..
-                    }) => {
+                    Ok(VoiceClientMessage::Turn { conversation_id }) => {
+                        let audio = std::mem::take(&mut pending_audio);
+                        if audio.is_empty() {
+                            continue;
+                        }
+
+                        let Some(stt) = state.stt.clone() else {
+                            let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
+                                message: "Speech-to-text is unavailable",
+                            })
+                            .unwrap_or_default();
+                            let _ = out_tx.send(OutboundFrame::Text(err_msg)).await;
+                            continue;
+                        };
+
                         if let Some(cancel) = current_turn_cancel.take() {
                             cancel.cancel();
                         }
@@ -226,6 +247,36 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                         let context = context.clone();
 
                         tokio::spawn(async move {
+                            let pcm: Vec<i16> = audio
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|b| i16::from_le_bytes(*b))
+                                .collect();
+                            let text = match stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE).await {
+                                Ok(text) => text,
+                                Err(e) => {
+                                    tracing::error!(error = %e, "Voice transcription failed");
+                                    let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
+                                        message: "Transcription failed",
+                                    })
+                                    .unwrap_or_default();
+                                    let _ = out_tx_clone.send(OutboundFrame::Text(err_msg)).await;
+                                    return;
+                                }
+                            };
+                            let text = text.trim().to_string();
+                            if text.is_empty() {
+                                return;
+                            }
+
+                            let transcript_msg = serde_json::to_string(&VoiceServerMessage::UserTranscript {
+                                turn_id: &turn_id,
+                                text: &text,
+                            })
+                            .unwrap_or_default();
+                            let _ = out_tx_clone.send(OutboundFrame::Text(transcript_msg)).await;
+
                             let thinking = serde_json::to_string(&VoiceServerMessage::Thinking {
                                 turn_id: &turn_id,
                             })
@@ -327,6 +378,9 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                         tracing::warn!(error = %e, "Invalid voice client message payload");
                     }
                 }
+            }
+            Message::Binary(bytes) => {
+                pending_audio.extend_from_slice(&bytes);
             }
             Message::Close(_) => break,
             Message::Ping(payload) => {
