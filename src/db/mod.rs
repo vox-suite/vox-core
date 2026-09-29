@@ -3,8 +3,7 @@
 */
 pub mod jobs;
 
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
-use std::str::FromStr;
+use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -27,15 +26,10 @@ impl Db {
         max_connections: u32,
         acquire_timeout_secs: u64,
     ) -> Result<Self, sqlx::Error> {
-        // Supabase's transaction pooler routes each query to a possibly different
-        // backend connection, so sqlx's named prepared statements collide across
-        // clients (Postgres error 42P05). Disabling the statement cache makes
-        // sqlx use unnamed statements instead, which the pooler supports.
-        let connect_options = PgConnectOptions::from_str(database_url)?.statement_cache_capacity(0);
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
-            .connect_with(connect_options)
+            .connect(database_url)
             .await?;
         Ok(Self { pool })
     }
