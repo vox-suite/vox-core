@@ -32,12 +32,7 @@ struct ElevenLabsDialogueInput<'a> {
 pub type Mp3Stream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>;
 
 impl ElevenLabsClient {
-    pub fn new(
-        api_key: String,
-        model_id: String,
-        voice_id: String,
-        output_format: String,
-    ) -> Self {
+    pub fn new(api_key: String, model_id: String, voice_id: String, output_format: String) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .tcp_nodelay(true)

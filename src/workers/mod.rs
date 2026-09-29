@@ -87,12 +87,20 @@ impl Worker {
     const JOB_CLAIM_BATCH: i64 = 20;
     const JOB_CONCURRENCY: usize = 8;
 
-    async fn handle_one(&self, job: crate::jobs::ClaimedJob) -> Result<(), crate::db::jobs::JobError> {
+    async fn handle_one(
+        &self,
+        job: crate::jobs::ClaimedJob,
+    ) -> Result<(), crate::db::jobs::JobError> {
         tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job claimed");
         let Some(reference_id) = job.payload_reference_id else {
             tracing::error!(job_id = %job.id, kind = job.kind.as_str(), "job has no payload_reference_id; failing");
             self.jobs
-                .fail(job.id, &self.worker_id, Utc::now(), "missing_payload_reference_id")
+                .fail(
+                    job.id,
+                    &self.worker_id,
+                    Utc::now(),
+                    "missing_payload_reference_id",
+                )
                 .await?;
             return Ok(());
         };
@@ -131,17 +139,26 @@ impl Worker {
         match result {
             Ok(()) => {
                 tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
-                self.jobs.complete(job.id, &self.worker_id, Utc::now()).await?
+                self.jobs
+                    .complete(job.id, &self.worker_id, Utc::now())
+                    .await?
             }
             Err(code) if job.attempt_count >= job.max_attempts => {
                 tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
-                self.jobs.fail(job.id, &self.worker_id, Utc::now(), code).await?
+                self.jobs
+                    .fail(job.id, &self.worker_id, Utc::now(), code)
+                    .await?
             }
             Err(code) => {
                 tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, attempt = job.attempt_count, "job failed, retrying");
                 let seconds = 2_i64.pow(job.attempt_count.clamp(1, 6) as u32);
                 self.jobs
-                    .retry(job.id, &self.worker_id, Utc::now() + Duration::seconds(seconds), code)
+                    .retry(
+                        job.id,
+                        &self.worker_id,
+                        Utc::now() + Duration::seconds(seconds),
+                        code,
+                    )
                     .await?;
             }
         }
@@ -169,7 +186,12 @@ impl Worker {
 
             let jobs = self
                 .jobs
-                .claim(&self.worker_id, now, Duration::seconds(30), Self::JOB_CLAIM_BATCH)
+                .claim(
+                    &self.worker_id,
+                    now,
+                    Duration::seconds(30),
+                    Self::JOB_CLAIM_BATCH,
+                )
                 .await?;
             let claimed_full_batch = jobs.len() as i64 == Self::JOB_CLAIM_BATCH;
 

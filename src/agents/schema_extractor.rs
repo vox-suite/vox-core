@@ -109,8 +109,8 @@ impl SchemaExtracting for GeminiSchemaExtractor {
             .await
             .map_err(|_| AgentError::Provider)?;
 
-        let mut result: SchemaExtractionResult =
-            serde_json::from_str(structured_json(&raw)).map_err(|_| AgentError::InvalidStructuredOutput)?;
+        let mut result: SchemaExtractionResult = serde_json::from_str(structured_json(&raw))
+            .map_err(|_| AgentError::InvalidStructuredOutput)?;
         result.color_token = result.color_token.clamp(0, 23);
         result.icon_token = result.icon_token.clamp(0, 23);
         Ok(result)
