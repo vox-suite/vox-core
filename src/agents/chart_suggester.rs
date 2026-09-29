@@ -64,16 +64,16 @@ impl GeminiChartSuggester {
 }
 
 fn schema_has_field(schema: &SchemaSample, field: &str) -> bool {
-    if let Some(props) = schema.json_schema.get("properties").and_then(|p| p.as_object()) {
-        if props.contains_key(field) {
-            return true;
-        }
+    if let Some(props) = schema.json_schema.get("properties").and_then(|p| p.as_object())
+        && props.contains_key(field)
+    {
+        return true;
     }
     for sample in &schema.sample_data {
-        if let Some(obj) = sample.as_object() {
-            if obj.contains_key(field) {
-                return true;
-            }
+        if let Some(obj) = sample.as_object()
+            && obj.contains_key(field)
+        {
+            return true;
         }
     }
     false
@@ -98,7 +98,7 @@ impl SuggestingCharts for GeminiChartSuggester {
         }
         let categories_context = schema_descriptions.join("\n---\n");
 
-        let preamble_text = format!(
+        let preamble_text =
             "You are an analytics assistant. Suggest insightful chart ideas for a user's data categories.\n\
              Output ONLY a valid JSON array of chart suggestions. Do not include markdown code blocks or explanations outside the JSON.\n\
              Each element in the array must be an object with:\n\
@@ -114,14 +114,13 @@ impl SuggestingCharts for GeminiChartSuggester {
              - metric_field MUST exist in the schema's properties or data.\n\
              - For line and area charts, group_by should usually be \"day\", \"week\", or \"month\".\n\
              - For bar and pie charts, group_by can be categorical or a time bucket.\n\
-             - Propose between 3 and 6 relevant and distinct charts."
-        );
+             - Propose between 3 and 6 relevant and distinct charts.";
 
         let agent = client
             .agent(&self.model)
             .name("chart-suggester-agent")
             .record_content_telemetry(crate::telemetry::record_content())
-            .preamble(&preamble_text)
+            .preamble(preamble_text)
             .build();
 
         let prompt_msg = format!(

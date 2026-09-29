@@ -43,6 +43,7 @@ pub struct ApiState {
 }
 
 impl ApiState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         legacy: AppState,
         db: Db,
