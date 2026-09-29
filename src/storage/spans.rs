@@ -12,8 +12,9 @@ use crate::domain::{
 const SPAN_COLUMNS: &str = "s.id, s.user_id, s.parent_id, s.title, s.notes, s.category, s.source, \
     s.source_ref, s.status, s.start_at, s.end_at, s.due_at, s.priority, s.execution_type, \
     s.execution_result, s.data, s.schema_id, s.source_event_id, s.version, s.completed_at, \
-    s.created_at, s.updated_at, \
+    s.created_at, s.updated_at, ds.color_token AS schema_color_token, ds.icon_token AS schema_icon_token, \
     ARRAY(SELECT cs.collection_id FROM collection_spans cs WHERE cs.span_id = s.id) AS collection_ids";
+const SPAN_JOIN: &str = "LEFT JOIN data_schemas ds ON ds.id = s.schema_id";
 
 #[derive(Clone)]
 pub struct SpanRepository {
@@ -56,7 +57,7 @@ impl SpanRepository {
 
     pub async fn get_by_id(&self, user_id: Uuid, id: Uuid) -> Result<Option<Span>, sqlx::Error> {
         let row = sqlx::query(&format!(
-            "SELECT {SPAN_COLUMNS} FROM spans s WHERE s.id = $1 AND s.user_id = $2"
+            "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN} WHERE s.id = $1 AND s.user_id = $2"
         ))
         .bind(id)
         .bind(user_id)
@@ -67,7 +68,7 @@ impl SpanRepository {
 
     pub async fn list(&self, user_id: Uuid, query: &SpanQuery) -> Result<Vec<Span>, sqlx::Error> {
         let rows = sqlx::query(&format!(
-            "SELECT {SPAN_COLUMNS} FROM spans s
+            "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN}
              WHERE s.user_id = $1
                AND ($2::timestamptz IS NULL OR COALESCE(s.end_at, s.start_at) >= $2)
                AND ($3::timestamptz IS NULL OR s.start_at < $3)
@@ -303,6 +304,8 @@ fn map_span(row: PgRow) -> Span {
         data: row.get("data"),
         schema_id: row.get("schema_id"),
         source_event_id: row.get("source_event_id"),
+        schema_color_token: row.get("schema_color_token"),
+        schema_icon_token: row.get("schema_icon_token"),
         collection_ids: row.get("collection_ids"),
         version: row.get("version"),
         completed_at: row.get("completed_at"),

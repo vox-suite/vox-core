@@ -89,6 +89,8 @@ pub struct Span {
     pub execution_result: serde_json::Value,
     pub data: serde_json::Value,
     pub source_event_id: Option<Uuid>,
+    pub schema_color_token: Option<i32>,
+    pub schema_icon_token: Option<i32>,
     pub collection_ids: Vec<Uuid>,
     pub version: i32,
     pub completed_at: Option<DateTime<Utc>>,
