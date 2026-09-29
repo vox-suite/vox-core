@@ -34,7 +34,12 @@ fn build_preamble(available_schemas: &[DataSchema]) -> String {
     } else {
         available_schemas
             .iter()
-            .map(|s| format!("- {}.{} (ID: {}): {}", s.namespace, s.name, s.id, s.description))
+            .map(|s| {
+                format!(
+                    "- {}.{} (ID: {}): {}",
+                    s.namespace, s.name, s.id, s.description
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };

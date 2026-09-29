@@ -1,9 +1,7 @@
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::domain::spaces::{
-    NodeState, Space, SpaceEdge, SpaceGraph, SpaceNode, SpaceState,
-};
+use crate::domain::spaces::{NodeState, Space, SpaceEdge, SpaceGraph, SpaceNode, SpaceState};
 
 #[derive(Clone)]
 pub struct SpaceRepository {
@@ -176,6 +174,7 @@ impl SpaceRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_node(
         &self,
         space_id: Uuid,
@@ -212,6 +211,7 @@ impl SpaceRepository {
         Ok(map_node_row(row))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_node(
         &self,
         space_id: Uuid,

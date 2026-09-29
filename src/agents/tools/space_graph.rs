@@ -1,8 +1,5 @@
 use crate::{
-    db::Db,
-    domain::spaces::NodeState,
-    identity::UserId,
-    realtime::UserEventHub,
+    db::Db, domain::spaces::NodeState, identity::UserId, realtime::UserEventHub,
     storage::spaces::SpaceRepository,
 };
 use rig::tool::Tool;
@@ -102,10 +99,10 @@ impl Tool for AddNode {
         let repo = SpaceRepository::new(db.pool().clone());
 
         let mut derived = args.derived_from.unwrap_or_default();
-        if let Some(cf) = args.connect_from {
-            if !derived.contains(&cf) {
-                derived.push(cf);
-            }
+        if let Some(cf) = args.connect_from
+            && !derived.contains(&cf)
+        {
+            derived.push(cf);
         }
 
         let node = repo
@@ -204,7 +201,8 @@ impl Tool for UpdateNode {
     type Error = SpaceGraphToolError;
 
     fn description(&self) -> String {
-        "Update an existing node's details, state, position, or findings in the space graph.".to_owned()
+        "Update an existing node's details, state, position, or findings in the space graph."
+            .to_owned()
     }
 
     fn parameters(&self) -> Value {
@@ -231,10 +229,7 @@ impl Tool for UpdateNode {
         let db = self.db.as_ref().ok_or(SpaceGraphToolError::NotConfigured)?;
         let repo = SpaceRepository::new(db.pool().clone());
 
-        let parsed_state = args
-            .state
-            .as_deref()
-            .and_then(NodeState::parse);
+        let parsed_state = args.state.as_deref().and_then(NodeState::parse);
 
         let updated = repo
             .update_node(
@@ -323,7 +318,8 @@ impl Tool for AddEdge {
     type Error = SpaceGraphToolError;
 
     fn description(&self) -> String {
-        "Connect two nodes in the space graph to indicate relationship, dependency, or flow.".to_owned()
+        "Connect two nodes in the space graph to indicate relationship, dependency, or flow."
+            .to_owned()
     }
 
     fn parameters(&self) -> Value {
@@ -425,7 +421,9 @@ impl Tool for RemoveNode {
         let db = self.db.as_ref().ok_or(SpaceGraphToolError::NotConfigured)?;
         let repo = SpaceRepository::new(db.pool().clone());
 
-        let stale = repo.mark_descendants_stale(self.space_id, args.node_id).await?;
+        let stale = repo
+            .mark_descendants_stale(self.space_id, args.node_id)
+            .await?;
         let deleted = repo.remove_node(self.space_id, args.node_id).await?;
         if deleted {
             if let Some(hub) = &self.user_events {
@@ -530,7 +528,10 @@ impl Tool for SpawnBranch {
                     self.space_id,
                     "limit",
                     "Limit reached",
-                    &format!("Max parallel branches ({}) reached for this stage.", self.max_children),
+                    &format!(
+                        "Max parallel branches ({}) reached for this stage.",
+                        self.max_children
+                    ),
                     json!({ "max_children": self.max_children }),
                     NodeState::Done,
                     json!({"x": 0.0, "y": 0.0}),
@@ -538,7 +539,9 @@ impl Tool for SpawnBranch {
                     json!({}),
                 )
                 .await?;
-            let _ = repo.add_edge(self.space_id, args.parent_node_id, limit_node.id).await;
+            let _ = repo
+                .add_edge(self.space_id, args.parent_node_id, limit_node.id)
+                .await;
 
             return Err(SpaceGraphToolError::LimitReached(format!(
                 "Max children limit ({}) reached",
@@ -560,7 +563,9 @@ impl Tool for SpawnBranch {
             )
             .await?;
 
-        let edge = repo.add_edge(self.space_id, args.parent_node_id, node.id).await?;
+        let edge = repo
+            .add_edge(self.space_id, args.parent_node_id, node.id)
+            .await?;
 
         if let Some(hub) = &self.user_events {
             hub.notify(

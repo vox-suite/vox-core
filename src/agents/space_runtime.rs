@@ -27,7 +27,8 @@ pub struct SpaceRuntime {
     google_maps_api_key: Option<String>,
     http: reqwest::Client,
     user_events: Option<UserEventHub>,
-    locks: std::sync::Mutex<std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    locks:
+        std::sync::Mutex<std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl SpaceRuntime {
@@ -59,7 +60,11 @@ impl SpaceRuntime {
         let _guard = lock.lock().await;
 
         let repo = SpaceRepository::new(self.db.pool().clone());
-        let Some(space) = repo.get_space_by_id_only(space_id).await.map_err(|_| AgentError::Provider)? else {
+        let Some(space) = repo
+            .get_space_by_id_only(space_id)
+            .await
+            .map_err(|_| AgentError::Provider)?
+        else {
             return Ok(());
         };
 
@@ -135,18 +140,50 @@ impl SpaceRuntime {
             .name("space-agent")
             .record_content_telemetry(crate::telemetry::record_content())
             .preamble(&preamble)
-            .tool(AddNode::new(Some(self.db.clone()), user_id, space_id, self.user_events.clone()))
-            .tool(UpdateNode::new(Some(self.db.clone()), user_id, space_id, self.user_events.clone()))
-            .tool(AddEdge::new(Some(self.db.clone()), user_id, space_id, self.user_events.clone()))
-            .tool(RemoveNode::new(Some(self.db.clone()), user_id, space_id, self.user_events.clone()))
-            .tool(SpawnBranch::new(Some(self.db.clone()), user_id, space_id, max_children, self.user_events.clone()))
+            .tool(AddNode::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                self.user_events.clone(),
+            ))
+            .tool(UpdateNode::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                self.user_events.clone(),
+            ))
+            .tool(AddEdge::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                self.user_events.clone(),
+            ))
+            .tool(RemoveNode::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                self.user_events.clone(),
+            ))
+            .tool(SpawnBranch::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                max_children,
+                self.user_events.clone(),
+            ))
             .tool(FindSchemas::new(Some(self.db.clone()), user_id))
             .tool(QueryUserData::new(Some(self.db.clone()), user_id))
             .tool(ListSpans::new(Some(self.db.clone()), owner))
             .tool(GetSpan::new(Some(self.db.clone()), owner))
             .tool(WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
-            .tool(SearchPlaces::new(self.http.clone(), self.google_maps_api_key.clone()))
-            .tool(GetRoute::new(self.http.clone(), self.google_maps_api_key.clone()))
+            .tool(SearchPlaces::new(
+                self.http.clone(),
+                self.google_maps_api_key.clone(),
+            ))
+            .tool(GetRoute::new(
+                self.http.clone(),
+                self.google_maps_api_key.clone(),
+            ))
             .default_max_turns(max_steps)
             .build();
 
@@ -155,9 +192,13 @@ impl SpaceRuntime {
         let _ = repo.finish_running_nodes(space_id).await;
 
         let final_nodes = repo.list_nodes(space_id).await.unwrap_or_default();
-        let has_decision = final_nodes.iter().any(|n| n.kind == "decision" || n.kind == "plan");
+        let has_decision = final_nodes
+            .iter()
+            .any(|n| n.kind == "decision" || n.kind == "plan");
         if has_decision && space.state == SpaceState::Ideating {
-            let _ = repo.update_space_state(space.user_id, space_id, SpaceState::Planned).await;
+            let _ = repo
+                .update_space_state(space.user_id, space_id, SpaceState::Planned)
+                .await;
         }
 
         if let Some(hub) = &self.user_events {

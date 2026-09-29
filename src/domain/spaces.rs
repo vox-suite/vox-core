@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SpaceState {
+    #[default]
     Ideating,
     Planned,
     Committed,
@@ -32,16 +34,12 @@ impl SpaceState {
     }
 }
 
-impl Default for SpaceState {
-    fn default() -> Self {
-        Self::Ideating
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum NodeState {
     Running,
+    #[default]
     Done,
     Stale,
     Rejected,
@@ -65,12 +63,6 @@ impl NodeState {
             "rejected" => Some(Self::Rejected),
             _ => None,
         }
-    }
-}
-
-impl Default for NodeState {
-    fn default() -> Self {
-        Self::Done
     }
 }
 

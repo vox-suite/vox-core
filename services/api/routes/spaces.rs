@@ -197,7 +197,11 @@ pub async fn commit_space(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CommitSpaceResult>, StatusCode> {
-    let mut tx = state.pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let space_row = sqlx::query(
         "SELECT id, user_id, title, intent, state, committed_collection_id FROM spaces WHERE user_id = $1 AND id = $2 FOR UPDATE",
@@ -293,7 +297,9 @@ pub async fn commit_space(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     state.user_events.notify(
         actor.user_id,

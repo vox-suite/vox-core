@@ -122,7 +122,8 @@ impl Tool for QueryUserData {
     type Error = DataQueryToolError;
 
     fn description(&self) -> String {
-        "Query aggregated numerical metrics over the user's timeline spans for specific schemas.".to_owned()
+        "Query aggregated numerical metrics over the user's timeline spans for specific schemas."
+            .to_owned()
     }
 
     fn parameters(&self) -> Value {
@@ -145,8 +146,9 @@ impl Tool for QueryUserData {
     ) -> Result<Self::Output, Self::Error> {
         let db = self.db.as_ref().ok_or(DataQueryToolError::NotConfigured)?;
 
-        let agg = Aggregation::parse(&args.aggregation)
-            .ok_or_else(|| DataQueryToolError::InvalidInput(format!("Invalid aggregation: {}", args.aggregation)))?;
+        let agg = Aggregation::parse(&args.aggregation).ok_or_else(|| {
+            DataQueryToolError::InvalidInput(format!("Invalid aggregation: {}", args.aggregation))
+        })?;
 
         let group_by = GroupBy::parse(&args.group_by);
 
