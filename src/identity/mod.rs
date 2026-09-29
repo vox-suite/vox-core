@@ -121,7 +121,10 @@ impl IdentityService {
         raw.chars().filter(|c| c.is_ascii_digit()).collect()
     }
 
-    pub async fn resolve_for_user(&self, user_id: Uuid) -> Result<ResolvedUserContext, IdentityError> {
+    pub async fn resolve_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> Result<ResolvedUserContext, IdentityError> {
         let existing = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Option<Uuid>, String)>(
             "SELECT id, user_id, deployment_id, host_app_id, organization_id, host_user_id \
              FROM user_contexts WHERE user_id = $1 LIMIT 1",
@@ -235,7 +238,10 @@ impl IdentityService {
             return Err(IdentityError::ScopeNotFound);
         }
 
-        if let Some(context) = self.find_linked_channel_context(subject, host_user_id).await? {
+        if let Some(context) = self
+            .find_linked_channel_context(subject, host_user_id)
+            .await?
+        {
             return Ok(context);
         }
 

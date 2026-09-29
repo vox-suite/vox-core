@@ -106,7 +106,8 @@ impl EventHandler {
         let triage = match triager.triage(&event_type, &payload).await {
             Ok(triage) => triage,
             Err(err) => {
-                self.mark_failed(event_id, &format!("triage_failed: {err}")).await?;
+                self.mark_failed(event_id, &format!("triage_failed: {err}"))
+                    .await?;
                 return Ok(());
             }
         };
@@ -126,19 +127,22 @@ impl EventHandler {
         }
 
         if triage.action != EventTriageAction::StoreRecord {
-            self.mark_failed(event_id, "plan_action_not_yet_handled").await?;
+            self.mark_failed(event_id, "plan_action_not_yet_handled")
+                .await?;
             return Ok(());
         }
 
         let Some(classifier) = &self.schema_classifier else {
-            self.mark_failed(event_id, "schema_classifier_not_configured").await?;
+            self.mark_failed(event_id, "schema_classifier_not_configured")
+                .await?;
             return Ok(());
         };
 
         let classification = match classifier.classify(user_id.0, &payload).await {
             Ok(result) => result,
             Err(err) => {
-                self.mark_failed(event_id, &format!("classify_failed: {err}")).await?;
+                self.mark_failed(event_id, &format!("classify_failed: {err}"))
+                    .await?;
                 return Ok(());
             }
         };
@@ -146,7 +150,8 @@ impl EventHandler {
         match classification {
             SchemaClassificationResult::Existing { schema, confidence } => {
                 if let Err(err) = validate_data_against_schema(&schema.json_schema, &payload) {
-                    self.mark_failed(event_id, &format!("validation_failed: {err}")).await?;
+                    self.mark_failed(event_id, &format!("validation_failed: {err}"))
+                        .await?;
                     return Ok(());
                 }
                 tracing::info!(
@@ -156,21 +161,38 @@ impl EventHandler {
                     "Jev System 1: matched existing schema"
                 );
                 let title = format!("{} logged", schema.qualified_name);
-                self.write_span(event_id, user_id.0, schema.id, &title, &payload, occurred_at, &event_type)
-                    .await?;
+                self.write_span(
+                    event_id,
+                    user_id.0,
+                    schema.id,
+                    &title,
+                    &payload,
+                    occurred_at,
+                    &event_type,
+                )
+                .await?;
             }
             SchemaClassificationResult::Novel { reason, .. } => {
                 tracing::info!(event_id = %event_id.0, reason, "Jev System 1: novel schema, escalating to System 2");
                 let Some(extractor) = &self.schema_extractor else {
-                    self.mark_failed(event_id, "schema_extractor_not_configured").await?;
+                    self.mark_failed(event_id, "schema_extractor_not_configured")
+                        .await?;
                     return Ok(());
                 };
                 let near_miss = classifier
                     .load_user_schemas(user_id.0)
                     .await
                     .unwrap_or_default();
-                self.run_system_two(event_id, user_id.0, &event_type, &payload, occurred_at, extractor.as_ref(), near_miss)
-                    .await?;
+                self.run_system_two(
+                    event_id,
+                    user_id.0,
+                    &event_type,
+                    &payload,
+                    occurred_at,
+                    extractor.as_ref(),
+                    near_miss,
+                )
+                .await?;
             }
         }
 
@@ -199,13 +221,15 @@ impl EventHandler {
         {
             Ok(result) => result,
             Err(err) => {
-                self.mark_failed(event_id, &format!("system_two_failed: {err}")).await?;
+                self.mark_failed(event_id, &format!("system_two_failed: {err}"))
+                    .await?;
                 return Ok(());
             }
         };
 
         if let Err(err) = validate_data_against_schema(&result.json_schema, &result.data) {
-            self.mark_failed(event_id, &format!("system_two_validation_failed: {err}")).await?;
+            self.mark_failed(event_id, &format!("system_two_validation_failed: {err}"))
+                .await?;
             return Ok(());
         }
 
@@ -223,13 +247,22 @@ impl EventHandler {
         {
             Ok(id) => id,
             Err(err) => {
-                self.mark_failed(event_id, &format!("schema_upsert_failed: {err}")).await?;
+                self.mark_failed(event_id, &format!("schema_upsert_failed: {err}"))
+                    .await?;
                 return Ok(());
             }
         };
 
-        self.write_span(event_id, user_id, schema_id, &result.title, &result.data, occurred_at, event_type)
-            .await
+        self.write_span(
+            event_id,
+            user_id,
+            schema_id,
+            &result.title,
+            &result.data,
+            occurred_at,
+            event_type,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]

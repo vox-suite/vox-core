@@ -44,26 +44,29 @@ pub async fn run_worker(
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
 
-    let (triager, schema_classifier, schema_extractor, jev_client) =
-        if let Some(ref api_key) = config.jev_api_key {
-            let client = vox_core::jev::client::JevClient::new(
-                api_key.clone(),
-                Some(config.jev_base_url.clone()),
-            );
-            (
-                Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(
-                    client.clone(),
-                ))),
-                Some(Arc::new(
-                    vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()),
-                )),
-                Some(Arc::new(GeminiSchemaExtractor::new(&config))
-                    as Arc<dyn vox_core::agents::schema_extractor::SchemaExtracting>),
-                Some(client),
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let (triager, schema_classifier, schema_extractor, jev_client) = if let Some(ref api_key) =
+        config.jev_api_key
+    {
+        let client = vox_core::jev::client::JevClient::new(
+            api_key.clone(),
+            Some(config.jev_base_url.clone()),
+        );
+        (
+            Some(Arc::new(vox_core::jev::event_triage::EventTriager::new(
+                client.clone(),
+            ))),
+            Some(Arc::new(
+                vox_core::jev::schema_classifier::SchemaClassifier::new(client.clone(), db.clone()),
+            )),
+            Some(Arc::new(GeminiSchemaExtractor::new(&config))
+                as Arc<
+                    dyn vox_core::agents::schema_extractor::SchemaExtracting,
+                >),
+            Some(client),
+        )
+    } else {
+        (None, None, None, None)
+    };
 
     let bridge_client = config.bridge_url.as_ref().and_then(|url| {
         BridgeClient::new(url.clone(), config.service_token.clone())

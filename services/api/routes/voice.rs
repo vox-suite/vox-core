@@ -50,24 +50,12 @@ pub enum VoiceClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceServerMessage<'a> {
-    Connected {
-        format: &'a str,
-        sample_rate: u32,
-    },
-    Thinking {
-        turn_id: &'a str,
-    },
-    TextDelta {
-        turn_id: &'a str,
-        delta: &'a str,
-    },
-    Done {
-        turn_id: &'a str,
-    },
+    Connected { format: &'a str, sample_rate: u32 },
+    Thinking { turn_id: &'a str },
+    TextDelta { turn_id: &'a str, delta: &'a str },
+    Done { turn_id: &'a str },
     Interrupted,
-    Error {
-        message: &'a str,
-    },
+    Error { message: &'a str },
     Pong,
 }
 
@@ -197,15 +185,16 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                 let parsed: Result<VoiceClientMessage, _> = serde_json::from_str(&raw);
                 match parsed {
                     Ok(VoiceClientMessage::Ping) => {
-                        let pong = serde_json::to_string(&VoiceServerMessage::Pong).unwrap_or_default();
+                        let pong =
+                            serde_json::to_string(&VoiceServerMessage::Pong).unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(pong)).await;
                     }
                     Ok(VoiceClientMessage::Interrupt) => {
                         if let Some(cancel) = current_turn_cancel.take() {
                             cancel.cancel();
                         }
-                        let interrupted =
-                            serde_json::to_string(&VoiceServerMessage::Interrupted).unwrap_or_default();
+                        let interrupted = serde_json::to_string(&VoiceServerMessage::Interrupted)
+                            .unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
                     }
                     Ok(VoiceClientMessage::Turn {
@@ -262,10 +251,11 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                             let mut stream = match stream_res {
                                 Ok(s) => s,
                                 Err(e) => {
-                                    let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
-                                        message: "Agent response failed",
-                                    })
-                                    .unwrap_or_default();
+                                    let err_msg =
+                                        serde_json::to_string(&VoiceServerMessage::Error {
+                                            message: "Agent response failed",
+                                        })
+                                        .unwrap_or_default();
                                     tracing::error!(error = %e, "Agent response stream error");
                                     let _ = out_tx_clone.send(OutboundFrame::Text(err_msg)).await;
                                     return;
