@@ -71,7 +71,9 @@ pub async fn compute_chart_data(
             let points = rows
                 .into_iter()
                 .map(|r| ChartDataPoint {
-                    label: r.get::<Option<String>, _>("label").unwrap_or_else(|| "unknown".to_string()),
+                    label: r
+                        .get::<Option<String>, _>("label")
+                        .unwrap_or_else(|| "unknown".to_string()),
                     value: r.get::<f64, _>("value"),
                 })
                 .collect();
@@ -133,18 +135,14 @@ pub async fn compute_chart_data(
                             0.0
                         }
                     }
-                    Aggregation::Min => {
-                        remainder
-                            .iter()
-                            .map(|p| p.value)
-                            .fold(f64::INFINITY, f64::min)
-                    }
-                    Aggregation::Max => {
-                        remainder
-                            .iter()
-                            .map(|p| p.value)
-                            .fold(f64::NEG_INFINITY, f64::max)
-                    }
+                    Aggregation::Min => remainder
+                        .iter()
+                        .map(|p| p.value)
+                        .fold(f64::INFINITY, f64::min),
+                    Aggregation::Max => remainder
+                        .iter()
+                        .map(|p| p.value)
+                        .fold(f64::NEG_INFINITY, f64::max),
                 };
                 points.push(ChartDataPoint {
                     label: "other".to_string(),

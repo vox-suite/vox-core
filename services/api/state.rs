@@ -1,8 +1,8 @@
+use sqlx::PgPool;
 /**
 * Shared application state container for API request handlers.
 */
 use std::sync::Arc;
-use sqlx::PgPool;
 use vox_core::{
     agents::chart_suggester::SuggestingCharts,
     application::{
