@@ -64,7 +64,10 @@ impl GeminiChartSuggester {
 }
 
 fn schema_has_field(schema: &SchemaSample, field: &str) -> bool {
-    if let Some(props) = schema.json_schema.get("properties").and_then(|p| p.as_object())
+    if let Some(props) = schema
+        .json_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
         && props.contains_key(field)
     {
         return true;
@@ -89,8 +92,10 @@ impl SuggestingCharts for GeminiChartSuggester {
 
         let mut schema_descriptions = Vec::new();
         for s in &prompt.schemas {
-            let sample_str = serde_json::to_string(&s.sample_data).unwrap_or_else(|_| "[]".to_string());
-            let schema_str = serde_json::to_string(&s.json_schema).unwrap_or_else(|_| "{}".to_string());
+            let sample_str =
+                serde_json::to_string(&s.sample_data).unwrap_or_else(|_| "[]".to_string());
+            let schema_str =
+                serde_json::to_string(&s.json_schema).unwrap_or_else(|_| "{}".to_string());
             schema_descriptions.push(format!(
                 "Category ID: {}\nQualified Name: {}.{}\nDescription: {}\nJSON Schema: {}\nRecent Data Samples: {}\n",
                 s.id, s.namespace, s.name, s.description, schema_str, sample_str
@@ -98,8 +103,7 @@ impl SuggestingCharts for GeminiChartSuggester {
         }
         let categories_context = schema_descriptions.join("\n---\n");
 
-        let preamble_text =
-            "You are an analytics assistant. Suggest insightful chart ideas for a user's data categories.\n\
+        let preamble_text = "You are an analytics assistant. Suggest insightful chart ideas for a user's data categories.\n\
              Output ONLY a valid JSON array of chart suggestions. Do not include markdown code blocks or explanations outside the JSON.\n\
              Each element in the array must be an object with:\n\
              - \"title\": concise name for the chart\n\

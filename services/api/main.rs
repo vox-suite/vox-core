@@ -90,9 +90,8 @@ async fn main() {
             config.assemblyai_speech_model.clone(),
         ))
     });
-    let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> = Arc::new(
-        vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config),
-    );
+    let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> =
+        Arc::new(vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config));
     let api_state = ApiState::new(
         legacy_state,
         db,

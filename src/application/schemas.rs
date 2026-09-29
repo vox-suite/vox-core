@@ -68,10 +68,7 @@ impl SchemaService {
             .await
     }
 
-    pub async fn list_for_user(
-        &self,
-        actor: &Actor,
-    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+    pub async fn list_for_user(&self, actor: &Actor) -> Result<Vec<DataSchema>, sqlx::Error> {
         self.repo.list_for_user(Some(actor.user_id)).await
     }
 

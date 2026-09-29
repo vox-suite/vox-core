@@ -109,7 +109,9 @@ impl<'de> Deserialize<'de> for GroupBy {
             type Value = GroupBy;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a time bucket string ('day', 'week', 'month') or a field name or an object")
+                formatter.write_str(
+                    "a time bucket string ('day', 'week', 'month') or a field name or an object",
+                )
             }
 
             fn visit_str<E>(self, value: &str) -> Result<GroupBy, E>

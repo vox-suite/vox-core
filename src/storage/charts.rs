@@ -13,11 +13,7 @@ impl ChartRepository {
         Self { pool }
     }
 
-    pub async fn create_board(
-        &self,
-        user_id: Uuid,
-        name: &str,
-    ) -> Result<ChartBoard, sqlx::Error> {
+    pub async fn create_board(&self, user_id: Uuid, name: &str) -> Result<ChartBoard, sqlx::Error> {
         let row = sqlx::query(
             r#"
             INSERT INTO chart_boards (user_id, name)
@@ -95,10 +91,7 @@ impl ChartRepository {
         Ok(map_chart_row(row))
     }
 
-    pub async fn list_charts_for_board(
-        &self,
-        board_id: Uuid,
-    ) -> Result<Vec<Chart>, sqlx::Error> {
+    pub async fn list_charts_for_board(&self, board_id: Uuid) -> Result<Vec<Chart>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             SELECT id, board_id, title, chart_type, schema_ids, query_spec, created_at

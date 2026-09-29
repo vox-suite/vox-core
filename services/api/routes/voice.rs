@@ -57,14 +57,29 @@ pub enum VoiceClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceServerMessage<'a> {
-    Connected { format: &'a str, sample_rate: u32 },
+    Connected {
+        format: &'a str,
+        sample_rate: u32,
+    },
     /// The server's transcription of the audio for this turn.
-    UserTranscript { turn_id: &'a str, text: &'a str },
-    Thinking { turn_id: &'a str },
-    TextDelta { turn_id: &'a str, delta: &'a str },
-    Done { turn_id: &'a str },
+    UserTranscript {
+        turn_id: &'a str,
+        text: &'a str,
+    },
+    Thinking {
+        turn_id: &'a str,
+    },
+    TextDelta {
+        turn_id: &'a str,
+        delta: &'a str,
+    },
+    Done {
+        turn_id: &'a str,
+    },
     Interrupted,
-    Error { message: &'a str },
+    Error {
+        message: &'a str,
+    },
     Pong,
 }
 
@@ -253,28 +268,32 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 .iter()
                                 .map(|b| i16::from_le_bytes(*b))
                                 .collect();
-                            let text = match stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE).await {
-                                Ok(text) => text,
-                                Err(e) => {
-                                    tracing::error!(error = %e, "Voice transcription failed");
-                                    let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
-                                        message: "Transcription failed",
-                                    })
-                                    .unwrap_or_default();
-                                    let _ = out_tx_clone.send(OutboundFrame::Text(err_msg)).await;
-                                    return;
-                                }
-                            };
+                            let text =
+                                match stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE).await {
+                                    Ok(text) => text,
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "Voice transcription failed");
+                                        let err_msg =
+                                            serde_json::to_string(&VoiceServerMessage::Error {
+                                                message: "Transcription failed",
+                                            })
+                                            .unwrap_or_default();
+                                        let _ =
+                                            out_tx_clone.send(OutboundFrame::Text(err_msg)).await;
+                                        return;
+                                    }
+                                };
                             let text = text.trim().to_string();
                             if text.is_empty() {
                                 return;
                             }
 
-                            let transcript_msg = serde_json::to_string(&VoiceServerMessage::UserTranscript {
-                                turn_id: &turn_id,
-                                text: &text,
-                            })
-                            .unwrap_or_default();
+                            let transcript_msg =
+                                serde_json::to_string(&VoiceServerMessage::UserTranscript {
+                                    turn_id: &turn_id,
+                                    text: &text,
+                                })
+                                .unwrap_or_default();
                             let _ = out_tx_clone.send(OutboundFrame::Text(transcript_msg)).await;
 
                             let thinking = serde_json::to_string(&VoiceServerMessage::Thinking {
