@@ -240,21 +240,33 @@ async fn run_speaker(
     }
 }
 
-/// Streams an agent reply to the client as text deltas plus spoken audio,
-/// then sends `Done`. Shared by the connect greeting and normal turns.
-async fn stream_reply<S, E>(
+/// Everything `stream_reply` needs besides the agent stream itself.
+struct Reply {
     kind: &'static str,
-    mut stream: S,
     turn_id: String,
     out_tx: mpsc::Sender<OutboundFrame>,
     tts: Option<Arc<ElevenLabsClient>>,
     cancel_token: CancellationToken,
     stats: Arc<SpeakStats>,
     llm_started: Instant,
-) where
+}
+
+/// Streams an agent reply to the client as text deltas plus spoken audio,
+/// then sends `Done`. Shared by the connect greeting and normal turns.
+async fn stream_reply<S, E>(mut stream: S, reply: Reply)
+where
     S: futures_util::Stream<Item = Result<String, E>> + Unpin,
     E: std::fmt::Display,
 {
+    let Reply {
+        kind,
+        turn_id,
+        out_tx,
+        tts,
+        cancel_token,
+        stats,
+        llm_started,
+    } = reply;
     let mut chunker = SentenceChunker::new();
     let (sentence_tx, sentence_rx) = mpsc::unbounded_channel::<String>();
     let speaker_task = tokio::spawn(run_speaker(
@@ -451,10 +463,16 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                 serde_json::to_string(&VoiceServerMessage::Thinking { turn_id: &turn_id })
                     .unwrap_or_default();
             let _ = out_tx_clone.send(OutboundFrame::Text(thinking)).await;
-            stream_reply(
-                "greeting", stream, turn_id, out_tx_clone, tts, cancel_token, stats, llm_started,
-            )
-            .await;
+            let reply = Reply {
+                kind: "greeting",
+                turn_id,
+                out_tx: out_tx_clone,
+                tts,
+                cancel_token,
+                stats,
+                llm_started,
+            };
+            stream_reply(stream, reply).await;
         }));
     }
 
@@ -623,11 +641,16 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 respond_setup_ms = llm_started.elapsed().as_millis() as u64,
                                 "VOICE_AGENT_STREAM_OPEN"
                             );
-                            stream_reply(
-                                "turn", stream, turn_id, out_tx_clone, tts, cancel_token, stats,
+                            let reply = Reply {
+                                kind: "turn",
+                                turn_id,
+                                out_tx: out_tx_clone,
+                                tts,
+                                cancel_token,
+                                stats,
                                 llm_started,
-                            )
-                            .await;
+                            };
+                            stream_reply(stream, reply).await;
                         }));
                     }
                     Err(e) => {
