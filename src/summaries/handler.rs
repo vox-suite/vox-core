@@ -9,9 +9,7 @@ use crate::{
     },
     conversations::ConversationId,
     db::Db,
-    identity::UserId,
     jev::JevClient,
-    memory::MemoryService,
 };
 use sqlx::Row;
 use std::sync::Arc;
@@ -21,7 +19,6 @@ use uuid::Uuid;
 pub struct SummaryHandler {
     db: Db,
     summarizer: Arc<dyn Summarizing>,
-    memory: MemoryService,
     jev: Option<JevClient>,
 }
 
@@ -37,41 +34,28 @@ pub enum SummaryHandlerError {
 
 impl SummaryHandler {
     pub fn new(db: Db, summarizer: Arc<dyn Summarizing>) -> Self {
-        let memory = MemoryService::new(db.clone(), None);
-        Self::with_memory(db, summarizer, memory)
-    }
-
-    pub fn with_memory(db: Db, summarizer: Arc<dyn Summarizing>, memory: MemoryService) -> Self {
         Self {
             db,
             summarizer,
-            memory,
             jev: None,
         }
     }
 
-    pub fn with_jev(
-        db: Db,
-        summarizer: Arc<dyn Summarizing>,
-        memory: MemoryService,
-        jev: Option<JevClient>,
-    ) -> Self {
+    pub fn with_jev(db: Db, summarizer: Arc<dyn Summarizing>, jev: Option<JevClient>) -> Self {
         Self {
             db,
             summarizer,
-            memory,
             jev,
         }
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
-        let row = sqlx::query("SELECT user_id, summary_version FROM conversations WHERE id = $1")
+        let row = sqlx::query("SELECT summary_version FROM conversations WHERE id = $1")
             .bind(conversation_id.0)
             .fetch_optional(self.db.pool())
             .await?
             .ok_or(SummaryHandlerError::NotFound)?;
 
-        let user_id: Uuid = row.get("user_id");
         let summary_version: i32 = row.get("summary_version");
         if summary_version > 0 {
             return Ok(());
@@ -118,7 +102,7 @@ impl SummaryHandler {
                         "commitments": [],
                         "decisions": [],
                     });
-                    self.persist_summary(conversation_id.0, user_id, &stub, false)
+                    self.persist_summary(conversation_id.0, &stub)
                         .await?;
                     return Ok(());
                 }
@@ -142,26 +126,18 @@ impl SummaryHandler {
             "decisions": decisions_val,
         });
 
-        self.persist_summary(
-            conversation_id.0,
-            user_id,
-            &latest_summary,
-            !summary.profile_updates.is_empty(),
-        )
-        .await?;
-        self.memory.refresh(UserId(user_id)).await?;
+        self.persist_summary(conversation_id.0, &latest_summary)
+            .await?;
         Ok(())
     }
 
     async fn persist_summary(
         &self,
         conversation_id: Uuid,
-        user_id: Uuid,
         latest_summary: &serde_json::Value,
-        apply_profile: bool,
     ) -> Result<(), SummaryHandlerError> {
         let mut tx = self.db.pool().begin().await?;
-        let updated = sqlx::query(
+        sqlx::query(
             "UPDATE conversations SET \
                  latest_summary = $2, \
                  summary_version = summary_version + 1, \
@@ -174,26 +150,7 @@ impl SummaryHandler {
         .bind(conversation_id)
         .bind(latest_summary)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-        if updated == 1
-            && apply_profile
-            && let Some(profile_updates) = latest_summary.get("profile_updates")
-            && profile_updates.as_object().is_some_and(|o| !o.is_empty())
-        {
-            sqlx::query(
-                "UPDATE users SET \
-                 profile_facts = profile_facts || $2, \
-                 profile_version = profile_version + 1, \
-                 updated_at = now() \
-                 WHERE id = $1",
-            )
-            .bind(user_id)
-            .bind(profile_updates)
-            .execute(&mut *tx)
-            .await?;
-        }
+        .await?;
 
         tx.commit().await?;
         Ok(())

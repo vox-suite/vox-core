@@ -239,9 +239,10 @@ impl ConversationAgent {
             if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
                 new_agent("chat")
                     .preamble(preamble)
-                    .tool(tools::profile::UpdateUserInfo::new(
+                    .tool(tools::agent_memory::UpdateAgentMemory::new(
                         self.db.clone(),
-                        prompt.user_id,
+                        prompt.context.owner(),
+                        prompt.selected_agent.definition.external_key.clone(),
                     ))
                     .default_max_turns(6)
                     .build()
@@ -253,9 +254,10 @@ impl ConversationAgent {
                             self.http.clone(),
                             self.exa_api_key.clone(),
                         ))
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -269,9 +271,10 @@ impl ConversationAgent {
                             self.http.clone(),
                             self.google_maps_api_key.clone(),
                         ))
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -307,34 +310,39 @@ impl ConversationAgent {
                             self.outbound.clone(),
                             prompt.owner,
                         ))
-                        .tool(tools::profile::GetUserInfo::new(
+                        .tool(tools::agent_memory::GetAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Calendar => new_agent("calendar")
                         .preamble(preamble)
                         .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
-                        .tool(tools::profile::GetUserInfo::new(
+                        .tool(tools::agent_memory::GetAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .default_max_turns(6)
                         .build(),
                     crate::jev::ToolDomain::Device => new_agent("device")
                         .preamble(preamble)
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .default_max_turns(6)
                         .build(),
@@ -355,9 +363,10 @@ impl ConversationAgent {
                                 self.outbound.clone(),
                                 prompt.owner,
                             ))
-                            .tool(tools::profile::UpdateUserInfo::new(
+                            .tool(tools::agent_memory::UpdateAgentMemory::new(
                                 self.db.clone(),
-                                prompt.user_id,
+                                prompt.context.owner(),
+                                prompt.selected_agent.definition.external_key.clone(),
                             ))
                             .default_max_turns(6)
                             .build()
@@ -376,13 +385,15 @@ impl ConversationAgent {
                             self.http.clone(),
                             self.google_maps_api_key.clone(),
                         ))
-                        .tool(tools::profile::GetUserInfo::new(
+                        .tool(tools::agent_memory::GetAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
-                        .tool(tools::profile::UpdateUserInfo::new(
+                        .tool(tools::agent_memory::UpdateAgentMemory::new(
                             self.db.clone(),
-                            prompt.user_id,
+                            prompt.context.owner(),
+                            prompt.selected_agent.definition.external_key.clone(),
                         ))
                         .tool(tools::spans::CreateSpan::new(
                             self.db.clone(),
@@ -418,13 +429,15 @@ impl ConversationAgent {
                         self.http.clone(),
                         self.google_maps_api_key.clone(),
                     ))
-                    .tool(tools::profile::GetUserInfo::new(
+                    .tool(tools::agent_memory::GetAgentMemory::new(
                         self.db.clone(),
-                        prompt.user_id,
+                        prompt.context.owner(),
+                        prompt.selected_agent.definition.external_key.clone(),
                     ))
-                    .tool(tools::profile::UpdateUserInfo::new(
+                    .tool(tools::agent_memory::UpdateAgentMemory::new(
                         self.db.clone(),
-                        prompt.user_id,
+                        prompt.context.owner(),
+                        prompt.selected_agent.definition.external_key.clone(),
                     ))
                     .tool(tools::collections::CreateCollection::new(
                         self.db.clone(),

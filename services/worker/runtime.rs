@@ -83,14 +83,12 @@ pub async fn run_worker(
         schema_classifier,
         schema_extractor,
     );
-    let mut schedules =
-        ScheduleHandler::with_jev(db.clone(), planner, memory.clone(), jev_client.clone());
+    let mut schedules = ScheduleHandler::with_jev(db.clone(), planner, jev_client.clone());
     schedules = schedules.with_outbound(outbound.clone());
     let ticker = ScheduleTicker::new(db.clone());
 
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
-    let summaries =
-        SummaryHandler::with_jev(db.clone(), summarizer, memory.clone(), jev_client.clone());
+    let summaries = SummaryHandler::with_jev(db.clone(), summarizer, jev_client.clone());
     let mut task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
     task_executor = task_executor.with_outbound(outbound);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());

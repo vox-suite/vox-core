@@ -85,3 +85,7 @@ jobs:
         run: |
           createdb -h 127.0.0.1 -U postgres vox_core_owned_transition
           cargo test --locked --lib ownership_transition_expires_unused_decisions_and_preserves_outcomes -- --ignored
+      - name: Agent memory isolation and immediate archive enforcement
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
+        run: cargo test --locked --lib agent_memory_is_scoped_bounded_and_revocation_aware -- --ignored
