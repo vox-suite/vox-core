@@ -283,7 +283,7 @@ pub async fn execute_tool(
 }
 
 /// Errors carry a short user-facing reason; provider details stay in logs.
-fn error(e: ConnectedAppError) -> Response {
+pub(super) fn error(e: ConnectedAppError) -> Response {
     let (status, code) = match &e {
         ConnectedAppError::Invalid => (StatusCode::BAD_REQUEST, "invalid_request"),
         ConnectedAppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),

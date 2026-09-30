@@ -95,7 +95,7 @@ fn reply<T: serde::Serialize>(result: Result<T, PackageError>) -> Response {
         Err(e) => error(e),
     }
 }
-fn error(e: PackageError) -> Response {
+pub(super) fn error(e: PackageError) -> Response {
     let (status, code) = match e {
         PackageError::Invalid => (StatusCode::BAD_REQUEST, "invalid_package"),
         PackageError::Extension(RemoteExtensionError::Database(_)) => (

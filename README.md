@@ -88,6 +88,8 @@ Database integration tests require an isolated PostgreSQL database and `TEST_DAT
 
 Reusable integration declarations, provider transports, remote extension adapters, connected-app OAuth and MCP sessions, declarative skill packages, and conformance fixtures live in [vox-connections](https://github.com/vox-suite/vox-connections). Core owns host trust, identity, agent presentation, grants and approval enforcement, durable execution, and audit. It passes a minimal request context and database pool to the shared crate. The remaining `connected_apps`, `remote_extensions`, `skills`, and `conformance` modules here are host wiring or API re-exports.
 
+Reviewed connector setup uses the signed host routes `POST /v1/connector-packages/setup` and `POST /v1/connector-packages/setup/callback`. A host presents the exact reviewed package and explicit owned-assistant access before starting; Core retains that consent through OAuth and applies grants and pinned guidance atomically. Changed or revoked access requires fresh review. A manual MCP callback without package consent links the account only. See the [host setup contract](https://github.com/vox-suite/vox-connections/blob/main/docs/packages.md). Migration `20260930000003_connector_setup.sql` must ship with these endpoints before the corresponding Web UI.
+
 
 ## Deploy on Railway
 

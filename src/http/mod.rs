@@ -9,6 +9,7 @@ pub mod capability_grants;
 pub mod connected_apps;
 pub mod connected_reads;
 pub mod connections;
+pub mod connector_setup;
 pub mod consequential_writes;
 pub mod conversations;
 pub mod durable_tasks;
@@ -365,6 +366,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/connector-packages/publish", post(packages::publish))
         .route("/v1/connector-packages/list", post(packages::list))
         .route("/v1/connector-packages/install", post(packages::install))
+        .route("/v1/connector-packages/setup", post(connector_setup::start))
+        .route(
+            "/v1/connector-packages/setup/callback",
+            post(connector_setup::complete),
+        )
         .route("/v1/connector-packages/withdraw", post(packages::withdraw))
         .route("/v1/action-proposals", post(approvals::propose))
         .route("/v1/action-proposals/list", post(approvals::list))
