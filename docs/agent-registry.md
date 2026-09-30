@@ -1,5 +1,32 @@
 # Model-neutral agent registry
 
+## Templates and owned assistants
+
+Deployment definitions with no `owner_user_context_id` are operator-managed
+templates. Context-owned definitions are configured assistants. They share the
+registry representation, but only owned assistants may receive connection grants
+or skill enablements. Names are presentation; stable keys identify agents within
+their authenticated user context.
+
+`POST /v1/agents/selected` idempotently provisions and returns the context's
+Personal Assistant and active specialists. `POST /v1/agents/manage` accepts
+authenticated host assertions and a `mutation` tagged as `create`, `update` or
+`archive`. Creation accepts a name and instructions, using the deployment's
+selected `general` template/model configuration. Update requires the current
+`expected_version`; instruction history is retained. Archive blocks future use
+and revokes grants and skill enablements. The default cannot be archived.
+
+Owned instances start without grants or enabled skills. A disabled template also
+blocks its owned instances. The pre-launch ownership migration clears old
+template-based grants and skill enablements rather than inferring renewed consent.
+Provider credentials remain separate.
+
+The agent-facing library searches bounded metadata and loads selected schemas
+or skill guidance separately. Search and loading never authorize execution;
+calls recheck current grants, connectivity and policy. Search is currently
+lexical over the permitted inventory; an indexed implementation and larger
+inventory pagination remain follow-up work.
+
 The agent registry is Core's reusable catalog seam. It records what an agent is
 for and the capability categories it may later request; it does not run a model,
 hold an account, create a connection, grant a capability, or approve an action.

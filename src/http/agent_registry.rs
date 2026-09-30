@@ -25,11 +25,8 @@ pub async fn list_selected_for_host(
     headers: HeaderMap,
     Json(request): Json<HostSelectedRequest>,
 ) -> Response {
-    let (Some(registry), Some(trust), Some(db)) = (
-        state.agent_registry.as_ref(),
-        state.host_trust.as_ref(),
-        state.db.as_ref(),
-    ) else {
+    let (Some(registry), Some(trust)) = (state.agent_registry.as_ref(), state.host_trust.as_ref())
+    else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Ok(assertion) = assertion_from_headers(&headers) else {
@@ -43,18 +40,39 @@ pub async fn list_selected_for_host(
         Ok(context) => context,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    let deployment_key: Option<String> =
-        sqlx::query_scalar("SELECT external_key FROM platform_deployments WHERE id=$1")
-            .bind(context.subject.deployment_id.0)
-            .fetch_optional(db.pool())
-            .await
-            .ok()
-            .flatten();
-    let Some(deployment_key) = deployment_key else {
+    match registry.owned_for_context(&context).await {
+        Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
+        Err(error) => registry_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct OwnedAgentRequest {
+    pub host_context: HostContextRequest,
+    pub mutation: crate::agent_registry::AgentMutation,
+}
+
+pub async fn mutate_owned(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<OwnedAgentRequest>,
+) -> Response {
+    let (Some(registry), Some(trust)) = (state.agent_registry.as_ref(), state.host_trust.as_ref())
+    else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match registry.selected_for_deployment(&deployment_key).await {
-        Ok(agents) => (StatusCode::OK, Json(agents)).into_response(),
+    let Ok(assertion) = assertion_from_headers(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    let Ok(context) = trust
+        .resolve_authenticated_context(&assertion, &request.host_context, origin, Utc::now())
+        .await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match registry.mutate_owned(&context, request.mutation).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => registry_error(error),
     }
 }

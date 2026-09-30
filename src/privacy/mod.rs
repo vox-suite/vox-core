@@ -631,9 +631,10 @@ impl PrivacyService {
     ) -> Result<ExportedConfig, PrivacyError> {
         // 1. Agent definitions
         let agent_rows = sqlx::query(
-            "SELECT external_key, purpose, requested_capability_categories FROM agent_definitions WHERE deployment_id=$1 AND state='enabled'",
+            "SELECT external_key, display_name, purpose, requested_capability_categories FROM agent_definitions WHERE deployment_id=$1 AND state='enabled' AND owner_user_context_id=$2",
         )
         .bind(context.subject.deployment_id.0)
+        .bind(context.id.0)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -641,7 +642,7 @@ impl PrivacyService {
             .into_iter()
             .map(|r| ExportedAgentDefinition {
                 external_key: r.get("external_key"),
-                display_name: r.get("external_key"),
+                display_name: r.get("display_name"),
                 description: r.get("purpose"),
                 requested_capabilities: r.get("requested_capability_categories"),
             })
