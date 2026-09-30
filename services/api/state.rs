@@ -41,6 +41,9 @@ pub struct ApiState {
     pub stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
     pub charts: ChartRepository,
     pub chart_suggester: Arc<dyn SuggestingCharts>,
+    pub spaces: vox_core::storage::spaces::SpaceRepository,
+    pub space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting>,
+    pub space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
 }
 
 impl ApiState {
@@ -55,6 +58,8 @@ impl ApiState {
         tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
         stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
         chart_suggester: Arc<dyn SuggestingCharts>,
+        space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting>,
+        space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
     ) -> Self {
         let pool = db.pool().clone();
         let coll_repo = CollectionRepository::new(pool.clone());
@@ -63,6 +68,7 @@ impl ApiState {
         let schema_repo = SchemaRepository::new(pool.clone());
         let device_repo = DeviceRepository::new(pool.clone());
         let chart_repo = ChartRepository::new(pool.clone());
+        let space_repo = vox_core::storage::spaces::SpaceRepository::new(pool.clone());
 
         let spans = SpanService::new(span_repo, user_events.clone());
         let collections = CollectionService::new(coll_repo.clone());
@@ -91,6 +97,9 @@ impl ApiState {
             stt,
             charts: chart_repo,
             chart_suggester,
+            spaces: space_repo,
+            space_architect,
+            space_runtime,
         }
     }
 }

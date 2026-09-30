@@ -44,6 +44,17 @@ pub async fn exchange_token(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let (user_id, identity_id) = if let Some(row) = existing {
+        if let Some(name) = identity.name.as_deref().filter(|n| !n.trim().is_empty()) {
+            sqlx::query(
+                "UPDATE users SET display_name = $2 \
+                 WHERE id = $1 AND (display_name IS NULL OR btrim(display_name) = '')",
+            )
+            .bind(row.0)
+            .bind(name.trim())
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
         row
     } else {
         let display_name = identity

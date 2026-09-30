@@ -15,6 +15,7 @@ use crate::{
             ChartApiState, create_chart_board, get_chart_board, get_chart_board_data,
             list_chart_boards, suggest_charts,
         },
+        client_logs::submit_client_logs,
         collections::{
             add_collection_span, archive_collection, create_collection, get_collection,
             list_collections, remove_collection_span, update_collection,
@@ -102,6 +103,8 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/location/consent/revoke", post(revoke_location_consent))
         .with_state(state.consent.clone());
 
+    let client_log_routes = Router::new().route("/v1/logs/batches", post(submit_client_logs));
+
     let device_api_state = DeviceApiState {
         devices: state.devices.clone(),
     };
@@ -164,6 +167,33 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/me/charts/boards/{id}/data", get(get_chart_board_data))
         .with_state(chart_api_state);
 
+    let space_api_state = crate::routes::spaces::SpaceApiState {
+        pool: state.pool.clone(),
+        spaces: state.spaces.clone(),
+        schemas: state.schemas.clone(),
+        architect: state.space_architect.clone(),
+        runtime: state.space_runtime.clone(),
+        user_events: state.user_events.clone(),
+    };
+    let space_routes = Router::new()
+        .route(
+            "/v1/me/spaces",
+            get(crate::routes::spaces::list_spaces).post(crate::routes::spaces::create_space),
+        )
+        .route(
+            "/v1/me/spaces/{id}",
+            get(crate::routes::spaces::get_space).delete(crate::routes::spaces::drop_space),
+        )
+        .route(
+            "/v1/me/spaces/{id}/chat",
+            post(crate::routes::spaces::send_space_chat),
+        )
+        .route(
+            "/v1/me/spaces/{id}/commit",
+            post(crate::routes::spaces::commit_space),
+        )
+        .with_state(space_api_state);
+
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
     let internal_routes = Router::new()
@@ -178,6 +208,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(record_routes)
         .merge(schema_routes)
         .merge(sms_routes)
+        .merge(client_log_routes)
         .merge(sms_consent_routes)
         .merge(location_routes)
         .merge(location_consent_routes)
@@ -189,6 +220,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(live_routes)
         .merge(voice_routes)
         .merge(chart_routes)
+        .merge(space_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,

@@ -125,7 +125,12 @@ pub async fn run_worker(
     } else {
         None
     };
-    let worker = Worker::with_all_handlers(
+    let space_runtime = Arc::new(vox_core::agents::space_runtime::SpaceRuntime::new(
+        db.clone(),
+        &config,
+        None,
+    ));
+    let mut worker = Worker::with_all_handlers(
         JobRepository::new(db),
         events,
         schedules,
@@ -136,6 +141,7 @@ pub async fn run_worker(
         sms_retention,
         worker_id,
     );
+    worker = worker.with_space_runtime(space_runtime);
 
     tokio::spawn(memory.run_greeting_sync(cancellation.clone()));
 

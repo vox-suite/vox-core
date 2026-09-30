@@ -8,6 +8,7 @@ pub mod devices;
 pub mod identity;
 pub mod records;
 pub mod schemas;
+pub mod spaces;
 pub mod spans;
 
 pub use actions::*;
@@ -17,6 +18,7 @@ pub use devices::*;
 pub use identity::*;
 pub use records::*;
 pub use schemas::*;
+pub use spaces::*;
 pub use spans::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -92,6 +92,13 @@ async fn main() {
     });
     let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> =
         Arc::new(vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config));
+    let space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting> =
+        Arc::new(vox_core::agents::space_architect::GeminiSpaceArchitect::new(&config));
+    let space_runtime = Arc::new(vox_core::agents::space_runtime::SpaceRuntime::new(
+        db.clone(),
+        &config,
+        Some(user_events.clone()),
+    ));
     let api_state = ApiState::new(
         legacy_state,
         db,
@@ -102,6 +109,8 @@ async fn main() {
         tts,
         stt,
         chart_suggester,
+        space_architect,
+        space_runtime,
     );
     let app = build_api_router(api_state);
 

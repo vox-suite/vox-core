@@ -198,6 +198,7 @@ impl HostTrustService {
         .await?;
         vox_connections::defaults::publish(self.db.pool().clone(), &deployment_external_key)
             .await?;
+        seed_default_general_agent(&self.db, deployment_id).await?;
 
         let mut tx = self.db.pool().begin().await?;
         let host_app_id = sqlx::query_scalar::<_, Uuid>(
@@ -329,10 +330,14 @@ impl HostTrustService {
             .verify_slice(&signature)
             .map_err(|_| HostTrustError::AuthenticationDenied)?;
 
-        sqlx::query("DELETE FROM host_app_assertion_nonces WHERE expires_at < $1")
-            .bind(now)
-            .execute(self.db.pool())
-            .await?;
+        // Expired nonces can never replay (the age check above rejects them), so
+        // pruning is housekeeping; do it on ~2% of requests to save a round trip.
+        if assertion.nonce.as_u128().is_multiple_of(50) {
+            sqlx::query("DELETE FROM host_app_assertion_nonces WHERE expires_at < $1")
+                .bind(now)
+                .execute(self.db.pool())
+                .await?;
+        }
         let inserted_nonce = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO host_app_assertion_nonces (credential_id, nonce, expires_at) \
              VALUES ($1, $2, $3) \
@@ -510,4 +515,29 @@ fn canonical_assertion(
         canonical.push_str(&field);
     }
     canonical
+}
+
+/// Every deployment needs the default `general` agent that voice and messaging
+/// channels request; without it conversation requests fail as invalid.
+async fn seed_default_general_agent(db: &Db, deployment_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "WITH d AS ( \
+             INSERT INTO agent_definitions (deployment_id, external_key, purpose) \
+             VALUES ($1, 'general', 'General-purpose Vox assistant for voice and messaging conversations.') \
+             ON CONFLICT (deployment_id, external_key) DO UPDATE SET external_key = EXCLUDED.external_key \
+             RETURNING id \
+         ), c AS ( \
+             INSERT INTO agent_model_configurations (agent_definition_id, version, model_adapter, model) \
+             SELECT id, 1, 'gemini', 'gemini-3.5-flash-lite' FROM d \
+             ON CONFLICT (agent_definition_id, version) DO UPDATE SET version = EXCLUDED.version \
+             RETURNING id, agent_definition_id \
+         ) \
+         INSERT INTO deployment_agent_selections (deployment_id, agent_definition_id, model_configuration_id) \
+         SELECT $1, agent_definition_id, id FROM c \
+         ON CONFLICT (deployment_id, agent_definition_id) DO NOTHING",
+    )
+    .bind(deployment_id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }

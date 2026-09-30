@@ -28,6 +28,7 @@ pub struct Worker {
     task_executor: Option<TaskExecutorHandler>,
     wa_sweeper: Option<WhatsAppSweeper>,
     sms_retention: Option<SmsRetentionSweeper>,
+    space_runtime: Option<std::sync::Arc<crate::agents::space_runtime::SpaceRuntime>>,
     worker_id: String,
 }
 
@@ -42,6 +43,7 @@ impl Worker {
             task_executor: None,
             wa_sweeper: None,
             sms_retention: None,
+            space_runtime: None,
             worker_id,
         }
     }
@@ -67,8 +69,17 @@ impl Worker {
             task_executor: Some(task_executor),
             wa_sweeper: Some(wa_sweeper),
             sms_retention: Some(sms_retention),
+            space_runtime: None,
             worker_id,
         }
+    }
+
+    pub fn with_space_runtime(
+        mut self,
+        runner: std::sync::Arc<crate::agents::space_runtime::SpaceRuntime>,
+    ) -> Self {
+        self.space_runtime = Some(runner);
+        self
     }
 
     pub async fn run(
@@ -133,6 +144,13 @@ impl Worker {
                     .await
                     .map_err(|_| "task_execution"),
                 None => Err("task_executor_unavailable"),
+            },
+            JobKind::RunSpace => match &self.space_runtime {
+                Some(runner) => runner
+                    .run_space(reference_id, None)
+                    .await
+                    .map_err(|_| "space_execution"),
+                None => Err("space_runtime_unavailable"),
             },
         };
 

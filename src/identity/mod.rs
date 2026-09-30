@@ -8,6 +8,17 @@ use uuid::Uuid;
 const MAX_HOST_USER_ID_BYTES: usize = 512;
 const TRUSTED_CHANNEL_HOST: (&str, &str) = ("vox.standalone.deployment", "vox.standalone.bridge");
 
+/// Extra first-party channel-host credentials (the bridge's `VOX_HOST_CREDENTIAL_ID`),
+/// comma-separated in `VOX_TRUSTED_CHANNEL_CREDENTIAL_IDS`, for bridges registered
+/// under host keys other than the built-in trusted pair.
+fn trusted_channel_credentials() -> Vec<Uuid> {
+    std::env::var("VOX_TRUSTED_CHANNEL_CREDENTIAL_IDS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|id| Uuid::parse_str(id.trim()).ok())
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct UserId(pub Uuid);
@@ -370,13 +381,17 @@ impl IdentityService {
                 SELECT 1 FROM host_apps h \
                 JOIN platform_deployments d ON d.id = h.deployment_id \
                 WHERE h.deployment_id = $1 AND h.id = $2 \
-                  AND d.external_key = $3 AND h.external_key = $4\
+                  AND ((d.external_key = $3 AND h.external_key = $4) \
+                    OR EXISTS(SELECT 1 FROM host_app_credentials c \
+                              WHERE c.host_app_id = h.id AND c.state = 'active' \
+                                AND c.id = ANY($5)))\
             )",
         )
         .bind(subject.deployment_id.0)
         .bind(subject.host_app_id.0)
         .bind(TRUSTED_CHANNEL_HOST.0)
         .bind(TRUSTED_CHANNEL_HOST.1)
+        .bind(trusted_channel_credentials())
         .fetch_one(self.db.pool())
         .await?;
         if !trusted {

@@ -93,6 +93,9 @@ impl AgentRegistry {
         context: &crate::identity::ResolvedUserContext,
         key: &str,
     ) -> Result<SelectedAgent, AgentRegistryError> {
+        if let Some(agent) = self.selected_owned(context, key).await? {
+            return Ok(agent);
+        }
         self.owned_for_context(context)
             .await?
             .into_iter()

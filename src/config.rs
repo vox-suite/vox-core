@@ -15,6 +15,8 @@ pub const DEFAULT_ASSEMBLYAI_SPEECH_MODEL: &str = "best";
 pub const DEFAULT_REDIS_URL: &str = "redis://redis:6379";
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 pub const DEFAULT_DB_ACQUIRE_TIMEOUT_SECS: u64 = 5;
+pub const DEFAULT_SPACE_MAX_STEPS: usize = 20;
+pub const DEFAULT_SPACE_MAX_CHILDREN: usize = 5;
 
 #[derive(Clone, Debug)]
 pub struct Config {

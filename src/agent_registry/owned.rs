@@ -39,25 +39,18 @@ impl AgentRegistry {
             .bind(context.id.0).bind(context.subject.deployment_id.0).fetch_all(self.db.pool()).await?;
         Ok(rows
             .into_iter()
-            .map(|r| SelectedAgent {
-                definition: AgentDefinition {
-                    id: r.get("id"),
-                    deployment_id: context.subject.deployment_id,
-                    external_key: r.get("external_key"),
-                    purpose: r.get("purpose"),
-                    requested_capability_categories: r.get("requested_capability_categories"),
-                    display_name: r.get("display_name"),
-                    is_default: r.get("is_default"),
-                    instruction_version: r.get("instruction_version"),
-                },
-                model_configuration: ModelConfiguration {
-                    id: r.get("model_id"),
-                    version: r.get("model_version"),
-                    model_adapter: r.get("model_adapter"),
-                    model: r.get("model"),
-                },
-            })
+            .map(|row| selected_from_row(row, context))
             .collect())
+    }
+
+    pub(super) async fn selected_owned(
+        &self,
+        context: &ResolvedUserContext,
+        key: &str,
+    ) -> Result<Option<SelectedAgent>, AgentRegistryError> {
+        let row = sqlx::query("SELECT a.*, c.id AS model_id,c.version AS model_version,c.model_adapter,c.model FROM agent_definitions a JOIN deployment_agent_selections s ON s.agent_definition_id=a.id AND s.deployment_id=a.deployment_id JOIN agent_model_configurations c ON c.id=s.model_configuration_id AND c.agent_definition_id=a.id JOIN agent_definitions t ON t.id=a.template_id AND t.state='enabled' WHERE a.owner_user_context_id=$1 AND a.deployment_id=$2 AND a.external_key=$3 AND a.state='enabled'")
+            .bind(context.id.0).bind(context.subject.deployment_id.0).bind(key).fetch_optional(self.db.pool()).await?;
+        Ok(row.map(|row| selected_from_row(row, context)))
     }
 
     pub async fn mutate_owned(
@@ -111,6 +104,27 @@ impl AgentRegistry {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+fn selected_from_row(row: sqlx::postgres::PgRow, context: &ResolvedUserContext) -> SelectedAgent {
+    SelectedAgent {
+        definition: AgentDefinition {
+            id: row.get("id"),
+            deployment_id: context.subject.deployment_id,
+            external_key: row.get("external_key"),
+            purpose: row.get("purpose"),
+            requested_capability_categories: row.get("requested_capability_categories"),
+            display_name: row.get("display_name"),
+            is_default: row.get("is_default"),
+            instruction_version: row.get("instruction_version"),
+        },
+        model_configuration: ModelConfiguration {
+            id: row.get("model_id"),
+            version: row.get("model_version"),
+            model_adapter: row.get("model_adapter"),
+            model: row.get("model"),
+        },
     }
 }
 
@@ -168,7 +182,7 @@ mod tests {
         let migrations = sqlx::migrate!("./migrations");
         for migration in migrations
             .iter()
-            .filter(|migration| migration.version < 20260930000000)
+            .filter(|migration| migration.version < 20260930000002)
         {
             sqlx::raw_sql(&migration.sql)
                 .execute(db.pool())
@@ -204,7 +218,7 @@ mod tests {
         }
         let transition = migrations
             .iter()
-            .find(|migration| migration.version == 20260930000000)
+            .find(|migration| migration.version == 20260930000002)
             .unwrap();
         sqlx::raw_sql(&transition.sql)
             .execute(db.pool())
