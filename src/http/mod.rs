@@ -633,9 +633,29 @@ async fn live() -> StatusCode {
 }
 
 async fn ready(State(state): State<AppState>) -> StatusCode {
-    if state.ready.load(Ordering::Acquire) {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
+    if !state.ready.load(Ordering::Acquire) {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    match state.db.as_ref() {
+        Some(db) if db.is_available().await => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_requires_a_database_and_liveness_remains_independent() {
+        assert_eq!(
+            ready(State(AppState::new(true))).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            ready(State(AppState::new(false))).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(live().await, StatusCode::OK);
     }
 }
