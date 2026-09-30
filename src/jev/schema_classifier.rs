@@ -123,7 +123,7 @@ impl SchemaClassifier {
             .await?;
 
         tracing::info!(
-            choice = %choice,
+            novel_category = (choice == NOVEL_CATEGORY_SENTINEL),
             confidence = confidence,
             "Jev Schema Classification completed"
         );

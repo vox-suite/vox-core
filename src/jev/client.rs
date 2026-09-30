@@ -84,7 +84,6 @@ impl JevClient {
         let response: SystemOneResponse = res.json().await?;
         tracing::debug!(
             duration_ms = start.elapsed().as_millis(),
-            model = %response.model,
             questions_count = response.answers.len(),
             "Jev System 1 evaluation completed"
         );

@@ -87,7 +87,7 @@ impl Tool for WebSearch {
     }
 
     async fn call(&self, _context: &mut ToolContext, args: SearchArgs) -> Result<Value, io::Error> {
-        tracing::info!(tool = Self::NAME, query = %args.query, "Tool called");
+        tracing::info!(tool = Self::NAME, "Tool called");
         match WebSearch::call(self, args).await {
             Ok(val) => {
                 tracing::info!(tool = Self::NAME, "Tool completed successfully");

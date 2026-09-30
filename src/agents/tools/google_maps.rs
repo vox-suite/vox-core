@@ -106,7 +106,7 @@ impl Tool for SearchPlaces {
             .as_deref()
             .ok_or(GoogleMapsError::MissingApiKey)?;
         let started_at = std::time::Instant::now();
-        tracing::info!(tool = Self::NAME, query = %args.query, "Tool called");
+        tracing::info!(tool = Self::NAME, "Tool called");
         let mut body = json!({ "textQuery": args.query });
 
         if let (Some(latitude), Some(longitude)) = (args.latitude, args.longitude) {
@@ -222,13 +222,7 @@ impl Tool for GetRoute {
             "units": "METRIC"
         });
 
-        tracing::info!(
-            tool = Self::NAME,
-            origin = %args.origin,
-            destination = %args.destination,
-            travel_mode,
-            "Tool called"
-        );
+        tracing::info!(tool = Self::NAME, travel_mode, "Tool called");
 
         let response = self
             .client

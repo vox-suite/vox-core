@@ -234,8 +234,6 @@ impl Tool for DefineDataSchema {
             tool = Self::NAME,
             user_id = %self.user_id.0,
             schema_id = %schema_id,
-            namespace = %namespace,
-            name = %name,
             version = new_version,
             "Defined new data schema"
         );

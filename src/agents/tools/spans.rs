@@ -147,7 +147,7 @@ impl Tool for CreateSpan {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, title = %args.title, "Tool called");
+        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, "Tool called");
         let db = self.db.as_ref().ok_or(SpanToolError::NotConfigured)?;
         let title = args.title.trim();
         if title.is_empty() {
@@ -337,7 +337,7 @@ impl Tool for GetSpan {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, span_id = %args.span_id, "Tool called");
+        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, "Tool called");
         let db = self.db.as_ref().ok_or(SpanToolError::NotConfigured)?;
         let id = parse_uuid("span_id", &args.span_id)?;
         let span = SpanRepository::new(db.pool().clone())
@@ -410,7 +410,7 @@ impl Tool for UpdateSpan {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, span_id = %args.span_id, status = ?args.status, "Tool called");
+        tracing::info!(tool = Self::NAME, user_id = %self.owner.user_id.0, "Tool called");
         let db = self.db.as_ref().ok_or(SpanToolError::NotConfigured)?;
         let id = parse_uuid("span_id", &args.span_id)?;
         let patch = SpanPatch {
