@@ -133,20 +133,7 @@ impl AppState {
         memory: MemoryService,
         service_token: String,
     ) -> Self {
-        Self::with_memory_and_jev(db, agent, memory, service_token, None)
-    }
-
-    pub fn with_memory_and_jev(
-        db: Db,
-        agent: Arc<dyn ConversationResponder>,
-        memory: MemoryService,
-        service_token: String,
-        jev: Option<crate::jev::JevClient>,
-    ) -> Self {
-        let mut conv = ConversationService::with_memory(db.clone(), agent, memory);
-        if let Some(j) = jev {
-            conv = conv.with_jev(j);
-        }
+        let conv = ConversationService::with_memory(db.clone(), agent, memory);
         let mut state = Self::with_core_services(db.clone(), service_token);
         state.conversations = Some(Arc::new(conv));
         state.events = Some(Arc::new(EventService::new(db.clone())));

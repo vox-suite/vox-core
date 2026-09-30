@@ -55,26 +55,21 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");
-    let jev_client = config
-        .jev_api_key
-        .as_ref()
-        .map(|k| vox_core::jev::JevClient::new(k.clone(), Some(config.jev_base_url.clone())));
     let connected_apps = Arc::new(vox_core::connected_apps::from_config(db.clone(), &config));
-    let mut legacy_state = AppState::with_memory_and_jev(
+    let mut app_state = AppState::with_memory(
         db.clone(),
         agent,
         memory.clone(),
         config.service_token.clone(),
-        jev_client,
     );
-    legacy_state = legacy_state.with_connected_apps(connected_apps);
+    app_state = app_state.with_connected_apps(connected_apps);
     if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN") {
-        legacy_state = legacy_state.with_admin_token(token);
+        app_state = app_state.with_admin_token(token);
     }
     if let Some(key) = config.status_webhook_key.as_deref() {
         let secrets = vox_core::status::EncryptedWebhookSecretStore::from_hex_key(db.clone(), key)
             .expect("VOX_STATUS_WEBHOOK_KEY must be a 32-byte hex key");
-        legacy_state = legacy_state.with_status_secret_store(Arc::new(secrets));
+        app_state = app_state.with_status_secret_store(Arc::new(secrets));
     }
     let tts = config.elevenlabs_api_key.as_ref().map(|key| {
         Arc::new(vox_core::tts::ElevenLabsClient::new(
@@ -100,7 +95,7 @@ async fn main() {
         Some(user_events.clone()),
     ));
     let api_state = ApiState::new(
-        legacy_state,
+        app_state,
         db,
         device_hub,
         memory,

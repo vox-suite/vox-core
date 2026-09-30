@@ -23,9 +23,16 @@ Unused template-era proposals expire and undispatched executions fail during thi
 
 The agent-facing library searches bounded metadata and loads selected schemas
 or skill guidance separately. Search and loading never authorize execution;
-calls recheck current grants, connectivity and policy. Search is currently
-lexical over the permitted inventory; an indexed implementation and larger
-inventory pagination remain follow-up work.
+calls recheck current grants, connectivity and policy. Search uses PostgreSQL
+metadata indexes with bounded pages and a continuation offset. It does not load
+provider schemas, skill bodies or account data. Only an explicitly selected tool
+or skill is loaded after checking current access.
+
+Voice partial transcripts may warm that same metadata search under the selected
+context and agent. Warmup results are discarded and never injected into a model
+prompt. Warmup does not call external providers or read user-wide profile data.
+Turn revisions are scoped to the authenticated actor, user context, agent,
+channel and conversation; stale final turns are rejected.
 
 The agent registry is Core's reusable catalog seam. It records what an agent is
 for and the capability categories it may later request; it does not run a model,
