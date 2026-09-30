@@ -151,6 +151,15 @@ async fn active_actor(
     owner: ResourceOwner,
     agent_key: &str,
 ) -> Result<uuid::Uuid, sqlx::Error> {
+    // Follow the same context → agent lock order used by owned-agent mutations.
+    sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM user_contexts WHERE id=$1 AND user_id=$2 FOR SHARE",
+    )
+    .bind(owner.user_context_id.0)
+    .bind(owner.user_id.0)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)?;
     sqlx::query_scalar("SELECT a.id FROM agent_definitions a JOIN user_contexts u ON u.id=a.owner_user_context_id AND u.deployment_id=a.deployment_id JOIN agent_definitions t ON t.id=a.template_id JOIN deployment_agent_selections s ON s.agent_definition_id=a.id AND s.deployment_id=a.deployment_id WHERE a.owner_user_context_id=$1 AND u.user_id=$2 AND a.external_key=$3 AND a.state='enabled' AND t.state='enabled' FOR SHARE OF a,t,s")
         .bind(owner.user_context_id.0).bind(owner.user_id.0).bind(agent_key)
         .fetch_optional(&mut **tx).await?.ok_or(sqlx::Error::RowNotFound)
@@ -173,8 +182,8 @@ impl MemoryService {
         }
         let mut tx = self.db.pool().begin().await?;
         let actor = active_actor(&mut tx, owner, agent_key).await?;
-        let saved = sqlx::query_scalar("INSERT INTO agent_memories(user_context_id,agent_id,facts) VALUES($1,$2,$3) ON CONFLICT(user_context_id,agent_id) DO UPDATE SET facts=agent_memories.facts || EXCLUDED.facts,version=agent_memories.version+1,updated_at=now() RETURNING facts")
-            .bind(owner.user_context_id.0).bind(actor).bind(delta).fetch_one(&mut *tx).await?;
+        let saved = sqlx::query_scalar("INSERT INTO agent_memories(user_context_id,agent_id,facts) VALUES($1,$2,$3) ON CONFLICT(user_context_id,agent_id) DO UPDATE SET facts=agent_memories.facts || EXCLUDED.facts,version=agent_memories.version+1,updated_at=now() WHERE agent_memories.retention_enabled RETURNING facts")
+            .bind(owner.user_context_id.0).bind(actor).bind(delta).fetch_optional(&mut *tx).await?.ok_or(sqlx::Error::RowNotFound)?;
         tx.commit().await?;
         Ok(saved)
     }
@@ -349,5 +358,131 @@ mod tests {
         assert!(bounded.len() <= projection::MAX_CONTEXT_BYTES);
         serde_json::from_str::<serde_json::Value>(&bounded).unwrap();
         assert!(bounded.contains("default-only fact"));
+        let cleared = memory
+            .manage(a.owner(), &default, MemoryOperation::Clear)
+            .await
+            .unwrap();
+        assert!(cleared.retention_enabled);
+        assert_eq!(cleared.retained["facts"], json!({}));
+        assert_eq!(cleared.retained["recent_recaps"], json!([]));
+        // Conversation history survives; clearing memory does not erase task evidence.
+        assert!(
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=$1)")
+                .bind(conv)
+                .fetch_one(db.pool())
+                .await
+                .unwrap()
+        );
+        let off = memory
+            .manage(
+                a.owner(),
+                &default,
+                MemoryOperation::SetRetention { enabled: false },
+            )
+            .await
+            .unwrap();
+        assert!(!off.retention_enabled);
+        assert!(
+            memory
+                .update_facts(
+                    a.owner(),
+                    &default,
+                    json!({"hidden":"must not retain"})
+                        .as_object()
+                        .unwrap()
+                        .clone()
+                )
+                .await
+                .is_err()
+        );
+        memory
+            .manage(
+                a.owner(),
+                &default,
+                MemoryOperation::SetRetention { enabled: true },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &memory.load(a.owner(), &default).await.unwrap()
+            )
+            .unwrap()["recent_recaps"],
+            json!([])
+        );
+        memory
+            .update_facts(
+                a.owner(),
+                &default,
+                json!({"new":"after clear"}).as_object().unwrap().clone(),
+            )
+            .await
+            .unwrap();
+        // An identical setting retry cannot delete newly retained facts.
+        let retry = memory
+            .manage(
+                a.owner(),
+                &default,
+                MemoryOperation::SetRetention { enabled: true },
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.retained["facts"], json!({"new":"after clear"}));
+        assert!(
+            memory
+                .manage(b.owner(), &specialist, MemoryOperation::Clear)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MemoryOperation {
+    Read,
+    Clear,
+    SetRetention { enabled: bool },
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AgentMemoryView {
+    pub retention_enabled: bool,
+    pub cleared_at: chrono::DateTime<chrono::Utc>,
+    pub retained: serde_json::Value,
+}
+
+impl MemoryService {
+    pub async fn manage(
+        &self,
+        owner: ResourceOwner,
+        agent_key: &str,
+        operation: MemoryOperation,
+    ) -> Result<AgentMemoryView, sqlx::Error> {
+        let mut tx = self.db.pool().begin().await?;
+        let actor = active_actor(&mut tx, owner, agent_key).await?;
+        match operation {
+            MemoryOperation::Read => {}
+            MemoryOperation::Clear => {
+                sqlx::query("INSERT INTO agent_memories(user_context_id,agent_id,cleared_at) VALUES($1,$2,now()) ON CONFLICT(user_context_id,agent_id) DO UPDATE SET facts='{}',cleared_at=now(),version=agent_memories.version+1,updated_at=now()")
+                    .bind(owner.user_context_id.0).bind(actor).execute(&mut *tx).await?;
+            }
+            MemoryOperation::SetRetention { enabled } => {
+                // Begin a new retention window, never resurface summaries from a disabled period.
+                sqlx::query("INSERT INTO agent_memories(user_context_id,agent_id,retention_enabled,cleared_at) VALUES($1,$2,$3,now()) ON CONFLICT(user_context_id,agent_id) DO UPDATE SET retention_enabled=EXCLUDED.retention_enabled,facts='{}',cleared_at=now(),version=agent_memories.version+1,updated_at=now() WHERE agent_memories.retention_enabled<>EXCLUDED.retention_enabled")
+                    .bind(owner.user_context_id.0).bind(actor).bind(enabled).execute(&mut *tx).await?;
+            }
+        }
+        let settings=sqlx::query_as::<_,(bool,chrono::DateTime<chrono::Utc>)>("SELECT retention_enabled,cleared_at FROM agent_memories WHERE user_context_id=$1 AND agent_id=$2")
+            .bind(owner.user_context_id.0).bind(actor).fetch_optional(&mut *tx).await?
+            .unwrap_or((true,chrono::DateTime::UNIX_EPOCH));
+        tx.commit().await?;
+        let retained = serde_json::from_str(&self.load(owner, agent_key).await?)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        Ok(AgentMemoryView {
+            retention_enabled: settings.0,
+            cleared_at: settings.1,
+            retained,
+        })
     }
 }

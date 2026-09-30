@@ -20,21 +20,21 @@ struct AgentMemoryProjection {
 pub async fn build(db: &Db, owner: ResourceOwner, agent_key: &str) -> Result<String, sqlx::Error> {
     let mut tx = db.pool().begin().await?;
     let actor = super::active_actor(&mut tx, owner, agent_key).await?;
-    let profile = sqlx::query_scalar::<_, Value>(
-        "SELECT facts FROM agent_memories WHERE user_context_id=$1 AND agent_id=$2",
-    )
-    .bind(owner.user_context_id.0)
-    .bind(actor)
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or_else(|| serde_json::json!({}));
+    let settings=sqlx::query_as::<_,(Value,bool,chrono::DateTime<chrono::Utc>)>("SELECT facts,retention_enabled,cleared_at FROM agent_memories WHERE user_context_id=$1 AND agent_id=$2")
+        .bind(owner.user_context_id.0).bind(actor).fetch_optional(&mut *tx).await?
+        .unwrap_or((serde_json::json!({}),true,chrono::DateTime::UNIX_EPOCH));
+    if !settings.1 {
+        tx.commit().await?;
+        return Ok(serde_json::json!({"current_time_utc":chrono::Utc::now().to_rfc3339(),"facts":{},"commitments":[],"decisions":[],"recent_recaps":[]}).to_string());
+    }
+    let profile = settings.0;
     let rows = sqlx::query(
         "SELECT LEFT(latest_summary->>'recap',4096) AS recap, \
          CASE WHEN octet_length((latest_summary->'commitments')::text)<=8192 THEN latest_summary->'commitments' ELSE '[]'::jsonb END AS commitments, \
          CASE WHEN octet_length((latest_summary->'decisions')::text)<=8192 THEN latest_summary->'decisions' ELSE '[]'::jsonb END AS decisions \
-         FROM conversations WHERE user_context_id=$1 AND agent_external_key=$2 AND summary_version>0 \
+         FROM conversations WHERE user_context_id=$1 AND agent_external_key=$2 AND summary_version>0 AND created_at>$3 \
          ORDER BY updated_at DESC,id DESC LIMIT 50")
-        .bind(owner.user_context_id.0).bind(agent_key).fetch_all(&mut *tx).await?;
+        .bind(owner.user_context_id.0).bind(agent_key).bind(settings.2).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     let mut projection = AgentMemoryProjection {
         current_time_utc: chrono::Utc::now().to_rfc3339(),

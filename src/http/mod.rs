@@ -1,3 +1,4 @@
+pub mod agent_memory;
 /**
 * HTTP server endpoints, routing, and middleware assembly.
 */
@@ -454,6 +455,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/agent-definitions", post(agent_registry::register))
         .route("/v1/agents/manage", post(agent_registry::mutate_owned))
+        .route("/v1/agents/{agent_key}/memory", post(agent_memory::manage))
         .route(
             "/v1/agents/selected",
             post(agent_registry::list_selected_for_host),
