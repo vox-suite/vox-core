@@ -71,3 +71,17 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_migrations
         run: cargo test --manifest-path ../vox-connections/Cargo.toml --test postgres_integration -- --ignored
+      - name: Owned assistant isolation and concurrent provisioning
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_owned_agents
+          cargo test --locked --lib concurrent_defaults_and_specialists_are_owned_and_versioned -- --ignored
+      - name: Ownership transition preserves action evidence
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_transition
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_owned_transition
+          cargo test --locked --lib ownership_transition_expires_unused_decisions_and_preserves_outcomes -- --ignored

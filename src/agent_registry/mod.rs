@@ -8,6 +8,8 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 const MAX_CAPABILITY_CATEGORIES: usize = 64;
+mod owned;
+pub use owned::AgentMutation;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RegisterAgentDefinitionRequest {
@@ -42,6 +44,9 @@ pub struct SetAgentEnabledRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentDefinition {
+    pub display_name: String,
+    pub is_default: bool,
+    pub instruction_version: i32,
     pub id: Uuid,
     pub deployment_id: DeploymentId,
     pub external_key: String,
@@ -88,45 +93,16 @@ impl AgentRegistry {
         context: &crate::identity::ResolvedUserContext,
         key: &str,
     ) -> Result<SelectedAgent, AgentRegistryError> {
-        let deployment_id = context.subject.deployment_id.0;
-        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Uuid, i32, String, String)>(
-            "SELECT d.id, d.external_key, d.purpose, d.requested_capability_categories, c.id, c.version, c.model_adapter, c.model \
-             FROM deployment_agent_selections s \
-             JOIN agent_definitions d ON d.id = s.agent_definition_id \
-             JOIN agent_model_configurations c ON c.id = s.model_configuration_id \
-             WHERE s.deployment_id = $1 AND d.external_key = $2 AND d.state = 'enabled'",
-        )
-        .bind(deployment_id)
-        .bind(key)
-        .fetch_optional(self.db.pool())
-        .await?
-        .ok_or(AgentRegistryError::NotFound)?;
-        let (
-            id,
-            external_key,
-            purpose,
-            requested_capability_categories,
-            model_id,
-            version,
-            model_adapter,
-            model,
-        ) = row;
-        Ok(SelectedAgent {
-            definition: AgentDefinition {
-                id,
-                deployment_id: DeploymentId(deployment_id),
-                external_key,
-                purpose,
-                requested_capability_categories,
-            },
-            model_configuration: ModelConfiguration {
-                id: model_id,
-                version,
-                model_adapter,
-                model,
-            },
-        })
+        if let Some(agent) = self.selected_owned(context, key).await? {
+            return Ok(agent);
+        }
+        self.owned_for_context(context)
+            .await?
+            .into_iter()
+            .find(|agent| agent.definition.external_key == key)
+            .ok_or(AgentRegistryError::NotFound)
     }
+
     pub fn new(db: Db) -> Self {
         Self { db }
     }
@@ -146,7 +122,7 @@ impl AgentRegistry {
         let id = match sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO agent_definitions (deployment_id, external_key, purpose, requested_capability_categories) \
              VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (deployment_id, external_key) DO UPDATE \
+             ON CONFLICT (deployment_id, external_key) WHERE owner_user_context_id IS NULL DO UPDATE \
              SET purpose = EXCLUDED.purpose, requested_capability_categories = EXCLUDED.requested_capability_categories, \
                  state = 'enabled', updated_at = now() \
              RETURNING id",
@@ -163,6 +139,9 @@ impl AgentRegistry {
             Err(error) => return Err(error.into()),
         };
         Ok(AgentDefinition {
+            display_name: external_key.clone(),
+            is_default: false,
+            instruction_version: 1,
             id,
             deployment_id: DeploymentId(deployment_id),
             external_key,
@@ -237,7 +216,7 @@ impl AgentRegistry {
              FROM deployment_agent_selections s \
              JOIN agent_definitions d ON d.id = s.agent_definition_id \
              JOIN agent_model_configurations c ON c.id = s.model_configuration_id \
-             WHERE s.deployment_id = $1 AND d.state = 'enabled' ORDER BY d.external_key",
+             WHERE s.deployment_id = $1 AND d.state = 'enabled' AND d.owner_user_context_id IS NULL ORDER BY d.external_key",
         )
         .bind(deployment_id)
         .fetch_all(self.db.pool())
@@ -261,6 +240,9 @@ impl AgentRegistry {
                     model,
                 )| SelectedAgent {
                     definition: AgentDefinition {
+                        display_name: external_key.clone(),
+                        is_default: false,
+                        instruction_version: 1,
                         id,
                         deployment_id: DeploymentId(deployment_id),
                         external_key,
@@ -289,7 +271,7 @@ impl AgentRegistry {
         let deployment_id = deployment_id(&self.db, &deployment_key).await?;
         let changed = match sqlx::query(
             "UPDATE agent_definitions SET state = $3, updated_at = now() \
-             WHERE deployment_id = $1 AND external_key = $2",
+             WHERE deployment_id = $1 AND external_key = $2 AND owner_user_context_id IS NULL",
         )
         .bind(deployment_id)
         .bind(external_key)
@@ -351,7 +333,7 @@ async fn load_definition(
 ) -> Result<AgentDefinition, AgentRegistryError> {
     let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>)>(
         "SELECT id, external_key, purpose, requested_capability_categories FROM agent_definitions \
-         WHERE deployment_id = $1 AND external_key = $2 AND state = 'enabled' FOR UPDATE",
+         WHERE deployment_id = $1 AND external_key = $2 AND owner_user_context_id IS NULL AND state = 'enabled' FOR UPDATE",
     )
     .bind(deployment_id)
     .bind(key)
@@ -359,6 +341,9 @@ async fn load_definition(
     .await?
     .ok_or(AgentRegistryError::NotFound)?;
     Ok(AgentDefinition {
+        display_name: row.1.clone(),
+        is_default: false,
+        instruction_version: 1,
         id: row.0,
         deployment_id: DeploymentId(deployment_id),
         external_key: row.1,

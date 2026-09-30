@@ -447,6 +447,7 @@ pub fn router(state: AppState) -> Router {
             post(status::disable_subscription),
         )
         .route("/v1/agent-definitions", post(agent_registry::register))
+        .route("/v1/agents/manage", post(agent_registry::mutate_owned))
         .route(
             "/v1/agents/selected",
             post(agent_registry::list_selected_for_host),

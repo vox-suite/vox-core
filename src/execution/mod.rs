@@ -176,7 +176,9 @@ impl ExecutionCoordinator {
              JOIN external_connections x ON x.id=g.connection_id
              WHERE g.user_context_id=$1 AND g.connection_id=$2
                AND g.capability_external_key=$3 AND g.state='enabled'
-               AND a.external_key=$4 AND a.deployment_id=$5 AND a.state='enabled'
+               AND a.owner_user_context_id=$1 AND a.external_key=$4 AND a.deployment_id=$5 AND a.state='enabled' AND (a.template_id IS NULL OR EXISTS (SELECT 1 FROM agent_definitions template WHERE template.id=a.template_id AND template.state='enabled' AND ($3=ANY(template.requested_capability_categories) OR '*'=ANY(template.requested_capability_categories))))
+               AND ($3=ANY(a.requested_capability_categories) OR '*'=ANY(a.requested_capability_categories))
+               AND $3=ANY(x.authorized_capabilities)
                AND x.user_context_id=$1 AND x.authorization_state='authorized'
                AND (x.expires_at IS NULL OR x.expires_at>$6)
                AND (EXISTS (SELECT 1 FROM integration_definitions i
