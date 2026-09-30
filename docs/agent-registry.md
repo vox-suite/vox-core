@@ -19,7 +19,7 @@ and revokes grants and skill enablements. The default cannot be archived.
 Owned instances start without grants or enabled skills. A disabled template also
 blocks its owned instances. The pre-launch ownership migration clears old
 template-based grants and skill enablements rather than inferring renewed consent.
-Provider credentials remain separate.
+Unused template-era proposals expire and undispatched executions fail during this transition. Completed or uncertain outcomes retain their evidence. Provider credentials remain separate.
 
 The agent-facing library searches bounded metadata and loads selected schemas
 or skill guidance separately. Search and loading never authorize execution;

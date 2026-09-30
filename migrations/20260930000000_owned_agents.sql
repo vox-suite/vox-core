@@ -18,6 +18,15 @@ CREATE UNIQUE INDEX agent_owned_key ON agent_definitions(owner_user_context_id,e
 CREATE UNIQUE INDEX agent_owned_default ON agent_definitions(owner_user_context_id) WHERE is_default;
 
 -- Pre-launch template-based permissions cannot be transferred as implied consent.
+-- Actor keys now refer to owned instances. Never carry an unused template-era
+-- decision into the new identity. Keep completed/dispatched outcome evidence.
+UPDATE action_proposals p SET state='expired',updated_at=now()
+WHERE p.state IN ('proposed','approved')
+  AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.proposal_id=p.id);
+UPDATE executions SET state='failed',completed_at=now(),updated_at=now(),
+    confirmation_evidence=confirmation_evidence || jsonb_build_object('code','agent_ownership_transition','dispatched',false)
+WHERE state='pending';
+
 DELETE FROM agent_capability_grants;
 DELETE FROM skill_agent_enablements;
 ALTER TABLE agent_capability_grants ADD CONSTRAINT grant_owned_agent

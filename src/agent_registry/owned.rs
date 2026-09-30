@@ -160,6 +160,96 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires an empty isolated TEST_DATABASE_URL with pgvector"]
+    async fn ownership_transition_expires_unused_decisions_and_preserves_outcomes() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let migrations = sqlx::migrate!("./migrations");
+        for migration in migrations
+            .iter()
+            .filter(|migration| migration.version < 20260930000000)
+        {
+            sqlx::raw_sql(&migration.sql)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let context = crate::identity::IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let mut cases = Vec::new();
+        for state in [
+            None,
+            Some("pending"),
+            Some("reconciling"),
+            Some("succeeded"),
+        ] {
+            let proposal: Uuid = sqlx::query_scalar("INSERT INTO action_proposals(user_id,user_context_id,actor_key,capability,details,details_hash,state,expires_at) VALUES($1,$2,'general','fixture.write','{}','fixture','approved',now()+interval '1 day') RETURNING id")
+                .bind(user).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+            let approval: Uuid = sqlx::query_scalar("INSERT INTO action_approvals(proposal_id,user_id,user_context_id,approved_details_hash) VALUES($1,$2,$3,'fixture') RETURNING id")
+                .bind(proposal).bind(user).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+            let execution = if let Some(state) = state {
+                Some(sqlx::query_scalar::<_,Uuid>("INSERT INTO executions(user_id,user_context_id,proposal_id,approval_id,idempotency_key,state,confirmation_evidence) VALUES($1,$2,$3,$4,$5,$6,'{\"proof\":\"retained\"}') RETURNING id")
+                    .bind(user).bind(context.id.0).bind(proposal).bind(approval).bind(Uuid::new_v4().to_string()).bind(state).fetch_one(db.pool()).await.unwrap())
+            } else {
+                None
+            };
+            cases.push((proposal, execution, state));
+        }
+        let transition = migrations
+            .iter()
+            .find(|migration| migration.version == 20260930000000)
+            .unwrap();
+        sqlx::raw_sql(&transition.sql)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        for (proposal, execution, previous) in cases {
+            let state: String =
+                sqlx::query_scalar("SELECT state FROM action_proposals WHERE id=$1")
+                    .bind(proposal)
+                    .fetch_one(db.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                state,
+                if execution.is_none() {
+                    "expired"
+                } else {
+                    "approved"
+                }
+            );
+            if let Some(execution) = execution {
+                let row =
+                    sqlx::query("SELECT state,confirmation_evidence FROM executions WHERE id=$1")
+                        .bind(execution)
+                        .fetch_one(db.pool())
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    row.get::<String, _>("state"),
+                    if previous == Some("pending") {
+                        "failed"
+                    } else {
+                        previous.unwrap()
+                    }
+                );
+                let evidence: Value = row.get("confirmation_evidence");
+                assert_eq!(evidence["proof"], "retained");
+                if previous == Some("pending") {
+                    assert_eq!(evidence["dispatched"], false);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "requires an isolated TEST_DATABASE_URL with pgvector"]
     async fn concurrent_defaults_and_specialists_are_owned_and_versioned() {
         let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database"))
