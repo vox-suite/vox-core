@@ -89,3 +89,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
         run: cargo test --locked --lib agent_memory_is_scoped_bounded_and_revocation_aware -- --ignored
+      - name: Voice metadata warmup and actor revision isolation
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
+        run: cargo test --locked --lib voice_warmup_cannot_inject_user_wide_data_or_share_actor_revisions -- --ignored

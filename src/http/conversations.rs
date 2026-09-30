@@ -82,7 +82,6 @@ pub async fn respond_stream(
                 if let Ok(delta) = &item
                     && !first_text_seen
                     && !delta.is_empty()
-                    && delta != crate::conversations::speculation::LOOKUP_PENDING
                 {
                     first_text_seen = true;
                     tracing::info!(
@@ -93,9 +92,6 @@ pub async fn respond_stream(
                     );
                 }
                 match item {
-                    Ok(delta) if delta == crate::conversations::speculation::LOOKUP_PENDING => {
-                        Ok("event: lookup_pending\ndata: {}\n\n".to_string())
-                    }
                     Ok(delta) => {
                         let data = serde_json::json!({ "delta": delta }).to_string();
                         Ok::<_, std::convert::Infallible>(format!("data: {data}\n\n"))
