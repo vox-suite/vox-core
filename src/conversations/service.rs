@@ -199,6 +199,10 @@ impl ConversationService {
                 needs_onboarding
             }
         };
+        // A channel verification must not rebind the authenticated host context or actor.
+        if active_user_id != context.user_id {
+            return Err(ConversationError::Invalid);
+        }
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -226,9 +230,12 @@ impl ConversationService {
         if !self.is_current(owner, &request).await {
             return Err(ConversationError::Invalid);
         }
-        let active_owner = self.identities.owner_for_user(active_user_id).await?;
+        let active_owner = context.owner();
         let saved_request = request.clone();
-        let mut user_context = self.memory.load(active_user_id).await?;
+        let mut user_context = self
+            .memory
+            .load(context.owner(), &selected_agent.definition.external_key)
+            .await?;
         if active_user_id == owner.user_id
             && let Some(work) = self.final_lookup(owner, &request).await
             && let Some(result) = work.await
@@ -263,7 +270,6 @@ impl ConversationService {
             .await?;
         self.append_message(conversation_id, "assistant", text.trim())
             .await?;
-        let _ = self.memory.refresh(active_user_id).await;
         Ok(RespondResponse {
             conversation_id,
             text,
@@ -378,6 +384,10 @@ impl ConversationService {
             }
         };
         let verification_finished = std::time::Instant::now();
+        // A channel verification must not rebind the authenticated host context or actor.
+        if active_user_id != context.user_id {
+            return Err(ConversationError::Invalid);
+        }
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -432,8 +442,11 @@ impl ConversationService {
         if !self.is_current(owner, &request).await {
             return Err(ConversationError::Invalid);
         }
-        let active_owner = self.identities.owner_for_user(active_user_id).await?;
-        let user_context = self.memory.load(active_user_id).await?;
+        let active_owner = context.owner();
+        let user_context = self
+            .memory
+            .load(context.owner(), &selected_agent.definition.external_key)
+            .await?;
 
         let lookup = if active_user_id == owner.user_id {
             self.final_lookup(owner, &request).await
@@ -527,7 +540,6 @@ impl ConversationService {
                             let _ = service
                                 .persist_current_turn(owner, &request, conv_id, &text_to_save)
                                 .await;
-                            let _ = service.memory.refresh(uid).await;
                         }
                         None
                     }

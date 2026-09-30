@@ -111,3 +111,11 @@ Shared variables (set once as Railway shared variables):
 Only the edge (`vox-edge`) has a public domain. It routes `/v1/*` to `vox-core-api`. See `vox-edge/ROUTING.md` for the path protocol.
 
 `vox-connections` and `vox-shared` are fetched as public git dependencies, so no sibling checkout is needed.
+
+### Agent memory isolation
+
+Model memory and `get_agent_memory` / `update_agent_memory` are scoped to the authenticated host user context and the selected owned agent. Agent facts are bounded to 8 KiB; the projection is bounded to 16 KiB and includes only that agent’s summaries. Current actor/template availability is checked on each read and mutation; no user-wide projection cache can survive archive. Summarization retains facts in the originating conversation and does not publish them to the global identity profile. Schedules without an assigned agent receive no agent memory. A voice identity change cannot silently replace the authenticated host context.
+
+Signed hosts can inspect projected memory, clear it, or toggle retention through `/v1/agents/{agent_key}/memory`. Clear removes facts and starts a new summary retention window; conversation and action history remain intact. Disabled retention blocks fact writes and omits retained summaries; re-enabling never resurfaces summaries from the disabled period. Identical retention-setting retries preserve new facts.
+
+This implements memory isolation and controls, not complete W7: explicit saved-preference sharing, scoped delegation and the remaining native-tool consolidation still require delivery. Identity name/channel routing remains separate from model memory.

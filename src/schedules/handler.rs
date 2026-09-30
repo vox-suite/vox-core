@@ -7,7 +7,6 @@ use crate::{
     db::Db,
     identity::{ResourceOwner, UserContextId, UserId},
     jev::JevClient,
-    memory::MemoryService,
     outbound::{OutboundCallService, OutboundError},
 };
 use chrono::{DateTime, Utc};
@@ -19,8 +18,6 @@ pub struct ScheduleHandler {
     db: Db,
     #[allow(dead_code)]
     planner: Arc<dyn EventPlanning>,
-    #[allow(dead_code)]
-    memory: MemoryService,
     jev: Option<JevClient>,
     outbound: Option<Arc<OutboundCallService>>,
 }
@@ -39,30 +36,13 @@ pub enum ScheduleHandlerError {
 
 impl ScheduleHandler {
     pub fn new(db: Db, planner: Arc<dyn EventPlanning>) -> Self {
-        let memory = MemoryService::new(db.clone(), None);
-        Self::with_memory(db, planner, memory)
+        Self::with_jev(db, planner, None)
     }
 
-    pub fn with_memory(db: Db, planner: Arc<dyn EventPlanning>, memory: MemoryService) -> Self {
+    pub fn with_jev(db: Db, planner: Arc<dyn EventPlanning>, jev: Option<JevClient>) -> Self {
         Self {
             db,
             planner,
-            memory,
-            jev: None,
-            outbound: None,
-        }
-    }
-
-    pub fn with_jev(
-        db: Db,
-        planner: Arc<dyn EventPlanning>,
-        memory: MemoryService,
-        jev: Option<JevClient>,
-    ) -> Self {
-        Self {
-            db,
-            planner,
-            memory,
             jev,
             outbound: None,
         }
@@ -130,7 +110,7 @@ impl ScheduleHandler {
         let planned = if call_span.is_some() {
             Vec::new()
         } else {
-            let user_context = self.memory.load(user_id).await.unwrap_or_default();
+            let user_context = String::new();
             self.planner
                 .plan(crate::agents::event_planner::EventPlanningPrompt {
                     user_id,
