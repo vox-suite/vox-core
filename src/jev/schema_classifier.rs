@@ -88,12 +88,10 @@ impl SchemaClassifier {
         user_id: Uuid,
         payload: &Value,
     ) -> Result<SchemaClassificationResult, JevError> {
-        let schemas = self.load_user_schemas(user_id).await.map_err(|e| {
-            JevError::Api(
-                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Database error loading schemas: {e}"),
-            )
-        })?;
+        let schemas = self
+            .load_user_schemas(user_id)
+            .await
+            .map_err(|_| JevError::SchemaLookup)?;
 
         if schemas.is_empty() {
             return Ok(SchemaClassificationResult::Novel {
