@@ -270,6 +270,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
+        assert!(db.is_available().await);
         let identity = crate::identity::IdentityService::new(db.clone());
         let registry = AgentRegistry::new(db.clone());
         let first: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")

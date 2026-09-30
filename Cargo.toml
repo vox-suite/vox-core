@@ -53,3 +53,7 @@ path = "services/worker/main.rs"
 [[bin]]
 name = "vox-core-defaults"
 path = "services/defaults/main.rs"
+
+[[bin]]
+name = "vox-core-check-database"
+path = "services/database-check/main.rs"

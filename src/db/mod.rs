@@ -38,7 +38,35 @@ impl Db {
         sqlx::migrate!().run(&self.pool).await
     }
 
+    /// A bounded query, rather than a configured URL or a startup flag, proves
+    /// that this process can currently serve database-backed requests.
+    pub async fn is_available(&self) -> bool {
+        matches!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                sqlx::query("SELECT 1").execute(&self.pool)
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unavailable_database_never_reports_ready() {
+        let db = Db {
+            pool: PgPoolOptions::new()
+                .connect_lazy("postgresql://fixture:fixture@127.0.0.1:1/fixture")
+                .unwrap(),
+        };
+        assert!(!db.is_available().await);
     }
 }
