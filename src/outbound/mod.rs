@@ -69,9 +69,9 @@ impl OutboundCallService {
         span_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
         let phone_clean = phone_number.trim();
-        if phone_clean.is_empty() {
+        if !crate::phone::is_dialable_digits(phone_clean) {
             return Err(OutboundError::InvalidInput(
-                "Phone number cannot be empty".into(),
+                "Phone number must include a country code".into(),
             ));
         }
         let reason_clean = reason.trim();

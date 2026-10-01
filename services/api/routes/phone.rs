@@ -55,14 +55,8 @@ pub async fn link_phone(
     Json(payload): Json<LinkPhoneRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let pool = &state.pool;
-    let normalized: String = payload
-        .phone_number
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
-    if normalized.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    let normalized =
+        vox_core::phone::normalize_e164(&payload.phone_number).ok_or(StatusCode::BAD_REQUEST)?;
 
     let mut tx = pool
         .begin()

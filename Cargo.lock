@@ -8083,6 +8083,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "redis",
+ "regex",
  "reqwest 0.13.5",
  "rig",
  "ring",
