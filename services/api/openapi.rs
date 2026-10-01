@@ -1,16 +1,83 @@
-/**
-* OpenAPI documentation and contract definitions for API endpoints.
-*/
 use axum::{Json, response::IntoResponse};
-use serde_json::Value;
+use serde_json::{Value, json};
+use utoipa::OpenApi;
+
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::spans::list_spans,
+    crate::routes::spans::create_span,
+    crate::routes::spans::get_span,
+    crate::routes::spans::update_span,
+    crate::routes::spans::delete_span,
+    crate::routes::collections::list_collections,
+    crate::routes::collections::create_collection,
+    crate::routes::collections::get_collection,
+    crate::routes::collections::update_collection,
+    crate::routes::collections::archive_collection,
+    crate::routes::collections::add_collection_span,
+    crate::routes::collections::remove_collection_span,
+    crate::routes::schemas::create_schema_version,
+    crate::routes::schemas::get_schema_by_name,
+    crate::routes::schemas::list_schemas,
+    crate::routes::charts::suggest_charts,
+    crate::routes::charts::create_chart_board,
+    crate::routes::charts::list_chart_boards,
+    crate::routes::charts::get_chart_board,
+    crate::routes::charts::get_chart_board_data,
+    crate::routes::spaces::create_space,
+    crate::routes::spaces::list_spaces,
+    crate::routes::spaces::get_space,
+    crate::routes::spaces::drop_space,
+    crate::routes::spaces::send_space_chat,
+    crate::routes::spaces::commit_space,
+    crate::routes::spaces::list_space_messages,
+    crate::routes::spaces::update_space_node
+))]
+struct ApiDoc;
+
+pub fn build_spec() -> Value {
+    let mut spec: Value = serde_json::from_str(include_str!("../../contracts/openapi.base.json"))
+        .unwrap_or_else(|_| {
+            json!({
+                "openapi": "3.1.0",
+                "info": { "title": "Vox Core API", "version": "1.0.0" },
+                "paths": {},
+                "components": { "schemas": {} }
+            })
+        });
+    let generated = serde_json::to_value(ApiDoc::openapi()).unwrap_or(Value::Null);
+    merge_object(&mut spec, &generated, "paths");
+    if let Some(schemas) = generated
+        .pointer("/components/schemas")
+        .and_then(Value::as_object)
+    {
+        let target = spec
+            .pointer_mut("/components")
+            .and_then(Value::as_object_mut)
+            .map(|c| c.entry("schemas").or_insert_with(|| json!({})));
+        if let Some(Value::Object(map)) = target {
+            for (name, schema) in schemas {
+                map.insert(name.clone(), schema.clone());
+            }
+        }
+    }
+    spec
+}
+
+fn merge_object(spec: &mut Value, generated: &Value, key: &str) {
+    let Some(source) = generated.get(key).and_then(Value::as_object) else {
+        return;
+    };
+    let target = spec
+        .as_object_mut()
+        .map(|root| root.entry(key).or_insert_with(|| json!({})));
+    if let Some(Value::Object(map)) = target {
+        for (name, value) in source {
+            map.insert(name.clone(), value.clone());
+        }
+    }
+}
 
 pub async fn get_openapi_spec() -> impl IntoResponse {
-    let spec = include_str!("../../contracts/openapi.json");
-    let json: Value = serde_json::from_str(spec).unwrap_or_else(|_| {
-        serde_json::json!({
-            "openapi": "3.1.0",
-            "info": { "title": "Vox Core API", "version": "1.0.0" }
-        })
-    });
-    Json(json)
+    Json(build_spec())
 }

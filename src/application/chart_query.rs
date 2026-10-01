@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::domain::charts::{Aggregation, GroupBy, QuerySpec};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChartDataPoint {
     pub label: String,
     pub value: f64,

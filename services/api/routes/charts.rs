@@ -34,7 +34,7 @@ pub struct ChartApiState {
     pub suggester: Arc<dyn SuggestingCharts>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum SuggestChartsInput {
     List(Vec<Uuid>),
@@ -50,13 +50,13 @@ impl SuggestChartsInput {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateChartBoardInput {
     pub name: String,
     pub charts: Vec<ChartSuggestion>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChartBoardSummary {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -66,7 +66,7 @@ pub struct ChartBoardSummary {
     pub chart_count: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChartBoardDetails {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -76,13 +76,20 @@ pub struct ChartBoardDetails {
     pub charts: Vec<Chart>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChartDataResult {
     pub chart_id: Uuid,
     pub data_points: Vec<ChartDataPoint>,
     pub error: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/charts/suggest",
+    tag = "pulse",
+    request_body = crate::routes::charts::SuggestChartsInput,
+    responses((status = 200, body = Vec<vox_core::agents::chart_suggester::ChartSuggestion>))
+)]
 pub async fn suggest_charts(
     State(state): State<ChartApiState>,
     Extension(actor): Extension<Actor>,
@@ -146,6 +153,13 @@ pub async fn suggest_charts(
     Ok(Json(suggestions))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/charts/boards",
+    tag = "pulse",
+    request_body = crate::routes::charts::CreateChartBoardInput,
+    responses((status = 201, body = crate::routes::charts::ChartBoardDetails))
+)]
 pub async fn create_chart_board(
     State(state): State<ChartApiState>,
     Extension(actor): Extension<Actor>,
@@ -206,6 +220,12 @@ pub async fn create_chart_board(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/charts/boards",
+    tag = "pulse",
+    responses((status = 200, body = Vec<crate::routes::charts::ChartBoardSummary>))
+)]
 pub async fn list_chart_boards(
     State(state): State<ChartApiState>,
     Extension(actor): Extension<Actor>,
@@ -240,6 +260,13 @@ pub async fn list_chart_boards(
     Ok(Json(boards))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/charts/boards/{id}",
+    tag = "pulse",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = crate::routes::charts::ChartBoardDetails))
+)]
 pub async fn get_chart_board(
     State(state): State<ChartApiState>,
     Extension(actor): Extension<Actor>,
@@ -274,6 +301,13 @@ pub async fn get_chart_board(
     Ok(Json(details))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/charts/boards/{id}/data",
+    tag = "pulse",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = Vec<crate::routes::charts::ChartDataResult>))
+)]
 pub async fn get_chart_board_data(
     State(state): State<ChartApiState>,
     Extension(actor): Extension<Actor>,

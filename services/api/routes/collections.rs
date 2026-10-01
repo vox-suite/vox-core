@@ -16,11 +16,18 @@ use vox_core::{
     domain::identity::Actor,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ListCollectionsQuery {
     pub limit: Option<i64>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/list",
+    tag = "collections",
+    request_body = crate::routes::collections::ListCollectionsQuery,
+    responses((status = 200, body = Vec<vox_core::domain::collections::Collection>))
+)]
 pub async fn list_collections(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -34,6 +41,13 @@ pub async fn list_collections(
     Ok(Json(collections))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections",
+    tag = "collections",
+    request_body = vox_core::application::collections::CreateCollectionInput,
+    responses((status = 201, body = vox_core::domain::collections::Collection))
+)]
 pub async fn create_collection(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -46,6 +60,13 @@ pub async fn create_collection(
     Ok((StatusCode::CREATED, Json(collection)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/{id}",
+    tag = "collections",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = vox_core::domain::collections::Collection))
+)]
 pub async fn get_collection(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -61,6 +82,13 @@ pub async fn get_collection(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/{id}/archive",
+    tag = "collections",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 204))
+)]
 pub async fn archive_collection(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -85,6 +113,14 @@ fn status_for(err: CollectionServiceError) -> StatusCode {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/{id}/update",
+    tag = "collections",
+    params(("id" = uuid::Uuid, Path)),
+    request_body = vox_core::application::collections::UpdateCollectionInput,
+    responses((status = 200, body = vox_core::domain::collections::Collection))
+)]
 pub async fn update_collection(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -98,6 +134,13 @@ pub async fn update_collection(
     Ok(Json(collection))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/{id}/spans/{span_id}/add",
+    tag = "collections",
+    params(("id" = uuid::Uuid, Path), ("span_id" = uuid::Uuid, Path)),
+    responses((status = 204))
+)]
 pub async fn add_collection_span(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,
@@ -110,6 +153,13 @@ pub async fn add_collection_span(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/collections/{id}/spans/{span_id}/remove",
+    tag = "collections",
+    params(("id" = uuid::Uuid, Path), ("span_id" = uuid::Uuid, Path)),
+    responses((status = 204))
+)]
 pub async fn remove_collection_span(
     State(service): State<CollectionService>,
     Extension(actor): Extension<Actor>,

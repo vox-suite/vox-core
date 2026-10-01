@@ -36,6 +36,7 @@ opentelemetry = "0.33"
 opentelemetry_sdk = "0.33"
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+utoipa = { version = "5", features = ["chrono", "uuid"] }
 url = "2"
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 base64 = "0.23.1"

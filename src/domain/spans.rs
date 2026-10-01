@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanStatus {
     #[default]
@@ -42,7 +42,7 @@ impl SpanStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionType {
     Autonomous,
@@ -69,7 +69,7 @@ impl ExecutionType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Span {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -98,7 +98,7 @@ pub struct Span {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::ToSchema)]
 pub struct NewSpan {
     pub title: String,
     #[serde(default)]
@@ -120,7 +120,7 @@ pub struct NewSpan {
     pub collection_ids: Vec<Uuid>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::ToSchema)]
 pub struct SpanPatch {
     pub expected_version: Option<i32>,
     pub title: Option<String>,
@@ -128,17 +128,20 @@ pub struct SpanPatch {
     pub category: Option<String>,
     pub status: Option<SpanStatus>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Option<DateTime<Utc>>)]
     pub start_at: Option<Option<DateTime<Utc>>>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Option<DateTime<Utc>>)]
     pub end_at: Option<Option<DateTime<Utc>>>,
     #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Option<DateTime<Utc>>)]
     pub due_at: Option<Option<DateTime<Utc>>>,
     pub priority: Option<i32>,
     pub execution_result: Option<serde_json::Value>,
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, utoipa::ToSchema)]
 pub struct SpanQuery {
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,

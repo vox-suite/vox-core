@@ -25,6 +25,13 @@ use crate::{router::build_api_router, state::ApiState};
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|arg| arg == "--print-openapi") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&openapi::build_spec()).unwrap_or_default()
+        );
+        return;
+    }
     let _traces = vox_core::telemetry::init("vox-core-api");
     let config = Config::from_env().expect("Vox Core configuration is invalid");
 

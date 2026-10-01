@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum SpaceState {
@@ -34,7 +34,7 @@ impl SpaceState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum NodeState {
@@ -92,7 +92,7 @@ pub struct AgentSpec {
     pub limits: AgentSpecLimits,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     #[default]
@@ -120,7 +120,7 @@ impl RunState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpaceMessage {
     pub id: Uuid,
     pub space_id: Uuid,
@@ -129,7 +129,7 @@ pub struct SpaceMessage {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Space {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -144,7 +144,7 @@ pub struct Space {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpaceNode {
     pub id: Uuid,
     pub space_id: Uuid,
@@ -161,7 +161,7 @@ pub struct SpaceNode {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpaceEdge {
     pub id: Uuid,
     pub space_id: Uuid,
@@ -170,7 +170,7 @@ pub struct SpaceEdge {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpaceGraph {
     pub space: Space,
     pub nodes: Vec<SpaceNode>,

@@ -27,6 +27,13 @@ fn status_for(err: SpanServiceError) -> StatusCode {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/spans/list",
+    tag = "spans",
+    request_body = vox_core::domain::spans::SpanQuery,
+    responses((status = 200, body = Vec<vox_core::domain::spans::Span>))
+)]
 pub async fn list_spans(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,
@@ -39,6 +46,13 @@ pub async fn list_spans(
     Ok(Json(spans))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/spans",
+    tag = "spans",
+    request_body = vox_core::domain::spans::NewSpan,
+    responses((status = 201, body = vox_core::domain::spans::Span))
+)]
 pub async fn create_span(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,
@@ -51,6 +65,13 @@ pub async fn create_span(
     Ok((StatusCode::CREATED, Json(span)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/spans/{id}",
+    tag = "spans",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = vox_core::domain::spans::Span))
+)]
 pub async fn get_span(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,
@@ -64,6 +85,14 @@ pub async fn get_span(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/spans/{id}/update",
+    tag = "spans",
+    params(("id" = uuid::Uuid, Path)),
+    request_body = vox_core::domain::spans::SpanPatch,
+    responses((status = 200, body = vox_core::domain::spans::Span))
+)]
 pub async fn update_span(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,
@@ -77,6 +106,13 @@ pub async fn update_span(
     Ok(Json(span))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/spans/{id}/delete",
+    tag = "spans",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 204))
+)]
 pub async fn delete_span(
     State(service): State<SpanService>,
     Extension(actor): Extension<Actor>,

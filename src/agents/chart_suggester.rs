@@ -22,7 +22,7 @@ pub struct ChartSuggestionPrompt {
     pub schemas: Vec<SchemaSample>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChartSuggestion {
     pub title: String,
     pub description: String,

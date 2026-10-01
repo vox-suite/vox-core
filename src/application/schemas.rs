@@ -10,7 +10,7 @@ use crate::{
 
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSchemaVersionInput {
     pub namespace: String,
     pub name: String,

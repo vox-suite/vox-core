@@ -24,7 +24,7 @@ pub enum CollectionServiceError {
     Database(#[from] sqlx::Error),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateCollectionInput {
     pub name: String,
     pub description: Option<String>,
@@ -34,7 +34,7 @@ pub struct CreateCollectionInput {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
 pub struct UpdateCollectionInput {
     pub name: Option<String>,
     pub description: Option<String>,

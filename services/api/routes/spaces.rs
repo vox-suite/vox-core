@@ -33,18 +33,18 @@ pub struct SpaceApiState {
     pub user_events: UserEventHub,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSpaceInput {
     pub title: String,
     pub intent: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SendSpaceChatInput {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSpaceNodeInput {
     pub state: Option<String>,
     pub title: Option<String>,
@@ -52,12 +52,19 @@ pub struct UpdateSpaceNodeInput {
     pub position: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CommitSpaceResult {
     pub collection_id: Uuid,
     pub committed_spans_count: usize,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/spaces",
+    tag = "spaces",
+    request_body = crate::routes::spaces::CreateSpaceInput,
+    responses((status = 201, body = vox_core::domain::spaces::Space))
+)]
 pub async fn create_space(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -112,6 +119,12 @@ pub async fn create_space(
     Ok((StatusCode::CREATED, Json(space)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/spaces",
+    tag = "spaces",
+    responses((status = 200, body = Vec<vox_core::domain::spaces::Space>))
+)]
 pub async fn list_spaces(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -124,6 +137,13 @@ pub async fn list_spaces(
     Ok(Json(spaces))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/spaces/{id}",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = vox_core::domain::spaces::SpaceGraph))
+)]
 pub async fn get_space(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -141,6 +161,13 @@ pub async fn get_space(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/me/spaces/{id}",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 204))
+)]
 pub async fn drop_space(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -166,6 +193,14 @@ pub async fn drop_space(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/spaces/{id}/chat",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    request_body = crate::routes::spaces::SendSpaceChatInput,
+    responses((status = 200, body = serde_json::Value))
+)]
 pub async fn send_space_chat(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -200,6 +235,13 @@ pub async fn send_space_chat(
     Ok(Json(json!({ "status": "processing" })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/me/spaces/{id}/commit",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = crate::routes::spaces::CommitSpaceResult))
+)]
 pub async fn commit_space(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -324,6 +366,13 @@ pub async fn commit_space(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/spaces/{id}/messages",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    responses((status = 200, body = Vec<vox_core::domain::spaces::SpaceMessage>))
+)]
 pub async fn list_space_messages(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
@@ -348,6 +397,14 @@ pub async fn list_space_messages(
     Ok(Json(messages))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/v1/me/spaces/{id}/nodes/{node_id}",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path), ("node_id" = uuid::Uuid, Path)),
+    request_body = crate::routes::spaces::UpdateSpaceNodeInput,
+    responses((status = 200, body = vox_core::domain::spaces::SpaceNode))
+)]
 pub async fn update_space_node(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,

@@ -1,0 +1,786 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Vox Core API",
+    "version": "1.0.0",
+    "description": "Unified API for Vox Core: consumer identity, conversations, spans, collections, records, schemas, jobs, events, and provider connections."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local development server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "SessionAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "ServiceToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Vox-Service-Token"
+      },
+      "AdminToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Vox-Admin-Token"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Collection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "trip",
+              "event",
+              "course",
+              "area",
+              "custom"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "span_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "Record": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "schema_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fact",
+              "goal",
+              "insight"
+            ]
+          },
+          "domain": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Span": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "active",
+              "waiting_user",
+              "done",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "execution_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "autonomous",
+              "interactive",
+              "manual_human",
+              null
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "collection_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "Process is ready to serve traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/exchange": {
+      "post": {
+        "summary": "Exchange provider token for Vox consumer session",
+        "responses": {
+          "200": {
+            "description": "Session created"
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "post": {
+        "summary": "Get authenticated user profile and identities",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User details"
+          }
+        }
+      }
+    },
+    "/v1/spans": {
+      "post": {
+        "summary": "Create span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Span created"
+          }
+        }
+      }
+    },
+    "/v1/collections": {
+      "post": {
+        "summary": "Create collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Collection created"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}": {
+      "post": {
+        "summary": "Get collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection"
+          }
+        }
+      }
+    },
+    "/v1/records": {
+      "post": {
+        "summary": "Create record",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Record created"
+          }
+        }
+      }
+    },
+    "/v1/schemas": {
+      "post": {
+        "summary": "Create new schema version",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Schema created"
+          }
+        }
+      }
+    },
+    "/v1/conversations/respond": {
+      "post": {
+        "summary": "Turn response for conversation",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent turn response"
+          }
+        }
+      }
+    },
+    "/v1/conversations/respond/stream": {
+      "post": {
+        "summary": "Streaming turn response for conversation",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Text chunk stream"
+          }
+        }
+      }
+    },
+    "/v1/conversations/complete": {
+      "post": {
+        "summary": "Complete conversation turn sequence",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completion recorded"
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "post": {
+        "summary": "Ingest inbound observation event",
+        "security": [
+          {
+            "ServiceToken": []
+          },
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Event accepted"
+          }
+        }
+      }
+    },
+    "/v1/schedules": {
+      "post": {
+        "summary": "Create schedule",
+        "security": [
+          {
+            "ServiceToken": []
+          },
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Schedule created"
+          }
+        }
+      }
+    },
+    "/v1/action-proposals": {
+      "post": {
+        "summary": "Propose side effect action",
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Proposal created"
+          }
+        }
+      }
+    },
+    "/v1/action-proposals/{id}/approve": {
+      "post": {
+        "summary": "Approve action proposal",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval registered"
+          }
+        }
+      }
+    },
+    "/v1/devices": {
+      "post": {
+        "summary": "Enroll client device",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Device enrolled"
+          }
+        }
+      }
+    },
+    "/v1/admin/audit-events": {
+      "post": {
+        "summary": "Admin view audit logs",
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ]
+      }
+    },
+    "/v1/spans/{id}": {
+      "post": {
+        "summary": "Get span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Span"
+          }
+        }
+      }
+    },
+    "/v1/events/batch": {
+      "post": {
+        "summary": "Ingest a batch of inbound events",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "events"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "event_type",
+                        "payload"
+                      ],
+                      "properties": {
+                        "event_type": {
+                          "type": "string"
+                        },
+                        "payload": {
+                          "type": "object"
+                        },
+                        "idempotency_key": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch of events ingested successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/spans/list": {
+      "post": {
+        "summary": "List spans overlapping from/to, optionally by collection_id, status, or unscheduled",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spans list"
+          }
+        }
+      }
+    },
+    "/v1/collections/list": {
+      "post": {
+        "summary": "List collections",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collections list"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/update": {
+      "post": {
+        "summary": "Update collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection updated"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/archive": {
+      "post": {
+        "summary": "Archive collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Collection archived"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/spans/{span_id}/add": {
+      "post": {
+        "summary": "Add span to collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span added"
+          }
+        }
+      }
+    },
+    "/v1/collections/{id}/spans/{span_id}/remove": {
+      "post": {
+        "summary": "Remove span from collection",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span removed"
+          }
+        }
+      }
+    },
+    "/v1/records/list": {
+      "post": {
+        "summary": "List records",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records list"
+          }
+        }
+      }
+    },
+    "/v1/schemas/{namespace}/{name}": {
+      "post": {
+        "summary": "List data schemas",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schemas list"
+          }
+        }
+      }
+    },
+    "/v1/spans/{id}/update": {
+      "post": {
+        "summary": "Update span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Span updated"
+          }
+        }
+      }
+    },
+    "/v1/spans/{id}/delete": {
+      "post": {
+        "summary": "Delete span",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Span deleted"
+          }
+        }
+      }
+    },
+    "/v1/records/{id}/update": {
+      "post": {
+        "summary": "Update record with optimistic concurrency",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_version"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object"
+                  },
+                  "expected_version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Record updated successfully"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Record not found"
+          },
+          "409": {
+            "description": "Optimistic concurrency conflict"
+          },
+          "422": {
+            "description": "Schema validation failed"
+          }
+        }
+      }
+    }
+  }
+}

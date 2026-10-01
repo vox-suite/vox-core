@@ -12,6 +12,13 @@ use vox_core::{
     domain::identity::Actor,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/schemas",
+    tag = "schemas",
+    request_body = vox_core::application::schemas::CreateSchemaVersionInput,
+    responses((status = 201, body = vox_core::domain::schemas::DataSchema))
+)]
 pub async fn create_schema_version(
     State(service): State<SchemaService>,
     Extension(actor): Extension<Actor>,
@@ -24,6 +31,13 @@ pub async fn create_schema_version(
     Ok((StatusCode::CREATED, Json(schema)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/schemas/{namespace}/{name}",
+    tag = "schemas",
+    params(("namespace" = String, Path), ("name" = String, Path)),
+    responses((status = 200, body = vox_core::domain::schemas::DataSchema))
+)]
 pub async fn get_schema_by_name(
     State(service): State<SchemaService>,
     Extension(actor): Extension<Actor>,
@@ -39,6 +53,12 @@ pub async fn get_schema_by_name(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/me/schemas",
+    tag = "schemas",
+    responses((status = 200, body = Vec<vox_core::domain::schemas::DataSchema>))
+)]
 pub async fn list_schemas(
     State(service): State<SchemaService>,
     Extension(actor): Extension<Actor>,
