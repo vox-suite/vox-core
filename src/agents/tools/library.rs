@@ -45,6 +45,15 @@ pub struct AgentLibrary {
     apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     context: ResolvedUserContext,
     agent: String,
+    task_binding: Option<TaskBinding>,
+}
+
+#[derive(Clone)]
+struct TaskBinding {
+    task_id: Uuid,
+    run_id: Uuid,
+    lease_owner: String,
+    lease_generation: i64,
 }
 
 impl AgentLibrary {
@@ -59,7 +68,26 @@ impl AgentLibrary {
             apps,
             context,
             agent,
+            task_binding: None,
         }
+    }
+
+    /// Background proposals belong to the actual executing run. A lease fence
+    /// prevents a cancelled or superseded worker from creating a new decision.
+    pub fn with_task_binding(
+        mut self,
+        task_id: Uuid,
+        run_id: Uuid,
+        lease_owner: String,
+        lease_generation: i64,
+    ) -> Self {
+        self.task_binding = Some(TaskBinding {
+            task_id,
+            run_id,
+            lease_owner,
+            lease_generation,
+        });
+        self
     }
 
     pub async fn invoke(&self, request: LibraryRequest) -> Result<Value, LibraryError> {
@@ -142,13 +170,37 @@ impl AgentLibrary {
                     .map_err(|_| LibraryError)?;
                 validate_proposable_tool(&[tool], connection_id, &tool_name, &arguments)?;
                 let tasks = crate::durable_tasks::DurableTaskService::new(db.clone());
-                let task_id = Uuid::new_v4();
-                let run_id = Uuid::new_v4();
-                let proposal = crate::approvals::ApprovalService::new(db.clone()).propose_with_new_task(&self.context, crate::approvals::CreateProposalRequest {
-                    span_id:task_id, task_run_id:run_id, agent_external_key:self.agent.clone(), capability_external_key:tool_name.clone(),
-                    details:json!({"execution":{"connection_id":connection_id},"invocation":{"tool_name":tool_name,"arguments":arguments},"disclosure":disclosure}),
-                    expires_at:chrono::Utc::now()+chrono::Duration::minutes(15), replaces_proposal_id:None,
-                },title,chrono::Utc::now()).await.map_err(|_| LibraryError)?;
+                let (task_id, run_id) = self
+                    .task_binding
+                    .as_ref()
+                    .map(|binding| (binding.task_id, binding.run_id))
+                    .unwrap_or_else(|| (Uuid::new_v4(), Uuid::new_v4()));
+                let request = crate::approvals::CreateProposalRequest {
+                    span_id: task_id,
+                    task_run_id: run_id,
+                    agent_external_key: self.agent.clone(),
+                    capability_external_key: tool_name.clone(),
+                    details: json!({"execution":{"connection_id":connection_id},"invocation":{"tool_name":tool_name,"arguments":arguments},"disclosure":disclosure}),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(15),
+                    replaces_proposal_id: None,
+                };
+                let approvals = crate::approvals::ApprovalService::new(db.clone());
+                let proposal = if let Some(binding) = &self.task_binding {
+                    approvals
+                        .propose_for_run(
+                            &self.context,
+                            request,
+                            chrono::Utc::now(),
+                            &binding.lease_owner,
+                            binding.lease_generation,
+                        )
+                        .await
+                } else {
+                    approvals
+                        .propose_with_new_task(&self.context, request, title, chrono::Utc::now())
+                        .await
+                }
+                .map_err(|_| LibraryError)?;
                 let task = tasks
                     .get(&self.context, task_id)
                     .await

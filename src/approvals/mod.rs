@@ -67,7 +67,27 @@ impl ApprovalService {
         r: CreateProposalRequest,
         now: DateTime<Utc>,
     ) -> Result<Proposal, ApprovalError> {
-        self.propose_inner(context, r, now, None).await
+        self.propose_inner(context, r, now, None, None).await
+    }
+
+    /// A worker can prepare a decision only while it owns the current run
+    /// lease. Proposal creation and the approval wait are one transaction.
+    pub async fn propose_for_run(
+        &self,
+        context: &ResolvedUserContext,
+        request: CreateProposalRequest,
+        now: DateTime<Utc>,
+        lease_owner: &str,
+        lease_generation: i64,
+    ) -> Result<Proposal, ApprovalError> {
+        self.propose_inner(
+            context,
+            request,
+            now,
+            None,
+            Some((lease_owner, lease_generation)),
+        )
+        .await
     }
 
     /// Create a proposal and its waiting task atomically. No worker can claim
@@ -84,7 +104,7 @@ impl ApprovalService {
             .selected_for_context(context, &r.agent_external_key)
             .await
             .map_err(|_| ApprovalError::Invalid)?;
-        self.propose_inner(context, r, now, Some(title)).await
+        self.propose_inner(context, r, now, Some(title), None).await
     }
 
     async fn propose_inner(
@@ -93,6 +113,7 @@ impl ApprovalService {
         r: CreateProposalRequest,
         now: DateTime<Utc>,
         new_task_title: Option<String>,
+        run_fence: Option<(&str, i64)>,
     ) -> Result<Proposal, ApprovalError> {
         let agent = key(&r.agent_external_key, 255)?;
         let capability = key(&r.capability_external_key, 511)?;
@@ -188,6 +209,30 @@ impl ApprovalService {
             }
         }
         let mut tx = self.db.pool().begin().await?;
+        if let Some((owner, generation)) = run_fence {
+            let valid = sqlx::query_scalar::<_, Uuid>(
+                "SELECT j.id FROM jobs j JOIN spans s ON s.id=j.span_id \
+                 JOIN assigned_task_runs run ON run.job_id=j.id \
+                 WHERE j.id=$1 AND s.id=$2 AND j.user_context_id=$3 \
+                 AND s.user_id=$4 AND s.user_context_id=$3 AND run.user_context_id=$3 \
+                 AND run.actor_snapshot->'agent'->'definition'->>'external_key'=$5 \
+                 AND j.state='running' AND j.wait_reason IS NULL \
+                 AND j.lease_owner=$6 AND j.lease_generation=$7 AND j.lease_expires_at>now() \
+                 AND s.status <> 'cancelled' FOR UPDATE OF j,run",
+            )
+            .bind(r.task_run_id)
+            .bind(r.span_id)
+            .bind(context.id.0)
+            .bind(context.user_id.0)
+            .bind(&agent)
+            .bind(owner)
+            .bind(generation)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if valid.is_none() {
+                return Err(ApprovalError::NotApprovable);
+            }
+        }
         if let Some(title) = new_task_title {
             sqlx::query("INSERT INTO spans(id,user_id,user_context_id,title,notes,status,execution_type) VALUES($1,$2,$3,$4,'Exact connection proposal','planned','interactive')")
                 .bind(r.span_id).bind(context.user_id.0).bind(context.id.0).bind(title).execute(&mut *tx).await?;
@@ -240,6 +285,19 @@ impl ApprovalService {
         .bind(r.expires_at)
         .fetch_one(&mut *tx)
         .await?;
+        if run_fence.is_some() {
+            sqlx::query("UPDATE assigned_task_runs SET pending_proposal_id=$2 WHERE job_id=$1")
+                .bind(r.task_run_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE jobs SET state='pending',wait_reason='approval',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1")
+                .bind(r.task_run_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE spans SET execution_result=$2,updated_at=now() WHERE id=$1")
+                .bind(r.span_id)
+                .bind(serde_json::json!({"state":"waiting","wait_reason":"approval","proposal_id":id}))
+                .execute(&mut *tx).await?;
+        }
         tx.commit().await?;
         Ok(Proposal {
             id,
