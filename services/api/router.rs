@@ -3,7 +3,7 @@
 */
 use axum::{
     Router, middleware,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 
 use crate::{
@@ -191,6 +191,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/me/spaces/{id}/commit",
             post(crate::routes::spaces::commit_space),
+        )
+        .route(
+            "/v1/me/spaces/{id}/messages",
+            get(crate::routes::spaces::list_space_messages),
+        )
+        .route(
+            "/v1/me/spaces/{id}/nodes/{node_id}",
+            patch(crate::routes::spaces::update_space_node),
         )
         .with_state(space_api_state);
 

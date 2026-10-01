@@ -11,7 +11,7 @@ use crate::{
     },
     config::Config,
     db::Db,
-    domain::spaces::{AgentSpec, SpaceGraph, SpaceState},
+    domain::spaces::{AgentSpec, RunState, SpaceGraph, SpaceState},
     identity::{ResourceOwner, UserId},
     realtime::UserEventHub,
     storage::spaces::SpaceRepository,
@@ -68,6 +68,33 @@ impl SpaceRuntime {
             return Ok(());
         };
 
+        let _ = repo.set_run_state(space_id, RunState::Running, None).await;
+        if let Some(hub) = &self.user_events {
+            hub.notify(
+                space.user_id,
+                serde_json::json!({
+                    "type": "space_run_started",
+                    "space_id": space_id
+                }),
+            );
+        }
+
+        let user_msg_text = match user_message {
+            Some(ref msg) => msg.clone(),
+            None => space.intent.clone(),
+        };
+        let user_msg = repo.add_message(space_id, "user", &user_msg_text).await;
+        if let (Ok(msg), Some(hub)) = (user_msg, &self.user_events) {
+            hub.notify(
+                space.user_id,
+                serde_json::json!({
+                    "type": "space_message_created",
+                    "space_id": space_id,
+                    "message": msg
+                }),
+            );
+        }
+
         let graph: Option<SpaceGraph> = repo
             .get_graph(space.user_id, space_id)
             .await
@@ -114,6 +141,21 @@ impl SpaceRuntime {
         );
 
         let Ok(client) = gemini::Client::new(&self.gemini_api_key) else {
+            let err_text = "Failed to initialize Gemini client".to_string();
+            let _ = repo
+                .set_run_state(space_id, RunState::Failed, Some(&err_text))
+                .await;
+            let _ = repo.add_message(space_id, "system", &err_text).await;
+            if let Some(hub) = &self.user_events {
+                hub.notify(
+                    space.user_id,
+                    serde_json::json!({
+                        "type": "space_run_failed",
+                        "space_id": space_id,
+                        "error": err_text
+                    }),
+                );
+            }
             return Err(AgentError::Provider);
         };
 
@@ -187,7 +229,40 @@ impl SpaceRuntime {
             .default_max_turns(max_steps)
             .build();
 
-        let _ = agent.prompt(prompt_input).await;
+        let mut failed = false;
+        match agent.prompt(prompt_input).await {
+            Ok(reply) => {
+                let asst_msg = repo.add_message(space_id, "assistant", &reply).await;
+                if let (Ok(msg), Some(hub)) = (asst_msg, &self.user_events) {
+                    hub.notify(
+                        space.user_id,
+                        serde_json::json!({
+                            "type": "space_message_created",
+                            "space_id": space_id,
+                            "message": msg
+                        }),
+                    );
+                }
+            }
+            Err(err) => {
+                let err_text = err.to_string();
+                let _ = repo
+                    .set_run_state(space_id, RunState::Failed, Some(&err_text))
+                    .await;
+                let _ = repo.add_message(space_id, "system", &err_text).await;
+                if let Some(hub) = &self.user_events {
+                    hub.notify(
+                        space.user_id,
+                        serde_json::json!({
+                            "type": "space_run_failed",
+                            "space_id": space_id,
+                            "error": err_text
+                        }),
+                    );
+                }
+                failed = true;
+            }
+        }
 
         let _ = repo.finish_running_nodes(space_id).await;
 
@@ -209,6 +284,19 @@ impl SpaceRuntime {
                     "space_id": space_id
                 }),
             );
+        }
+
+        if !failed {
+            let _ = repo.set_run_state(space_id, RunState::Idle, None).await;
+            if let Some(hub) = &self.user_events {
+                hub.notify(
+                    space.user_id,
+                    serde_json::json!({
+                        "type": "space_run_finished",
+                        "space_id": space_id
+                    }),
+                );
+            }
         }
 
         Ok(())

@@ -1,7 +1,11 @@
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::domain::spaces::{NodeState, Space, SpaceEdge, SpaceGraph, SpaceNode, SpaceState};
+use crate::domain::spaces::{
+    NodeState, RunState, Space, SpaceEdge, SpaceGraph, SpaceMessage, SpaceNode, SpaceState,
+};
+
+const SPACE_COLUMNS: &str = "id, user_id, title, intent, state, agent_spec, committed_collection_id, run_state, run_error, created_at, updated_at";
 
 #[derive(Clone)]
 pub struct SpaceRepository {
@@ -25,36 +29,38 @@ impl SpaceRepository {
         state: SpaceState,
         agent_spec: serde_json::Value,
     ) -> Result<Space, sqlx::Error> {
-        let row = sqlx::query(
+        let query = format!(
             r#"
             INSERT INTO spaces (user_id, title, intent, state, agent_spec)
             VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, user_id, title, intent, state, agent_spec, committed_collection_id, created_at, updated_at
-            "#,
-        )
-        .bind(user_id)
-        .bind(title)
-        .bind(intent)
-        .bind(state.as_str())
-        .bind(agent_spec)
-        .fetch_one(&self.pool)
-        .await?;
+            RETURNING {SPACE_COLUMNS}
+            "#
+        );
+        let row = sqlx::query(&query)
+            .bind(user_id)
+            .bind(title)
+            .bind(intent)
+            .bind(state.as_str())
+            .bind(agent_spec)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(map_space_row(row))
     }
 
     pub async fn list_spaces(&self, user_id: Uuid) -> Result<Vec<Space>, sqlx::Error> {
-        let rows = sqlx::query(
+        let query = format!(
             r#"
-            SELECT id, user_id, title, intent, state, agent_spec, committed_collection_id, created_at, updated_at
+            SELECT {SPACE_COLUMNS}
             FROM spaces
-            WHERE user_id = $1
+            WHERE user_id = $1 AND state != 'dropped'
             ORDER BY created_at DESC
-            "#,
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
+            "#
+        );
+        let rows = sqlx::query(&query)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(rows.into_iter().map(map_space_row).collect())
     }
@@ -64,34 +70,96 @@ impl SpaceRepository {
         user_id: Uuid,
         space_id: Uuid,
     ) -> Result<Option<Space>, sqlx::Error> {
-        let row = sqlx::query(
+        let query = format!(
             r#"
-            SELECT id, user_id, title, intent, state, agent_spec, committed_collection_id, created_at, updated_at
+            SELECT {SPACE_COLUMNS}
             FROM spaces
             WHERE user_id = $1 AND id = $2
-            "#,
-        )
-        .bind(user_id)
-        .bind(space_id)
-        .fetch_optional(&self.pool)
-        .await?;
+            "#
+        );
+        let row = sqlx::query(&query)
+            .bind(user_id)
+            .bind(space_id)
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(row.map(map_space_row))
     }
 
     pub async fn get_space_by_id_only(&self, space_id: Uuid) -> Result<Option<Space>, sqlx::Error> {
-        let row = sqlx::query(
+        let query = format!(
             r#"
-            SELECT id, user_id, title, intent, state, agent_spec, committed_collection_id, created_at, updated_at
+            SELECT {SPACE_COLUMNS}
             FROM spaces
             WHERE id = $1
+            "#
+        );
+        let row = sqlx::query(&query)
+            .bind(space_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(map_space_row))
+    }
+
+    pub async fn set_run_state(
+        &self,
+        space_id: Uuid,
+        run_state: RunState,
+        run_error: Option<&str>,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE spaces
+            SET run_state = $1, run_error = $2, updated_at = now()
+            WHERE id = $3
+            "#,
+        )
+        .bind(run_state.as_str())
+        .bind(run_error)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn add_message(
+        &self,
+        space_id: Uuid,
+        role: &str,
+        text: &str,
+    ) -> Result<SpaceMessage, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO space_messages (space_id, role, text)
+            VALUES ($1, $2, $3)
+            RETURNING id, space_id, role, text, created_at
             "#,
         )
         .bind(space_id)
-        .fetch_optional(&self.pool)
+        .bind(role)
+        .bind(text)
+        .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.map(map_space_row))
+        Ok(map_message_row(row))
+    }
+
+    pub async fn list_messages(&self, space_id: Uuid) -> Result<Vec<SpaceMessage>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, space_id, role, text, created_at
+            FROM space_messages
+            WHERE space_id = $1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(space_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(map_message_row).collect())
     }
 
     pub async fn update_space_state(
@@ -412,6 +480,56 @@ impl SpaceRepository {
         Ok(rows.into_iter().map(map_edge_row).collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_node_scoped(
+        &self,
+        user_id: Uuid,
+        space_id: Uuid,
+        node_id: Uuid,
+        title: Option<&str>,
+        body: Option<&str>,
+        data: Option<serde_json::Value>,
+        state: Option<NodeState>,
+        position: Option<serde_json::Value>,
+        provenance: Option<serde_json::Value>,
+    ) -> Result<Option<SpaceNode>, sqlx::Error> {
+        let existing = self.get_node(space_id, node_id).await?;
+        let Some(curr) = existing else {
+            return Ok(None);
+        };
+
+        let new_title = title.unwrap_or(&curr.title);
+        let new_body = body.unwrap_or(&curr.body);
+        let new_data = data.unwrap_or(curr.data);
+        let new_state = state.unwrap_or(curr.state);
+        let new_position = position.unwrap_or(curr.position);
+        let new_provenance = provenance.unwrap_or(curr.provenance);
+
+        let row = sqlx::query(
+            r#"
+            UPDATE space_nodes sn
+            SET title = $1, body = $2, data = $3, state = $4, position = $5,
+                provenance = $6, version = sn.version + 1, updated_at = now()
+            FROM spaces s
+            WHERE sn.space_id = s.id AND s.user_id = $7 AND sn.space_id = $8 AND sn.id = $9
+            RETURNING sn.id, sn.space_id, sn.kind, sn.title, sn.body, sn.data, sn.state, sn.position, sn.derived_from, sn.provenance, sn.version, sn.created_at, sn.updated_at
+            "#,
+        )
+        .bind(new_title)
+        .bind(new_body)
+        .bind(new_data)
+        .bind(new_state.as_str())
+        .bind(new_position)
+        .bind(new_provenance)
+        .bind(user_id)
+        .bind(space_id)
+        .bind(node_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(map_node_row))
+    }
+
     pub async fn get_graph(
         &self,
         user_id: Uuid,
@@ -432,6 +550,7 @@ impl SpaceRepository {
 
 fn map_space_row(row: sqlx::postgres::PgRow) -> Space {
     let state_raw: String = row.get("state");
+    let run_state_raw: String = row.get("run_state");
     Space {
         id: row.get("id"),
         user_id: row.get("user_id"),
@@ -440,6 +559,8 @@ fn map_space_row(row: sqlx::postgres::PgRow) -> Space {
         state: SpaceState::parse(&state_raw).unwrap_or(SpaceState::Ideating),
         agent_spec: row.get("agent_spec"),
         committed_collection_id: row.get("committed_collection_id"),
+        run_state: RunState::parse(&run_state_raw).unwrap_or(RunState::Idle),
+        run_error: row.get("run_error"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -470,6 +591,16 @@ fn map_edge_row(row: sqlx::postgres::PgRow) -> SpaceEdge {
         space_id: row.get("space_id"),
         from_node: row.get("from_node"),
         to_node: row.get("to_node"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn map_message_row(row: sqlx::postgres::PgRow) -> SpaceMessage {
+    SpaceMessage {
+        id: row.get("id"),
+        space_id: row.get("space_id"),
+        role: row.get("role"),
+        text: row.get("text"),
         created_at: row.get("created_at"),
     }
 }

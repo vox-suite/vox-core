@@ -92,6 +92,43 @@ pub struct AgentSpec {
     pub limits: AgentSpecLimits,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    #[default]
+    Idle,
+    Running,
+    Failed,
+}
+
+impl RunState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "idle" => Some(Self::Idle),
+            "running" => Some(Self::Running),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceMessage {
+    pub id: Uuid,
+    pub space_id: Uuid,
+    pub role: String,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Space {
     pub id: Uuid,
@@ -101,6 +138,8 @@ pub struct Space {
     pub state: SpaceState,
     pub agent_spec: serde_json::Value,
     pub committed_collection_id: Option<Uuid>,
+    pub run_state: RunState,
+    pub run_error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

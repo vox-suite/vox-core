@@ -17,7 +17,7 @@ use vox_core::{
     domain::{
         collections::CollectionKind,
         identity::Actor,
-        spaces::{Space, SpaceGraph, SpaceState},
+        spaces::{NodeState, Space, SpaceGraph, SpaceMessage, SpaceNode, SpaceState},
     },
     realtime::UserEventHub,
     storage::spaces::SpaceRepository,
@@ -42,6 +42,14 @@ pub struct CreateSpaceInput {
 #[derive(Debug, Deserialize)]
 pub struct SendSpaceChatInput {
     pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateSpaceNodeInput {
+    pub state: Option<String>,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub position: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -314,4 +322,118 @@ pub async fn commit_space(
         collection_id,
         committed_spans_count,
     }))
+}
+
+pub async fn list_space_messages(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<SpaceMessage>>, StatusCode> {
+    let existing = state
+        .spaces
+        .get_space(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if existing.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let messages = state
+        .spaces
+        .list_messages(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(messages))
+}
+
+pub async fn update_space_node(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path((id, node_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<UpdateSpaceNodeInput>,
+) -> Result<Json<SpaceNode>, StatusCode> {
+    let parsed_state = match input.state.as_deref() {
+        Some("done") => Some(NodeState::Done),
+        Some("rejected") => Some(NodeState::Rejected),
+        Some(_) => return Err(StatusCode::BAD_REQUEST),
+        None => None,
+    };
+
+    let existing_space = state
+        .spaces
+        .get_space(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let Some(space) = existing_space else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    if matches!(space.state, SpaceState::Committed | SpaceState::Dropped) {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let existing_node = state
+        .spaces
+        .get_node(id, node_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if existing_node.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let updated = state
+        .spaces
+        .update_node_scoped(
+            actor.user_id,
+            id,
+            node_id,
+            input.title.as_deref(),
+            input.body.as_deref(),
+            None,
+            parsed_state,
+            input.position,
+            None,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let Some(node) = updated else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    if parsed_state == Some(NodeState::Rejected) {
+        let stale = state
+            .spaces
+            .mark_descendants_stale(id, node.id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        for stale_id in stale {
+            if let Ok(Some(n)) = state.spaces.get_node(id, stale_id).await {
+                state.user_events.notify(
+                    actor.user_id,
+                    json!({
+                        "type": "space_node_updated",
+                        "space_id": id,
+                        "node": n
+                    }),
+                );
+            }
+        }
+    }
+
+    state.user_events.notify(
+        actor.user_id,
+        json!({
+            "type": "space_node_updated",
+            "space_id": id,
+            "node": node
+        }),
+    );
+
+    Ok(Json(node))
 }
