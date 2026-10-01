@@ -1,5 +1,5 @@
 /**
- * Redis-backed minimal user cache (name, phone, device types, channels, recent recaps).
+ * Redis-backed minimal user cache (name, phone, device types, channels).
  */
 use crate::{identity::UserId, redis_keys};
 use async_trait::async_trait;
@@ -68,12 +68,6 @@ pub fn device_kinds<'a>(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Recap {
-    pub recap: String,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MinimalChannel {
     pub channel: String,
     pub external_id: String,
@@ -100,16 +94,6 @@ pub trait ContextCache: Send + Sync {
 
     /// Replace the entire minimal-user cache from a Postgres snapshot.
     async fn replace_users(&self, _users: &[(UserId, MinimalUserInfo)]) -> Result<(), CacheError> {
-        Ok(())
-    }
-
-    /// Recent conversation recaps for a user, newest first.
-    async fn get_recaps(&self, _user_id: UserId) -> Result<Vec<Recap>, CacheError> {
-        Ok(Vec::new())
-    }
-
-    /// Replace every user's recap entry from a Postgres snapshot.
-    async fn replace_recaps(&self, _recaps: &[(UserId, Vec<Recap>)]) -> Result<(), CacheError> {
         Ok(())
     }
 }
@@ -225,33 +209,6 @@ impl ContextCache for RedisContextCache {
                     )
                     .ignore();
             }
-        }
-        pipeline
-            .query_async::<()>(&mut connection)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn get_recaps(&self, user_id: UserId) -> Result<Vec<Recap>, CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        let payload: Option<String> = connection.get(redis_keys::recaps(user_id)).await?;
-        match payload {
-            Some(raw) => serde_json::from_str(&raw).map_err(|_| CacheError::Payload),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    async fn replace_recaps(&self, recaps: &[(UserId, Vec<Recap>)]) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        Self::delete_pattern(&mut connection, redis_keys::RECAPS_SCAN).await?;
-        if recaps.is_empty() {
-            return Ok(());
-        }
-        let mut pipeline = redis::pipe();
-        pipeline.atomic();
-        for (user_id, entries) in recaps {
-            let payload = serde_json::to_string(entries).map_err(|_| CacheError::Payload)?;
-            pipeline.set(redis_keys::recaps(*user_id), payload).ignore();
         }
         pipeline
             .query_async::<()>(&mut connection)

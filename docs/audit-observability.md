@@ -54,3 +54,9 @@ references, tool names, duration and outcomes remain available for diagnosis.
 This is separate from opt-in agent content tracing; enabling content tracing
 does not add these values back to process logs. These checks do not certify
 all provider SDK or channel-adapter diagnostics as content-free.
+
+## Identity cache and conversation memory
+
+Redis identity synchronization stores minimal routing metadata only. Conversation recaps stay in PostgreSQL and are loaded through the agent/context ownership and retention boundary; the unused user-wide recap projection has been removed. This also removes the full conversation-summary scan from each identity synchronization.
+
+A deployment that ran the recap projection may still retain existing `vox:recaps:*` Redis entries. Code removal stops new copies but does not certify those old entries are gone. Operators must remove only that retired key family from the affected Redis instance through an approved protected maintenance session and retain a count-only verification. Preserve identity keys, queues and PostgreSQL conversation records. Track current Railway cleanup evidence in https://github.com/vox-suite/vox-deploy/issues/19.

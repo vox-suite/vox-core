@@ -1,9 +1,9 @@
 /**
- * Minimal user and recent-recap Redis sync from PostgreSQL.
+ * Minimal identity Redis sync from PostgreSQL.
  */
 use super::{
     MemoryService,
-    cache::{CacheError, MinimalChannel, MinimalUserInfo, Recap, device_kinds},
+    cache::{CacheError, MinimalChannel, MinimalUserInfo, device_kinds},
 };
 use crate::identity::UserId;
 use std::collections::HashMap;
@@ -86,32 +86,6 @@ impl MemoryService {
         let count = users.len();
         cache.replace_users(&users).await?;
 
-        // Last 5 summarized conversations per user, general agent only so specialist
-        // agents' content never surfaces in a user-wide entry.
-        let mut recaps: HashMap<Uuid, Vec<Recap>> = HashMap::new();
-        for (user_id, recap, updated_at) in
-            sqlx::query_as::<_, (Uuid, String, chrono::DateTime<chrono::Utc>)>(
-                "SELECT user_id, recap, updated_at FROM ( \
-                 SELECT user_id, latest_summary->>'recap' AS recap, updated_at, \
-                        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC) AS rn \
-                 FROM conversations \
-                 WHERE summary_version > 0 AND agent_external_key = 'general' \
-             ) ranked WHERE rn <= 5 AND recap IS NOT NULL AND recap <> '' \
-             ORDER BY user_id, updated_at DESC",
-            )
-            .fetch_all(self.db.pool())
-            .await?
-        {
-            recaps
-                .entry(user_id)
-                .or_default()
-                .push(Recap { recap, updated_at });
-        }
-        let recaps: Vec<(UserId, Vec<Recap>)> = recaps
-            .into_iter()
-            .map(|(id, entries)| (UserId(id), entries))
-            .collect();
-        cache.replace_recaps(&recaps).await?;
         Ok(count)
     }
 
