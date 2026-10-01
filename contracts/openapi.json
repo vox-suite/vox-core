@@ -410,21 +410,6 @@
         }
       }
     },
-    "/v1/conversations/speculate": {
-      "post": {
-        "summary": "Speculative opening retrieval",
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Speculative response"
-          }
-        }
-      }
-    },
     "/v1/events": {
       "post": {
         "summary": "Ingest inbound observation event",
