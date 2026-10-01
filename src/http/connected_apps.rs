@@ -221,17 +221,9 @@ pub async fn execute_tool(
     if execution.state != "pending" {
         return (StatusCode::OK, Json(execution)).into_response();
     }
-    // This transition is the dispatch claim. A concurrent request with the
-    // same idempotency key cannot move reconciling back to dispatchable.
+    // Claim against current cancellation state before contacting the provider.
     if executions
-        .record_outcome(
-            &c,
-            execution.id,
-            AdapterOutcome::Reconciling {
-                provider_reference: None,
-            },
-            chrono::Utc::now(),
-        )
+        .claim_dispatch(&c, execution.id, chrono::Utc::now())
         .await
         .is_err()
     {

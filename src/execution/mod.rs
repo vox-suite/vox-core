@@ -118,6 +118,27 @@ impl ExecutionCoordinator {
             tx.commit().await?;
             return Ok(result);
         }
+        let task = sqlx::query_scalar::<_, Uuid>(
+            "SELECT s.id FROM spans s JOIN action_proposals p ON p.span_id=s.id
+             JOIN action_approvals a ON a.proposal_id=p.id
+             WHERE a.id=$1 AND a.user_id=$2 AND a.user_context_id=$3
+               AND p.user_context_id=$3 AND s.user_id=$2 AND s.user_context_id=$3
+               AND s.status<>'cancelled'
+               AND NOT EXISTS (
+                   SELECT 1 FROM assigned_task_runs r JOIN jobs j ON j.id=r.job_id
+                   WHERE r.job_id=p.job_id AND (r.user_context_id<>$3
+                     OR r.deadline_at<=now() OR j.state='cancelled' OR j.wait_reason='budget'
+                     OR j.attempt_count>j.max_attempts OR r.tool_calls>r.max_tool_calls)
+               ) FOR UPDATE OF s",
+        )
+        .bind(request.approval_id)
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if task.is_none() {
+            return Err(ExecutionError::Unavailable);
+        }
         let row = sqlx::query(
             "SELECT a.proposal_id, a.consumed_execution_id, p.details, p.details_hash, p.expires_at, \
                     p.state, p.capability, p.connection_id, p.actor_key \
@@ -251,6 +272,55 @@ impl ExecutionCoordinator {
         })
     }
 
+    /// Claim a not-yet-dispatched execution against the current task state.
+    /// Once claimed, cancellation cannot assert that an external effect stopped;
+    /// its eventual result must still be recorded or reconciled.
+    pub async fn claim_dispatch(
+        &self,
+        context: &ResolvedUserContext,
+        execution_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), ExecutionError> {
+        let mut tx = self.db.pool().begin().await?;
+        let task = sqlx::query_scalar::<_, Uuid>(
+            "SELECT s.id FROM spans s JOIN action_proposals p ON p.span_id=s.id
+             JOIN executions e ON e.proposal_id=p.id
+             WHERE e.id=$1 AND e.user_id=$2 AND e.user_context_id=$3
+               AND p.user_context_id=$3 AND s.user_id=$2 AND s.user_context_id=$3
+               AND s.status<>'cancelled'
+               AND NOT EXISTS (
+                   SELECT 1 FROM assigned_task_runs r JOIN jobs j ON j.id=r.job_id
+                   WHERE r.job_id=p.job_id AND (r.user_context_id<>$3
+                     OR r.deadline_at<=now() OR j.state='cancelled' OR j.wait_reason='budget'
+                     OR j.attempt_count>j.max_attempts OR r.tool_calls>r.max_tool_calls)
+               ) FOR UPDATE OF s",
+        )
+        .bind(execution_id)
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if task.is_none() {
+            return Err(ExecutionError::Unavailable);
+        }
+        let changed = sqlx::query(
+            "UPDATE executions SET state='reconciling',updated_at=$4
+             WHERE id=$1 AND user_id=$2 AND user_context_id=$3 AND state='pending'",
+        )
+        .bind(execution_id)
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if changed != 1 {
+            return Err(ExecutionError::Unavailable);
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn dispatch(
         &self,
         context: &ResolvedUserContext,
@@ -259,17 +329,9 @@ impl ExecutionCoordinator {
         now: DateTime<Utc>,
     ) -> Result<Execution, ExecutionError> {
         let request = self.adapter_request(context, execution_id).await?;
-        self.record_outcome(
-            context,
-            execution_id,
-            AdapterOutcome::Reconciling {
-                provider_reference: None,
-            },
-            now,
-        )
-        .await?;
+        self.claim_dispatch(context, execution_id, now).await?;
         let outcome = adapter.dispatch(request).await;
-        self.record_outcome(context, execution_id, outcome, now)
+        self.record_dispatched_outcome(context, execution_id, outcome, now)
             .await
     }
 
@@ -514,4 +576,228 @@ fn confirmation_evidence_is_present(evidence: &Value) -> bool {
     evidence
         .as_object()
         .is_some_and(|object| !object.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        approvals::ApprovalService,
+        durable_tasks::{DurableTaskService, StartTaskRequest},
+        identity::IdentityService,
+    };
+    use serde_json::json;
+
+    struct MockAdapter(std::sync::atomic::AtomicUsize);
+    #[async_trait::async_trait]
+    impl ExecutionAdapter for MockAdapter {
+        async fn dispatch(&self, _: AdapterRequest) -> AdapterOutcome {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            AdapterOutcome::Failed {
+                code: "unexpected_dispatch".into(),
+            }
+        }
+        async fn reconcile(&self, _: AdapterRequest, _: Option<&str>) -> AdapterOutcome {
+            AdapterOutcome::Succeeded {
+                provider_reference: "fixture-confirmed".into(),
+                evidence: json!({"verified": true}),
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL"]
+    async fn cancelled_task_denies_new_approval_start_and_dispatch() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let context = IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let tasks = DurableTaskService::new(db.clone());
+        let approvals = ApprovalService::new(db.clone());
+        let executions = ExecutionCoordinator::new(db.clone());
+        for scenario in [
+            "approve",
+            "start",
+            "dispatch",
+            "reconcile",
+            "budget_start",
+            "deadline_start",
+            "budget_dispatch",
+            "deadline_dispatch",
+        ] {
+            let task = tasks
+                .start(
+                    &context,
+                    StartTaskRequest {
+                        title: scenario.into(),
+                        instruction: "Explicit assigned work".into(),
+                        agent_external_key: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let details = json!({"fixture":"exact approved content"});
+            let digest = hex::encode(Sha256::digest(serde_json::to_vec(&details).unwrap()));
+            let proposal:Uuid = sqlx::query_scalar("INSERT INTO action_proposals(user_id,user_context_id,span_id,job_id,actor_key,capability,details,details_hash,expires_at) VALUES($1,$2,$3,$4,$5,'fixture.write',$6,$7,now()+interval '1 hour') RETURNING id")
+                .bind(user).bind(context.id.0).bind(task.id).bind(task.run_id).bind(task.agent_external_key.as_ref().unwrap()).bind(&details).bind(digest).fetch_one(db.pool()).await.unwrap();
+            let approval = if scenario == "approve" {
+                None
+            } else {
+                Some(
+                    approvals
+                        .approve(&context, proposal, details.clone(), Utc::now())
+                        .await
+                        .unwrap()
+                        .approval_id
+                        .unwrap(),
+                )
+            };
+            let execution = if scenario.ends_with("dispatch") || scenario == "reconcile" {
+                // A persisted, consumed approval is still not provider dispatch.
+                let id:Uuid = sqlx::query_scalar("INSERT INTO executions(user_id,user_context_id,proposal_id,approval_id,idempotency_key) VALUES($1,$2,$3,$4,$5) RETURNING id")
+                    .bind(user).bind(context.id.0).bind(proposal).bind(approval).bind(scenario).fetch_one(db.pool()).await.unwrap();
+                let snapshot = json!({"capability":"fixture.write","identity":{"provider_external_key":"fixture","model_identifier":"fixture","account_reference":"fixture","connection_id":Uuid::new_v4(),"price_amount_minor":0,"price_currency":"USD"}});
+                sqlx::query("UPDATE executions SET provider_snapshot=$2 WHERE id=$1")
+                    .bind(id)
+                    .bind(snapshot)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE action_approvals SET consumed_execution_id=$2 WHERE id=$1")
+                    .bind(approval)
+                    .bind(id)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                Some(id)
+            } else {
+                None
+            };
+            if scenario == "reconcile" {
+                executions
+                    .claim_dispatch(&context, execution.unwrap(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+            if scenario == "reconcile" {
+                sqlx::query("UPDATE assigned_task_runs SET pending_proposal_id=$2 WHERE job_id=$1")
+                    .bind(task.run_id)
+                    .bind(proposal)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE jobs SET state='pending',wait_reason='approval' WHERE id=$1")
+                    .bind(task.run_id)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                let waiting = tasks.get(&context, task.id).await.unwrap();
+                assert_eq!(waiting.state, crate::durable_tasks::RunState::Waiting);
+                assert_eq!(
+                    waiting.wait_reason,
+                    Some(crate::durable_tasks::WaitReason::Reconciliation)
+                );
+                assert_eq!(
+                    waiting.result["checkpoint"]["code"],
+                    "provider_outcome_unconfirmed"
+                );
+            }
+            if scenario.starts_with("budget_") {
+                sqlx::query("UPDATE jobs SET state='pending',wait_reason='budget' WHERE id=$1")
+                    .bind(task.run_id)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+            } else if scenario.starts_with("deadline_") {
+                // Construct an already-expired binding as fixture data. The
+                // production immutable-update trigger remains enabled.
+                sqlx::query("WITH removed AS (DELETE FROM assigned_task_runs WHERE job_id=$1 RETURNING *) INSERT INTO assigned_task_runs SELECT (jsonb_populate_record(NULL::assigned_task_runs,to_jsonb(removed)||jsonb_build_object('deadline_at',now()-interval '1 second'))).* FROM removed")
+                    .bind(task.run_id).execute(db.pool()).await.unwrap();
+            } else {
+                tasks.cancel(&context, task.id).await.unwrap();
+            }
+            if scenario.ends_with("dispatch") {
+                let adapter = MockAdapter(std::sync::atomic::AtomicUsize::new(0));
+                assert!(matches!(
+                    executions
+                        .dispatch(&context, execution.unwrap(), &adapter, Utc::now())
+                        .await,
+                    Err(ExecutionError::Unavailable)
+                ));
+                assert_eq!(adapter.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+            }
+            match scenario {
+                "approve" => assert!(matches!(
+                    approvals
+                        .approve(&context, proposal, details, Utc::now())
+                        .await,
+                    Err(crate::approvals::ApprovalError::NotApprovable)
+                )),
+                "start" | "budget_start" | "deadline_start" => assert!(matches!(
+                    executions
+                        .start(
+                            &context,
+                            StartExecutionRequest {
+                                approval_id: approval.unwrap(),
+                                idempotency_key: scenario.into()
+                            },
+                            Utc::now()
+                        )
+                        .await,
+                    Err(ExecutionError::Unavailable)
+                )),
+                "dispatch" | "budget_dispatch" | "deadline_dispatch" => assert!(matches!(
+                    executions
+                        .claim_dispatch(&context, execution.unwrap(), Utc::now())
+                        .await,
+                    Err(ExecutionError::Unavailable)
+                )),
+                "reconcile" => {
+                    let stopped = tasks.get(&context, task.id).await.unwrap();
+                    assert_eq!(stopped.state, crate::durable_tasks::RunState::Cancelled);
+                    assert_eq!(
+                        stopped.result["checkpoint"]["code"],
+                        "provider_outcome_unconfirmed"
+                    );
+                    assert!(
+                        executions
+                            .claim_dispatch(&context, execution.unwrap(), Utc::now())
+                            .await
+                            .is_err()
+                    );
+                    let reconciled = executions
+                        .reconcile(
+                            &context,
+                            execution.unwrap(),
+                            &MockAdapter(std::sync::atomic::AtomicUsize::new(0)),
+                            Utc::now(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(reconciled.state, "succeeded");
+                    let existing = executions
+                        .start(
+                            &context,
+                            StartExecutionRequest {
+                                approval_id: approval.unwrap(),
+                                idempotency_key: scenario.into(),
+                            },
+                            Utc::now(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(existing.id, execution.unwrap());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
 }
