@@ -191,9 +191,8 @@ fn decode_part(value: &str) -> Result<Vec<u8>, StatusCode> {
 }
 
 fn supabase_base_url() -> Option<String> {
-    ["SUPABASE_URL", "VOX_SUPABASE_URL"]
-        .iter()
-        .find_map(|key| std::env::var(key).ok())
+    std::env::var("SUPABASE_URL")
+        .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
 }

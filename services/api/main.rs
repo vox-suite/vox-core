@@ -85,12 +85,10 @@ async fn main() {
             config.elevenlabs_output_format.clone(),
         ))
     });
-    let stt = config.assemblyai_api_key.as_ref().map(|key| {
-        Arc::new(vox_core::stt::AssemblyAiClient::new(
-            key.clone(),
-            config.assemblyai_speech_model.clone(),
-        ))
-    });
+    let stt = config
+        .assemblyai_api_key
+        .as_ref()
+        .map(|key| Arc::new(vox_core::stt::AssemblyAiClient::new(key.clone())));
     let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> =
         Arc::new(vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config));
     let space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting> =

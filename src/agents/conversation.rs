@@ -75,7 +75,7 @@ impl ConversationAgent {
             api_key: config.gemini_api_key.clone(),
             connected_apps: None,
             db: None,
-            tts_provider: config.tts_provider.clone(),
+            tts_provider: crate::config::TTS_PROVIDER.to_string(),
         })
     }
 

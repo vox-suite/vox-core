@@ -9,7 +9,6 @@ pub struct AssemblyAiClient {
     http: reqwest::Client,
     api_key: String,
     endpoint: String,
-    speech_model: String,
 }
 
 #[derive(Deserialize)]
@@ -26,7 +25,7 @@ struct TranscriptResponse {
 }
 
 impl AssemblyAiClient {
-    pub fn new(api_key: String, speech_model: String) -> Self {
+    pub fn new(api_key: String) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -36,7 +35,6 @@ impl AssemblyAiClient {
             http,
             api_key,
             endpoint: "https://api.assemblyai.com".to_string(),
-            speech_model,
         }
     }
 
@@ -70,13 +68,7 @@ impl AssemblyAiClient {
             .await
             .map_err(|e| format!("AssemblyAI upload response invalid: {e}"))?;
 
-        // "best" is a legacy alias AssemblyAI now rejects; omit the field so the
-        // account's default model is used unless a concrete model is configured.
-        let mut body = serde_json::json!({ "audio_url": upload.upload_url });
-        let model = self.speech_model.trim();
-        if !model.is_empty() && !model.eq_ignore_ascii_case("best") {
-            body["speech_model"] = serde_json::Value::String(model.to_string());
-        }
+        let body = serde_json::json!({ "audio_url": upload.upload_url });
         let response = self
             .http
             .post(format!(
