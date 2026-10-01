@@ -93,3 +93,10 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
         run: cargo test --locked --lib voice_warmup_cannot_inject_user_wide_data_or_share_actor_revisions -- --ignored
+      - name: Durable task context and production worker boundaries
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_durable_tasks
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_durable_tasks
+          cargo test --locked --lib durable_task_context_and_worker_wait_boundaries -- --ignored

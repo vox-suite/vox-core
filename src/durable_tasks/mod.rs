@@ -238,7 +238,7 @@ impl DurableTaskService {
         }
         let mut tx = self.db.pool().begin().await?;
         let row = sqlx::query(
-            "WITH candidate AS (SELECT j.id FROM jobs j JOIN spans t ON t.id=j.span_id WHERE j.kind='execute_span' AND ((j.state='pending' AND j.wait_reason IS NULL) OR (j.state='running' AND j.lease_expires_at <= $1)) AND t.status <> 'cancelled' ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running', lease_owner=$2, lease_expires_at=$3 FROM candidate WHERE j.id=candidate.id RETURNING j.id, j.span_id, j.checkpoint",
+            "WITH candidate AS (SELECT j.id FROM jobs j JOIN spans t ON t.id=j.span_id WHERE j.kind='execute_span' AND j.wait_reason IS NULL AND ((j.state='pending' AND j.available_at <= $1) OR (j.state='running' AND j.lease_expires_at <= $1)) AND t.status <> 'cancelled' ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running', lease_owner=$2, lease_expires_at=$3 FROM candidate WHERE j.id=candidate.id RETURNING j.id, j.span_id, j.checkpoint",
         )
         .bind(now)
         .bind(worker)
@@ -271,10 +271,11 @@ impl DurableTaskService {
         span_id: Uuid,
     ) -> Result<(), DurableTaskError> {
         let exists = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM spans WHERE id=$1 AND user_id=$2 FOR UPDATE",
+            "SELECT id FROM spans WHERE id=$1 AND user_id=$2 AND user_context_id=$3 FOR UPDATE",
         )
         .bind(span_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(&mut **tx)
         .await?;
         if exists.is_some() {
@@ -319,10 +320,11 @@ impl DurableTaskService {
         span_id: Uuid,
     ) -> Result<DurableTask, DurableTaskError> {
         let row = sqlx::query(
-            "SELECT t.title, j.id, j.state, j.wait_reason FROM spans t JOIN jobs j ON j.span_id=t.id WHERE t.id=$1 AND t.user_id=$2 ORDER BY j.created_at DESC LIMIT 1",
+            "SELECT t.title, j.id, j.state, j.wait_reason FROM spans t JOIN jobs j ON j.span_id=t.id WHERE t.id=$1 AND t.user_id=$2 AND t.user_context_id=$3 AND j.user_context_id=$3 AND j.kind='execute_span' ORDER BY j.created_at DESC LIMIT 1",
         )
         .bind(span_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(DurableTaskError::NotFound)?;
@@ -386,5 +388,178 @@ fn wait_name(v: &WaitReason) -> &'static str {
         WaitReason::Approval => "approval",
         WaitReason::Authentication => "authentication",
         WaitReason::Reconciliation => "reconciliation",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{db::jobs::JobRepository, identity::IdentityService};
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL"]
+    async fn durable_task_context_and_worker_wait_boundaries() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let context = IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let service = DurableTaskService::new(db.clone());
+        let task = service
+            .start(
+                &context,
+                StartTaskRequest {
+                    title: "Private assigned work".into(),
+                    instruction: "Prepare a report".into(),
+                    agent_external_key: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut substituted = context.clone();
+        substituted.id = UserContextId(Uuid::new_v4());
+        assert!(matches!(
+            service.get(&substituted, task.id).await,
+            Err(DurableTaskError::NotFound)
+        ));
+        assert!(matches!(
+            service
+                .wait(
+                    &substituted,
+                    task.id,
+                    WaitRequest {
+                        reason: WaitReason::Approval,
+                        checkpoint: serde_json::json!({})
+                    }
+                )
+                .await,
+            Err(DurableTaskError::NotFound)
+        ));
+        assert!(matches!(
+            service.cancel(&substituted, task.id).await,
+            Err(DurableTaskError::NotFound)
+        ));
+        assert!(
+            JobRepository::new(db.clone())
+                .claim("fixture", Utc::now(), Duration::seconds(30), 100)
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.id != task.run_id)
+        );
+        let future = Utc::now() + Duration::hours(1);
+        sqlx::query("UPDATE jobs SET available_at=$2 WHERE id=$1")
+            .bind(task.run_id)
+            .bind(future)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            service
+                .claim_next("governed-fixture", Utc::now(), Duration::seconds(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(task.run_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        service
+            .wait(
+                &context,
+                task.id,
+                WaitRequest {
+                    reason: WaitReason::Approval,
+                    checkpoint: serde_json::json!({}),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            service.resume(&substituted, task.id).await,
+            Err(DurableTaskError::NotFound)
+        ));
+        let repository = JobRepository::new(db.clone());
+        let now = Utc::now();
+        assert!(
+            repository
+                .claim("fixture", now, Duration::seconds(30), 100)
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.id != task.run_id)
+        );
+        // Even an expired lease cannot supersede a persisted approval wait.
+        sqlx::query("UPDATE jobs SET state='running', lease_owner='expired', lease_expires_at=$2 WHERE id=$1")
+            .bind(task.run_id).bind(now-Duration::seconds(1)).execute(db.pool()).await.unwrap();
+        assert!(
+            repository
+                .claim("fixture", now, Duration::seconds(30), 100)
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.id != task.run_id)
+        );
+        sqlx::query(
+            "UPDATE jobs SET state='pending',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1",
+        )
+        .bind(task.run_id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        service.resume(&context, task.id).await.unwrap();
+        assert_eq!(
+            service.get(&context, task.id).await.unwrap().state,
+            RunState::Queued
+        );
+        // Clearing the wait or replacing a checkpoint does not authorize the
+        // legacy autonomous summarizer/phone dispatcher to execute this task.
+        assert!(
+            repository
+                .claim("fixture", now, Duration::seconds(30), 100)
+                .await
+                .unwrap()
+                .iter()
+                .all(|job| job.id != task.run_id)
+        );
+        let autonomous_span: Uuid = sqlx::query_scalar("INSERT INTO spans(user_id,user_context_id,title,execution_type) VALUES($1,$2,'Explicit scheduled work','autonomous') RETURNING id")
+            .bind(user).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+        let autonomous_job: Uuid = sqlx::query_scalar("INSERT INTO jobs(user_id,user_context_id,kind,span_id,payload_reference_id) VALUES($1,$2,'execute_span',$3,$3) RETURNING id")
+            .bind(user).bind(context.id.0).bind(autonomous_span).fetch_one(db.pool()).await.unwrap();
+        let event_job = repository
+            .enqueue(crate::jobs::JobKind::ProcessEvent, Uuid::new_v4())
+            .await
+            .unwrap();
+        let eligible = repository
+            .claim("fixture", Utc::now(), Duration::seconds(30), 100)
+            .await
+            .unwrap();
+        assert!(eligible.iter().any(|job| job.id == autonomous_job));
+        assert!(eligible.iter().any(|job| job.id == event_job));
+        assert!(!eligible.iter().any(|job| job.id == task.run_id));
+        service.cancel(&context, task.id).await.unwrap();
+        assert_eq!(
+            service.get(&context, task.id).await.unwrap().state,
+            RunState::Cancelled
+        );
+        sqlx::query("DELETE FROM jobs WHERE id=$1")
+            .bind(event_job)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
     }
 }

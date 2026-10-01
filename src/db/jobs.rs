@@ -64,8 +64,11 @@ impl JobRepository {
         let rows = sqlx::query(
             "WITH candidates AS (\
                 SELECT id FROM jobs \
-                WHERE (state = 'pending' AND available_at <= $1) \
-                   OR (state = 'running' AND lease_expires_at <= $1) \
+                WHERE wait_reason IS NULL \
+                  AND NOT (kind = 'execute_span' AND EXISTS (\
+                      SELECT 1 FROM spans WHERE spans.id=jobs.span_id AND spans.execution_type='interactive')) \
+                  AND ((state = 'pending' AND available_at <= $1) \
+                   OR (state = 'running' AND lease_expires_at <= $1)) \
                 ORDER BY priority DESC, available_at, created_at \
                 FOR UPDATE SKIP LOCKED LIMIT $2\
              ) \
