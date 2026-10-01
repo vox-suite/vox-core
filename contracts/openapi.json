@@ -1322,6 +1322,22 @@
           }
         },
         "type": "object"
+      },
+      "WebTokenResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1431,6 +1447,26 @@
           }
         },
         "summary": "Exchange provider token for Vox consumer session"
+      }
+    },
+    "/v1/auth/web-token": {
+      "post": {
+        "operationId": "mint_web_token",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebTokenResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "auth"
+        ]
       }
     },
     "/v1/collections": {

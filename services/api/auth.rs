@@ -3,7 +3,10 @@
 */
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, header::AUTHORIZATION},
+    http::{
+        StatusCode,
+        header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL},
+    },
     middleware::Next,
     response::Response,
 };
@@ -12,21 +15,54 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use vox_core::domain::identity::Actor;
 
+const LIVE_SOCKET_PATH: &str = "/v1/me/events/socket";
+const SUBPROTOCOL_TOKEN_PREFIX: &str = "bearer.";
+const WEB_SCOPE_PREFIXES: [&str; 6] = [
+    "/v1/spans",
+    "/v1/collections",
+    "/v1/me/schemas",
+    "/v1/me/charts",
+    "/v1/me/spaces",
+    LIVE_SOCKET_PATH,
+];
+
+fn web_scope_allows(path: &str) -> bool {
+    WEB_SCOPE_PREFIXES.iter().any(|prefix| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+fn bearer_token(req: &Request, path: &str) -> Option<String> {
+    let headers = req.headers();
+    if let Some(value) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        return value
+            .strip_prefix("Bearer ")
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+    }
+    if path != LIVE_SOCKET_PATH {
+        return None;
+    }
+    headers
+        .get(SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())?
+        .split(',')
+        .map(str::trim)
+        .find_map(|item| item.strip_prefix(SUBPROTOCOL_TOKEN_PREFIX))
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
 pub async fn extract_actor(
     State(pool): State<PgPool>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let auth_header = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let token = match auth_header.strip_prefix("Bearer ") {
-        Some(t) if !t.trim().is_empty() => t.trim(),
-        _ => return Err(StatusCode::UNAUTHORIZED),
-    };
+    let path = req.uri().path().to_string();
+    let token = bearer_token(&req, &path).ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = token.as_str();
 
     if token.split('.').count() == 3 {
         let claims = crate::identity_token::verify_id_token(token).await?;
@@ -87,7 +123,7 @@ pub async fn extract_actor(
     let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
     let session_row = sqlx::query(
-        "SELECT user_id, device_id FROM auth_sessions \
+        "SELECT user_id, device_id, scope FROM auth_sessions \
          WHERE token_hash = $1 \
            AND expires_at > now() \
            AND revoked_at IS NULL",
@@ -100,6 +136,10 @@ pub async fn extract_actor(
 
     let user_id: Uuid = session_row.get("user_id");
     let device_id: Option<Uuid> = session_row.get("device_id");
+    let scope: String = session_row.get("scope");
+    if scope == "web" && !web_scope_allows(&path) {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let actor = if let Some(dev_id) = device_id {
         Actor::device(user_id, dev_id)

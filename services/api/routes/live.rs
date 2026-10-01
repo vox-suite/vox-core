@@ -10,7 +10,8 @@ use axum::{
         Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode, header::ORIGIN},
+    response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -37,8 +38,14 @@ pub async fn live_socket(
     State(state): State<LiveApiState>,
     Extension(actor): Extension<Actor>,
     Query(query): Query<LiveSocketQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> Response {
+    if let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok())
+        && !crate::cors::origin_allowed(origin)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let platform = query.platform.unwrap_or_else(|| "unknown".to_string());
     // Best-effort: reuses the capabilities the client already reported when
     // it registered as a device, so we don't need a separate declaration here.
@@ -54,7 +61,9 @@ pub async fn live_socket(
     .ok()
     .flatten()
     .is_some_and(|capabilities| local_llm_capable(&capabilities));
-    ws.on_upgrade(move |socket| handle_socket(socket, state, actor.user_id, platform, local_llm))
+    ws.protocols(["vox.v1"])
+        .on_upgrade(move |socket| handle_socket(socket, state, actor.user_id, platform, local_llm))
+        .into_response()
 }
 
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);

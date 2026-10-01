@@ -202,6 +202,13 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(space_api_state);
 
+    let web_token_routes = Router::new()
+        .route(
+            "/v1/auth/web-token",
+            post(crate::routes::auth::mint_web_token),
+        )
+        .with_state(state.pool.clone());
+
     let openapi_route = Router::new().route("/openapi.json", get(get_openapi_spec));
 
     let internal_routes = Router::new()
@@ -229,6 +236,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(voice_routes)
         .merge(chart_routes)
         .merge(space_routes)
+        .merge(web_token_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,
@@ -241,4 +249,5 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(auth_routes)
         .merge(internal_routes)
         .merge(protected_routes)
+        .layer(crate::cors::layer())
 }

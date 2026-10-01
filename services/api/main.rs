@@ -3,6 +3,7 @@
 */
 mod auth;
 mod config;
+mod cors;
 mod identity_token;
 mod openapi;
 mod router;

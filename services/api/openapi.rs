@@ -4,6 +4,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(paths(
+    crate::routes::auth::mint_web_token,
     crate::routes::spans::list_spans,
     crate::routes::spans::create_span,
     crate::routes::spans::get_span,

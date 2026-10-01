@@ -1,7 +1,7 @@
 /**
 * Session token exchange endpoint for authenticating clients and devices.
 */
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Extension, Json, extract::State, http::StatusCode, response::IntoResponse};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +9,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::identity_token::verify_id_token;
+use vox_core::domain::identity::Actor;
+
+const WEB_TOKEN_TTL_MINUTES: i64 = 15;
 
 #[derive(Debug, Deserialize)]
 pub struct AuthExchangeRequest {
@@ -190,5 +193,48 @@ pub async fn exchange_token(
         user_id,
         expires_at,
         has_phone,
+    }))
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct WebTokenResponse {
+    pub token: String,
+    pub expires_at: chrono::DateTime<Utc>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/auth/web-token",
+    tag = "auth",
+    responses((status = 200, body = WebTokenResponse))
+)]
+pub async fn mint_web_token(
+    State(pool): State<PgPool>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<WebTokenResponse>, StatusCode> {
+    let raw_token = format!(
+        "vox_web_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    let token_hash = hex::encode(Sha256::digest(raw_token.as_bytes()));
+    let expires_at = Utc::now() + Duration::minutes(WEB_TOKEN_TTL_MINUTES);
+
+    sqlx::query(
+        "INSERT INTO auth_sessions (user_id, device_id, token_hash, family_id, expires_at, scope) \
+         VALUES ($1, $2, $3, $4, $5, 'web')",
+    )
+    .bind(actor.user_id)
+    .bind(actor.device_id())
+    .bind(token_hash)
+    .bind(Uuid::new_v4())
+    .bind(expires_at)
+    .execute(&pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(WebTokenResponse {
+        token: raw_token,
+        expires_at,
     }))
 }
