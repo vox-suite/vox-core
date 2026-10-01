@@ -2,7 +2,7 @@
  * Canonical Redis key helpers for Vox Core.
  *
  * Contract:
- * - Redis holds only three key families (below), all rebuildable projections
+ * - Redis holds only two key families (below), all rebuildable projections
  *   of Postgres. Postgres is always authoritative; Redis is a read
  *   optimization only. Nothing is ever written to Redis first.
  * - No key carries a TTL. Entries live until explicitly overwritten or
@@ -14,13 +14,14 @@
  *   write-through-on-miss path).
  * - Freshness is layered: (1) synchronous write-through on the mutations
  *   above, (2) one-shot full rebuild at API process boot
- *   (`services/api/main.rs`), (3) an hourly full clear+rebuild from Postgres
+ *   (`services/api/main.rs`), (3) a periodic full clear+rebuild from Postgres
  *   run by the worker (`MemoryService::run_greeting_sync`,
  *   `src/memory/greetings.rs`) as a reconciliation backstop for drift the
  *   write-through paths miss.
  * - Host-app assertion nonces stay in-process memory (not Redis).
- * - No secrets: values are a display name, channel identifiers, device types and
- *   short conversation recaps.
+ * - Values are minimal identity/routing metadata, which remains private.
+ *   Agent instructions, conversation summaries and retained memory are never
+ *   stored in this user-wide cache.
  */
 use crate::identity::UserId;
 use uuid::Uuid;
@@ -67,13 +68,3 @@ pub const USER_SCAN: &str = "vox:user:*";
 
 /// SCAN pattern for all channel→user indexes (full replace / admin).
 pub const CHANNEL_SCAN: &str = "vox:channel:*";
-
-/// Last few conversation recaps for a user, newest first (general agent only).
-///
-/// Value: JSON array of `{"recap":"...","updated_at":"<rfc3339>"}`.
-pub fn recaps(user_id: UserId) -> String {
-    format!("{PREFIX}recaps:{}", user_id.0)
-}
-
-/// SCAN pattern for all recap entries (full replace / admin).
-pub const RECAPS_SCAN: &str = "vox:recaps:*";
