@@ -103,7 +103,7 @@ impl Tool for CreateCollection {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        tracing::info!(tool = Self::NAME, user_id = %self.user_id.0, name = %args.name, "Tool called");
+        tracing::info!(tool = Self::NAME, user_id = %self.user_id.0, "Tool called");
         let db = self.db.as_ref().ok_or(CollectionToolError::NotConfigured)?;
         if args.name.trim().is_empty() {
             return Err(CollectionToolError::InvalidInput(
@@ -313,7 +313,7 @@ impl Tool for UpdateCollection {
         _context: &mut rig::prelude::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        tracing::info!(tool = Self::NAME, user_id = %self.user_id.0, collection_id = %args.collection_id, "Tool called");
+        tracing::info!(tool = Self::NAME, user_id = %self.user_id.0, "Tool called");
         let db = self.db.as_ref().ok_or(CollectionToolError::NotConfigured)?;
         let id = Uuid::parse_str(args.collection_id.trim())
             .map_err(|_| CollectionToolError::InvalidInput("Invalid collection_id".into()))?;

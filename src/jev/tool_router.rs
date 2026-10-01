@@ -90,7 +90,6 @@ impl ToolRouter {
         };
 
         tracing::info!(
-            prompt = %prompt,
             domain = ?domain,
             confidence = confidence,
             "Jev System 1: tool domain routed"

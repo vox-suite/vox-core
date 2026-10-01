@@ -236,9 +236,6 @@ impl Tool for ScheduleOutboundCall {
         tracing::info!(
             schedule_id = %schedule_id,
             span_id = %span_id,
-            target_time = %target_time,
-            phone_number = %phone_number,
-            reason = %reason,
             "Scheduled outbound call created"
         );
 
@@ -366,8 +363,6 @@ impl Tool for TriggerOutboundCall {
         tracing::info!(
             call_id = %record.id,
             conversation_id = %record.conversation_id,
-            phone_number = %record.phone_number,
-            reason = %record.reason,
             "Immediate outbound call initiated"
         );
 

@@ -117,8 +117,8 @@ pub fn init(service_name: &'static str) -> Option<SdkTracerProvider> {
 }
 
 /// Only turn spans and rig's agent/chat/tool spans leave the process. Log
-/// events are never exported: Core's tool logs include phone numbers and
-/// queries, while rig's spans carry content only when `record_content` is on.
+/// events are never exported. Tool and classifier diagnostics omit user content;
+/// rig's spans carry content only when `record_content` is on.
 pub fn is_agent_span(metadata: &Metadata<'_>) -> bool {
     metadata.is_span()
         && *metadata.level() <= Level::INFO

@@ -40,3 +40,17 @@ conversation text. `LANGFUSE_RECORD_CONTENT=true` adds prompts, replies, and
 tool arguments/results, which include callers' personal details and make
 Langfuse a disclosed sink for conversation text; agent spans are kept out of
 console logs so that text reaches Langfuse only.
+
+## Process diagnostics
+
+Classifier routing logs contain the selected domain and confidence, never the
+user prompt. Provider failures retain HTTP status without retaining or logging
+the response body, which may echo user content or credentials. Schema lookup
+failures use a dedicated content-free error.
+
+Native tool diagnostics omit user-supplied queries, route addresses, note and
+collection titles, schema names, call reasons and phone numbers. Trusted record
+references, tool names, duration and outcomes remain available for diagnosis.
+This is separate from opt-in agent content tracing; enabling content tracing
+does not add these values back to process logs. These checks do not certify
+all provider SDK or channel-adapter diagnostics as content-free.
