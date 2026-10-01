@@ -438,6 +438,18 @@ impl IdentityService {
         .fetch_one(self.db.pool())
         .await?;
         if !trusted {
+            let keys = sqlx::query_as::<_, (String, String)>(
+                "SELECT d.external_key, h.external_key FROM host_apps h \
+                 JOIN platform_deployments d ON d.id = h.deployment_id WHERE h.id = $1",
+            )
+            .bind(subject.host_app_id.0)
+            .fetch_optional(self.db.pool())
+            .await?;
+            tracing::warn!(
+                host = ?keys,
+                trusted_credential_ids_configured = trusted_channel_credentials().len(),
+                "CORE_PHONE_LINK_SKIPPED: caller's host is not a trusted channel host, so the phone number is not linked to a user"
+            );
             return Ok(None);
         }
 
