@@ -39,6 +39,8 @@ pub trait OutboundBridge: Send + Sync {
         &self,
         request: OutboundCallRequest,
     ) -> Result<OutboundCallResponse, BridgeError>;
+
+    async fn send_verification_code(&self, phone: &str, code: &str) -> Result<(), BridgeError>;
 }
 
 #[derive(Clone)]
@@ -97,5 +99,23 @@ impl OutboundBridge for BridgeClient {
 
         let result = response.json::<OutboundCallResponse>().await?;
         Ok(result)
+    }
+
+    async fn send_verification_code(&self, phone: &str, code: &str) -> Result<(), BridgeError> {
+        let response = self
+            .http
+            .post(format!("{}/internal/v1/verification/code", self.base_url))
+            .bearer_auth(&self.service_token)
+            .json(&serde_json::json!({ "phone_number": phone, "code": code }))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(BridgeError::Status {
+                status,
+                message: "verification message was not delivered".to_string(),
+            });
+        }
+        Ok(())
     }
 }

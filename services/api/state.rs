@@ -44,6 +44,7 @@ pub struct ApiState {
     pub spaces: vox_core::storage::spaces::SpaceRepository,
     pub space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting>,
     pub space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
+    pub bridge: Option<Arc<dyn vox_core::bridge_client::OutboundBridge>>,
 }
 
 impl ApiState {
@@ -100,6 +101,7 @@ impl ApiState {
             spaces: space_repo,
             space_architect,
             space_runtime,
+            bridge: None,
         }
     }
 }

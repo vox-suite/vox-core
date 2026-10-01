@@ -122,12 +122,11 @@ pub async fn exchange_token(
         }
     };
 
-    if identity.email_verified
-        && let Some(email) = identity
-            .email
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+    if let Some(email) = identity
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         sqlx::query(
             "UPDATE users SET verified_email = $2, verified_email_at = now() \

@@ -2,14 +2,78 @@ use axum::{Extension, Json, extract::State, http::StatusCode, response::IntoResp
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
+use vox_core::bridge_client::OutboundBridge;
 use vox_core::domain::identity::Actor;
 use vox_core::identity::UserId;
 use vox_core::memory::MemoryService;
+use vox_core::phone_verification::{PhoneVerificationError, PhoneVerificationService};
 
 #[derive(Clone)]
 pub struct PhoneApiState {
     pub pool: PgPool,
     pub memory: MemoryService,
+    pub verification: PhoneVerificationService,
+    pub bridge: Option<std::sync::Arc<dyn OutboundBridge>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StartVerificationRequest {
+    pub phone_number: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfirmVerificationRequest {
+    pub phone_number: String,
+    pub code: String,
+}
+
+fn verification_status(error: &PhoneVerificationError) -> StatusCode {
+    match error {
+        PhoneVerificationError::NotLinked => StatusCode::NOT_FOUND,
+        PhoneVerificationError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        PhoneVerificationError::InvalidCode => StatusCode::BAD_REQUEST,
+        PhoneVerificationError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+pub async fn start_phone_verification(
+    Extension(actor): Extension<Actor>,
+    State(state): State<PhoneApiState>,
+    Json(payload): Json<StartVerificationRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let Some(bridge) = state.bridge.as_ref() else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    let phone =
+        vox_core::phone::normalize_e164(&payload.phone_number).ok_or(StatusCode::BAD_REQUEST)?;
+    let issued = state
+        .verification
+        .issue(actor.user_id, &phone)
+        .await
+        .map_err(|e| verification_status(&e))?;
+    bridge
+        .send_verification_code(&phone, &issued.code)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "Phone verification code was not delivered");
+            StatusCode::BAD_GATEWAY
+        })?;
+    Ok(Json(serde_json::json!({ "expires_at": issued.expires_at })))
+}
+
+pub async fn confirm_phone_verification(
+    Extension(actor): Extension<Actor>,
+    State(state): State<PhoneApiState>,
+    Json(payload): Json<ConfirmVerificationRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let phone =
+        vox_core::phone::normalize_e164(&payload.phone_number).ok_or(StatusCode::BAD_REQUEST)?;
+    state
+        .verification
+        .confirm(actor.user_id, &phone, &payload.code)
+        .await
+        .map_err(|e| verification_status(&e))?;
+    Ok(Json(serde_json::json!({ "verified": true })))
 }
 
 const CTX_MERGE_TABLES: &[&str] = &[

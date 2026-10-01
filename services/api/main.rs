@@ -100,7 +100,12 @@ async fn main() {
         &config,
         Some(user_events.clone()),
     ));
-    let api_state = ApiState::new(
+    let bridge = config.bridge_url.as_ref().and_then(|url| {
+        vox_core::bridge_client::BridgeClient::new(url.clone(), config.service_token.clone())
+            .ok()
+            .map(|client| Arc::new(client) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
+    });
+    let mut api_state = ApiState::new(
         app_state,
         db,
         device_hub,
@@ -113,6 +118,7 @@ async fn main() {
         space_architect,
         space_runtime,
     );
+    api_state.bridge = bridge;
     let app = build_api_router(api_state);
 
     tracing::info!("Vox Core API listening on {}", config.bind_address);

@@ -36,6 +36,7 @@ pub mod location_ingestion;
 pub mod memory;
 pub mod outbound;
 pub mod phone;
+pub mod phone_verification;
 pub mod preferences;
 pub mod privacy;
 pub mod providers;

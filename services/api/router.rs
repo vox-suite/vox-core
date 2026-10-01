@@ -30,7 +30,7 @@ use crate::{
             get_consent as get_location_consent, grant_consent as grant_location_consent,
             revoke_consent as revoke_location_consent, submit_segments,
         },
-        phone::{PhoneApiState, link_phone},
+        phone::{PhoneApiState, confirm_phone_verification, link_phone, start_phone_verification},
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name, list_schemas},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
@@ -131,9 +131,18 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let phone_routes = Router::new()
         .route("/v1/me/phone", post(link_phone))
+        .route("/v1/me/phone/verify/start", post(start_phone_verification))
+        .route(
+            "/v1/me/phone/verify/confirm",
+            post(confirm_phone_verification),
+        )
         .with_state(PhoneApiState {
             pool: state.pool.clone(),
             memory: state.memory.clone(),
+            verification: vox_core::phone_verification::PhoneVerificationService::new(
+                state.pool.clone(),
+            ),
+            bridge: state.bridge.clone(),
         });
 
     let live_routes = Router::new()

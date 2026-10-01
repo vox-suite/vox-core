@@ -20,10 +20,23 @@ pub async fn get_me(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let phone_verified = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(\
+            SELECT 1 FROM channel_identities \
+            WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL \
+              AND otp_verified_at IS NOT NULL\
+        )",
+    )
+    .bind(actor.user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     Ok(Json(serde_json::json!({
         "user_id": actor.user_id,
         "principal_id": actor.principal_id,
         "grants": actor.grants,
         "has_phone": has_phone,
+        "phone_verified": phone_verified,
     })))
 }
