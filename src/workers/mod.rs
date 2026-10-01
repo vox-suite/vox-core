@@ -115,12 +115,31 @@ impl Worker {
                 .await?;
             return Ok(());
         };
+        let heartbeat = {
+            let jobs = self.jobs.clone();
+            let worker_id = self.worker_id.clone();
+            let job_id = job.id;
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    let until = Utc::now() + Duration::seconds(30);
+                    if jobs.extend_lease(job_id, &worker_id, until).await.is_err() {
+                        break;
+                    }
+                }
+            })
+        };
         let result = match job.kind {
             JobKind::ProcessEvent => self
                 .events
                 .handle(EventId(reference_id))
                 .await
                 .map_err(|_| "event_processing"),
+            JobKind::ProcessEventBatch => self
+                .events
+                .handle_batch(reference_id)
+                .await
+                .map_err(|_| "event_batch_processing"),
             JobKind::RunSchedule => match &self.schedules {
                 Some(schedules) => match job.occurrence_at {
                     Some(occurrence_at) => schedules
@@ -154,6 +173,7 @@ impl Worker {
             },
         };
 
+        heartbeat.abort();
         match result {
             Ok(()) => {
                 tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
@@ -195,6 +215,11 @@ impl Worker {
                 && let Err(error) = sweeper.sweep_inactive_conversations().await
             {
                 tracing::warn!(%error, "whatsapp sweeper failed");
+            }
+            match self.events.requeue_failed().await {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(count, "requeued failed events"),
+                Err(error) => tracing::warn!(%error, "event requeue sweeper failed"),
             }
             if let Some(sweeper) = &self.sms_retention
                 && let Err(error) = sweeper.purge_expired().await

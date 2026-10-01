@@ -124,8 +124,8 @@ impl EventService {
     }
 
     /// Ingests many events of one source in a single transaction: one bulk insert
-    /// for the events and one for their `process_event` jobs, so the cost is
-    /// two round trips regardless of batch size. Already-ingested events are
+    /// for the events and a single `process_event_batch` job for all of them, so the
+    /// cost is two round trips regardless of batch size. Already-ingested events are
     /// skipped (idempotent); the ids of newly stored events are returned.
     pub async fn ingest_batch_for_user(
         &self,
@@ -151,10 +151,11 @@ impl EventService {
             items.iter().map(|i| i.occurred_at).collect();
         let payloads: Vec<&serde_json::Value> = items.iter().map(|i| &i.payload).collect();
 
+        let batch_id = Uuid::new_v4();
         let mut tx = self.db.pool().begin().await?;
         let inserted = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload) \
-             SELECT $1, $2, u.source_id, u.external_id, u.hash, $3, u.occurred_at, u.payload \
+            "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload, batch_id) \
+             SELECT $1, $2, u.source_id, u.external_id, u.hash, $3, u.occurred_at, u.payload, $9 \
              FROM UNNEST($4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::jsonb[]) \
                   AS u(source_id, external_id, hash, occurred_at, payload) \
              ON CONFLICT (source_kind, source_id, external_event_id) DO NOTHING \
@@ -168,15 +169,16 @@ impl EventService {
         .bind(&hashes)
         .bind(&occurred)
         .bind(&payloads)
+        .bind(batch_id)
         .fetch_all(&mut *tx)
         .await?;
         if !inserted.is_empty() {
             sqlx::query(
-                "INSERT INTO jobs (kind, user_id, source_event_id, payload_reference_id) \
-                 SELECT 'process_event', $1, id, id FROM UNNEST($2::uuid[]) AS id",
+                "INSERT INTO jobs (kind, user_id, payload_reference_id) \
+                 VALUES ('process_event_batch', $1, $2)",
             )
             .bind(user_id)
-            .bind(&inserted)
+            .bind(batch_id)
             .execute(&mut *tx)
             .await?;
         }

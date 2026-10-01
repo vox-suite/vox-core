@@ -14,10 +14,13 @@ use crate::{
     memory::MemoryService,
 };
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, stream};
 use serde_json::Value;
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
+
+const BATCH_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub struct EventHandler {
@@ -37,6 +40,8 @@ pub enum EventHandlerError {
     Database(#[from] sqlx::Error),
     #[error("event planner unavailable")]
     Agent(#[from] crate::agents::AgentError),
+    #[error("event processing hit a transient failure")]
+    Transient(String),
 }
 
 impl EventHandler {
@@ -77,7 +82,7 @@ impl EventHandler {
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
         let Some(row) = sqlx::query(
-            "SELECT user_id, event_type, occurred_at, payload FROM inbound_events WHERE id = $1",
+            "SELECT user_id, source_kind, event_type, occurred_at, payload FROM inbound_events WHERE id = $1",
         )
         .bind(event_id.0)
         .fetch_optional(self.db.pool())
@@ -95,6 +100,12 @@ impl EventHandler {
                 other => sqlx::Error::Protocol(other.to_string()),
             })?;
         let event_type: String = row.get("event_type");
+        let source_kind: String = row.get("source_kind");
+        let span_source = if source_kind == "sms" {
+            "sms".to_string()
+        } else {
+            event_type.clone()
+        };
         let occurred_at: DateTime<Utc> = row.get("occurred_at");
         let payload: Value = row.get("payload");
 
@@ -106,9 +117,9 @@ impl EventHandler {
         let triage = match triager.triage(&event_type, &payload).await {
             Ok(triage) => triage,
             Err(err) => {
-                self.mark_failed(event_id, &format!("triage_failed: {err}"))
-                    .await?;
-                return Ok(());
+                return self
+                    .fail_transient(event_id, format!("triage_failed: {err}"))
+                    .await;
             }
         };
 
@@ -141,9 +152,9 @@ impl EventHandler {
         let classification = match classifier.classify(user_id.0, &payload).await {
             Ok(result) => result,
             Err(err) => {
-                self.mark_failed(event_id, &format!("classify_failed: {err}"))
-                    .await?;
-                return Ok(());
+                return self
+                    .fail_transient(event_id, format!("classify_failed: {err}"))
+                    .await;
             }
         };
 
@@ -168,7 +179,7 @@ impl EventHandler {
                     &title,
                     &payload,
                     occurred_at,
-                    &event_type,
+                    &span_source,
                 )
                 .await?;
             }
@@ -191,6 +202,7 @@ impl EventHandler {
                     occurred_at,
                     extractor.as_ref(),
                     near_miss,
+                    &span_source,
                 )
                 .await?;
             }
@@ -209,6 +221,7 @@ impl EventHandler {
         occurred_at: DateTime<Utc>,
         extractor: &dyn SchemaExtracting,
         near_miss_schemas: Vec<SchemaDescriptor>,
+        span_source: &str,
     ) -> Result<(), EventHandlerError> {
         let result = match extractor
             .extract(SchemaExtractionPrompt {
@@ -221,16 +234,16 @@ impl EventHandler {
         {
             Ok(result) => result,
             Err(err) => {
-                self.mark_failed(event_id, &format!("system_two_failed: {err}"))
-                    .await?;
-                return Ok(());
+                return self
+                    .fail_transient(event_id, format!("system_two_failed: {err}"))
+                    .await;
             }
         };
 
         if let Err(err) = validate_data_against_schema(&result.json_schema, &result.data) {
-            self.mark_failed(event_id, &format!("system_two_validation_failed: {err}"))
-                .await?;
-            return Ok(());
+            return self
+                .fail_transient(event_id, format!("system_two_validation_failed: {err}"))
+                .await;
         }
 
         let schema_id = match self
@@ -247,9 +260,9 @@ impl EventHandler {
         {
             Ok(id) => id,
             Err(err) => {
-                self.mark_failed(event_id, &format!("schema_upsert_failed: {err}"))
-                    .await?;
-                return Ok(());
+                return self
+                    .fail_transient(event_id, format!("schema_upsert_failed: {err}"))
+                    .await;
             }
         };
 
@@ -260,7 +273,7 @@ impl EventHandler {
             &result.title,
             &result.data,
             occurred_at,
-            event_type,
+            span_source,
         )
         .await
     }
@@ -350,11 +363,76 @@ impl EventHandler {
     }
 
     async fn mark_failed(&self, event_id: EventId, error: &str) -> Result<(), EventHandlerError> {
-        sqlx::query("UPDATE inbound_events SET processing_error = $2 WHERE id = $1")
-            .bind(event_id.0)
-            .bind(error)
-            .execute(self.db.pool())
-            .await?;
+        self.record_failure(event_id, error, false).await
+    }
+
+    async fn fail_transient(
+        &self,
+        event_id: EventId,
+        error: String,
+    ) -> Result<(), EventHandlerError> {
+        self.record_failure(event_id, &error, true).await?;
+        Err(EventHandlerError::Transient(error))
+    }
+
+    async fn record_failure(
+        &self,
+        event_id: EventId,
+        error: &str,
+        retryable: bool,
+    ) -> Result<(), EventHandlerError> {
+        sqlx::query(
+            "UPDATE inbound_events SET processing_error = $2, retryable = $3, failed_at = now() WHERE id = $1",
+        )
+        .bind(event_id.0)
+        .bind(error)
+        .bind(retryable)
+        .execute(self.db.pool())
+        .await?;
         Ok(())
+    }
+
+    pub async fn handle_batch(&self, batch_id: Uuid) -> Result<(), EventHandlerError> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM inbound_events \
+             WHERE batch_id = $1 AND (processing_error IS NULL OR retryable) \
+             ORDER BY occurred_at",
+        )
+        .bind(batch_id)
+        .fetch_all(self.db.pool())
+        .await?;
+        let results: Vec<Result<(), EventHandlerError>> = stream::iter(ids)
+            .map(|id| self.handle(EventId(id)))
+            .buffer_unordered(BATCH_CONCURRENCY)
+            .collect()
+            .await;
+        match results.into_iter().find_map(Result::err) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    pub async fn requeue_failed(&self) -> Result<u64, EventHandlerError> {
+        let result = sqlx::query(
+            "WITH due AS ( \
+                 UPDATE inbound_events e SET requeue_count = requeue_count + 1, failed_at = now() \
+                 WHERE e.id IN ( \
+                     SELECT id FROM inbound_events \
+                     WHERE processing_error IS NOT NULL AND retryable \
+                       AND requeue_count < 3 AND failed_at < now() - interval '10 minutes' \
+                     LIMIT 200) \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM jobs j \
+                     WHERE j.kind IN ('process_event', 'process_event_batch') \
+                       AND j.state IN ('pending', 'running') \
+                       AND (j.source_event_id = e.id OR j.payload_reference_id = e.id \
+                            OR j.payload_reference_id = e.batch_id)) \
+                 RETURNING e.id, e.user_id) \
+             INSERT INTO jobs (kind, user_id, source_event_id, payload_reference_id) \
+             SELECT 'process_event', user_id, id, id FROM due",
+        )
+        .execute(self.db.pool())
+        .await?;
+        Ok(result.rows_affected())
     }
 }

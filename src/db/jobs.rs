@@ -95,6 +95,28 @@ impl JobRepository {
             .collect()
     }
 
+    pub async fn extend_lease(
+        &self,
+        job_id: Uuid,
+        worker_id: &str,
+        lease_expires_at: DateTime<Utc>,
+    ) -> Result<(), JobError> {
+        let result = sqlx::query(
+            "UPDATE jobs SET lease_expires_at = $3 \
+             WHERE id = $1 AND state = 'running' AND lease_owner = $2",
+        )
+        .bind(job_id)
+        .bind(worker_id)
+        .bind(lease_expires_at)
+        .execute(self.db.pool())
+        .await?;
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(JobError::LeaseLost)
+        }
+    }
+
     pub async fn complete(
         &self,
         job_id: Uuid,

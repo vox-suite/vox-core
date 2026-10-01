@@ -74,7 +74,7 @@ impl SmsIngestionService {
 
         let items: Vec<BatchEvent> = messages
             .iter()
-            .filter(|m| !looks_like_otp(&m.body))
+            .filter(|m| !looks_like_otp(&m.body) && !looks_like_promo(&m.sender, &m.body))
             .map(|m| BatchEvent {
                 source_id: m.sender.clone(),
                 external_event_id: message_digest(m),
@@ -125,4 +125,56 @@ pub fn looks_like_otp(body: &str) -> bool {
     }
     body.split(|c: char| !c.is_ascii_digit())
         .any(|token| token.len() >= 4 && token.len() <= 8)
+}
+
+const PROMO_MARKERS: &[&str] = &[
+    "unsubscribe",
+    "t&c apply",
+    "tnc apply",
+    "terms apply",
+    "% off",
+    "flat off",
+    "mega sale",
+    "limited time",
+    "use code",
+    "coupon",
+    "click here",
+    "shop now",
+    "visit now",
+    "reply stop",
+    "sms stop",
+    "opt out",
+];
+
+const MONEY_MARKERS: &[&str] = &[
+    "debited",
+    "credited",
+    "spent",
+    "paid",
+    "payment",
+    "due",
+    "emi",
+    "statement",
+    "a/c",
+    "acct",
+    "txn",
+    "transaction",
+    "upi",
+    "refund",
+    "balance",
+    "bill",
+    "invoice",
+    "rs.",
+    "rs ",
+    "inr",
+    "\u{20b9}",
+    "usd",
+    "$",
+];
+
+pub fn looks_like_promo(sender: &str, body: &str) -> bool {
+    let lower = body.to_lowercase();
+    let promotional = sender.trim().to_ascii_uppercase().ends_with("-P")
+        || PROMO_MARKERS.iter().any(|marker| lower.contains(marker));
+    promotional && !MONEY_MARKERS.iter().any(|marker| lower.contains(marker))
 }
