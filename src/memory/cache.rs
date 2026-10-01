@@ -1,5 +1,5 @@
 /**
- * Redis-backed minimal user cache (name + channels only).
+ * Redis-backed minimal user cache (name, phone, device types, channels, recent recaps).
  */
 use crate::{identity::UserId, redis_keys};
 use async_trait::async_trait;
@@ -19,8 +19,58 @@ pub enum CacheError {
 pub struct MinimalUserInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    /// Kinds of linked devices: "desktop", "mobile".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<String>,
+    /// Connected services; not populated yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<MinimalChannel>,
+}
+
+impl MinimalUserInfo {
+    pub fn new(name: Option<String>, channels: Vec<MinimalChannel>, devices: Vec<String>) -> Self {
+        let phone = channels
+            .iter()
+            .find(|c| c.channel.eq_ignore_ascii_case("phone"))
+            .map(|c| c.external_id.clone());
+        Self {
+            name,
+            phone,
+            devices,
+            connections: Vec::new(),
+            channels,
+        }
+    }
+}
+
+/// Maps device platforms (and mobile-only data consents) to the kinds shown in the cache.
+pub fn device_kinds<'a>(
+    platforms: impl IntoIterator<Item = &'a str>,
+    has_mobile_consent: bool,
+) -> Vec<String> {
+    let mut kinds = std::collections::BTreeSet::new();
+    for platform in platforms {
+        let p = platform.to_ascii_lowercase();
+        if p.contains("android") || p.contains("ios") {
+            kinds.insert("mobile");
+        } else {
+            kinds.insert("desktop");
+        }
+    }
+    if has_mobile_consent {
+        kinds.insert("mobile");
+    }
+    kinds.into_iter().map(str::to_owned).collect()
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Recap {
+    pub recap: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -50,6 +100,16 @@ pub trait ContextCache: Send + Sync {
 
     /// Replace the entire minimal-user cache from a Postgres snapshot.
     async fn replace_users(&self, _users: &[(UserId, MinimalUserInfo)]) -> Result<(), CacheError> {
+        Ok(())
+    }
+
+    /// Recent conversation recaps for a user, newest first.
+    async fn get_recaps(&self, _user_id: UserId) -> Result<Vec<Recap>, CacheError> {
+        Ok(Vec::new())
+    }
+
+    /// Replace every user's recap entry from a Postgres snapshot.
+    async fn replace_recaps(&self, _recaps: &[(UserId, Vec<Recap>)]) -> Result<(), CacheError> {
         Ok(())
     }
 }
@@ -165,6 +225,33 @@ impl ContextCache for RedisContextCache {
                     )
                     .ignore();
             }
+        }
+        pipeline
+            .query_async::<()>(&mut connection)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn get_recaps(&self, user_id: UserId) -> Result<Vec<Recap>, CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let payload: Option<String> = connection.get(redis_keys::recaps(user_id)).await?;
+        match payload {
+            Some(raw) => serde_json::from_str(&raw).map_err(|_| CacheError::Payload),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    async fn replace_recaps(&self, recaps: &[(UserId, Vec<Recap>)]) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        Self::delete_pattern(&mut connection, redis_keys::RECAPS_SCAN).await?;
+        if recaps.is_empty() {
+            return Ok(());
+        }
+        let mut pipeline = redis::pipe();
+        pipeline.atomic();
+        for (user_id, entries) in recaps {
+            let payload = serde_json::to_string(entries).map_err(|_| CacheError::Payload)?;
+            pipeline.set(redis_keys::recaps(*user_id), payload).ignore();
         }
         pipeline
             .query_async::<()>(&mut connection)

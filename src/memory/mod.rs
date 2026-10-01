@@ -9,7 +9,7 @@ use crate::{
     db::Db,
     identity::{ResourceOwner, UserId},
 };
-use cache::{MinimalChannel, MinimalUserInfo};
+use cache::{MinimalChannel, MinimalUserInfo, device_kinds};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -139,7 +139,21 @@ impl MemoryService {
             external_id,
         })
         .collect();
-        let info = MinimalUserInfo { name, channels };
+        let platforms: Vec<String> = sqlx::query_scalar(
+            "SELECT platform FROM devices WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id.0)
+        .fetch_all(self.db.pool())
+        .await?;
+        let has_mobile_consent: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM data_source_consents \
+             WHERE user_id = $1 AND granted_at IS NOT NULL AND revoked_at IS NULL)",
+        )
+        .bind(user_id.0)
+        .fetch_one(self.db.pool())
+        .await?;
+        let devices = device_kinds(platforms.iter().map(String::as_str), has_mobile_consent);
+        let info = MinimalUserInfo::new(name, channels, devices);
         let _ = cache.put_user(user_id, &info).await;
         Ok(())
     }

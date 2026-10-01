@@ -16,11 +16,11 @@ pub async fn submit_batch(
     Extension(actor): Extension<Actor>,
     Json(body): Json<SubmitSmsBatchRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let event_ids = service
+    let result = service
         .submit_batch(actor.user_id, body.messages)
         .await
         .map_err(|err| match err {
-            SmsIngestionError::Empty => StatusCode::BAD_REQUEST,
+            SmsIngestionError::Empty | SmsIngestionError::TooLarge => StatusCode::BAD_REQUEST,
             SmsIngestionError::ConsentRequired => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
@@ -28,8 +28,9 @@ pub async fn submit_batch(
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "event_ids": event_ids,
-            "batch_id": event_ids.first().map(|e| e.0),
+            "event_ids": result.event_ids,
+            "batch_id": result.event_ids.first().map(|e| e.0),
+            "synced_until": result.synced_until,
         })),
     ))
 }

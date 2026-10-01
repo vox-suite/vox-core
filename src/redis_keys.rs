@@ -2,7 +2,7 @@
  * Canonical Redis key helpers for Vox Core.
  *
  * Contract:
- * - Redis holds only two key families (below), both rebuildable projections
+ * - Redis holds only three key families (below), all rebuildable projections
  *   of Postgres. Postgres is always authoritative; Redis is a read
  *   optimization only. Nothing is ever written to Redis first.
  * - No key carries a TTL. Entries live until explicitly overwritten or
@@ -19,7 +19,8 @@
  *   `src/memory/greetings.rs`) as a reconciliation backstop for drift the
  *   write-through paths miss.
  * - Host-app assertion nonces stay in-process memory (not Redis).
- * - No secrets: values are a display name and channel identifiers only.
+ * - No secrets: values are a display name, channel identifiers, device types and
+ *   short conversation recaps.
  */
 use crate::identity::UserId;
 use uuid::Uuid;
@@ -35,7 +36,8 @@ pub const PREFIX: &str = "vox:";
 /// without storing the full LLM context projection.
 ///
 /// Value shape:
-/// `{"name":"Rahul","channels":[{"channel":"phone","external_id":"+9198..."}]}`
+/// `{"name":"Rahul","phone":"9198...","devices":["desktop","mobile"],"connections":[],
+///   "channels":[{"channel":"phone","external_id":"9198..."}]}`
 pub fn user(user_id: UserId) -> String {
     format!("{PREFIX}user:{}", user_id.0)
 }
@@ -65,3 +67,13 @@ pub const USER_SCAN: &str = "vox:user:*";
 
 /// SCAN pattern for all channel→user indexes (full replace / admin).
 pub const CHANNEL_SCAN: &str = "vox:channel:*";
+
+/// Last few conversation recaps for a user, newest first (general agent only).
+///
+/// Value: JSON array of `{"recap":"...","updated_at":"<rfc3339>"}`.
+pub fn recaps(user_id: UserId) -> String {
+    format!("{PREFIX}recaps:{}", user_id.0)
+}
+
+/// SCAN pattern for all recap entries (full replace / admin).
+pub const RECAPS_SCAN: &str = "vox:recaps:*";

@@ -7,8 +7,13 @@ use uuid::Uuid;
 use crate::{
     consent::{ConsentError, ConsentService, DataSource},
     db::Db,
-    events::{EventId, service::EventService},
+    events::{
+        EventId,
+        service::{BatchEvent, EventService},
+    },
 };
+
+const MAX_BATCH_MESSAGES: usize = 512;
 
 pub mod finance;
 pub mod retention;
@@ -24,6 +29,8 @@ pub struct SmsMessage {
 pub enum SmsIngestionError {
     #[error("batch must contain at least one message")]
     Empty,
+    #[error("batch exceeds the maximum number of messages")]
+    TooLarge,
     #[error("sms data sharing consent has not been granted")]
     ConsentRequired,
     #[error("sms batch storage unavailable")]
@@ -47,47 +54,54 @@ impl SmsIngestionService {
         Self { events, consent }
     }
 
+    /// Stores the batch with a bulk insert and advances the server sync cursor, then
+    /// returns the new ids and the cursor. Processing (triage, span extraction) runs
+    /// later in the worker, so the caller gets an answer in a couple of round trips.
     pub async fn submit_batch(
         &self,
         user_id: Uuid,
         messages: Vec<SmsMessage>,
-    ) -> Result<Vec<EventId>, SmsIngestionError> {
+    ) -> Result<SmsBatchResult, SmsIngestionError> {
         if messages.is_empty() {
             return Err(SmsIngestionError::Empty);
+        }
+        if messages.len() > MAX_BATCH_MESSAGES {
+            return Err(SmsIngestionError::TooLarge);
         }
         if !self.consent.is_granted(user_id, DataSource::Sms).await? {
             return Err(SmsIngestionError::ConsentRequired);
         }
 
-        let mut event_ids = Vec::with_capacity(messages.len());
-        for message in &messages {
-            if looks_like_otp(&message.body) {
-                continue;
-            }
-            let digest = message_digest(message);
-            let payload = json!({ "sender": message.sender, "body": message.body });
-            let event_id = self
-                .events
-                .ingest_for_user(
-                    user_id,
-                    "sms",
-                    &message.sender,
-                    &digest,
-                    "sms_message",
-                    message.received_at,
-                    &payload,
-                )
-                .await?;
-            event_ids.push(event_id);
-        }
+        let items: Vec<BatchEvent> = messages
+            .iter()
+            .filter(|m| !looks_like_otp(&m.body))
+            .map(|m| BatchEvent {
+                source_id: m.sender.clone(),
+                external_event_id: message_digest(m),
+                occurred_at: m.received_at,
+                payload: json!({ "sender": m.sender, "body": m.body }),
+            })
+            .collect();
+        let event_ids = self
+            .events
+            .ingest_batch_for_user(user_id, "sms", "sms_message", &items)
+            .await?;
 
         let newest_received_at = messages.iter().map(|m| m.received_at).max().unwrap();
         self.consent
             .advance_sync_cursor(user_id, DataSource::Sms, newest_received_at)
             .await?;
 
-        Ok(event_ids)
+        Ok(SmsBatchResult {
+            event_ids,
+            synced_until: newest_received_at,
+        })
     }
+}
+
+pub struct SmsBatchResult {
+    pub event_ids: Vec<EventId>,
+    pub synced_until: DateTime<Utc>,
 }
 
 fn message_digest(message: &SmsMessage) -> String {

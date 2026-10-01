@@ -122,4 +122,73 @@ impl EventService {
         tx.commit().await?;
         Ok(EventId(event_id))
     }
+
+    /// Ingests many events of one source in a single transaction: one bulk insert
+    /// for the events and one for their `process_event` jobs, so the cost is
+    /// two round trips regardless of batch size. Already-ingested events are
+    /// skipped (idempotent); the ids of newly stored events are returned.
+    pub async fn ingest_batch_for_user(
+        &self,
+        user_id: Uuid,
+        source_kind: &str,
+        event_type: &str,
+        items: &[BatchEvent],
+    ) -> Result<Vec<EventId>, EventError> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let source_ids: Vec<&str> = items.iter().map(|i| i.source_id.as_str()).collect();
+        let external_ids: Vec<&str> = items.iter().map(|i| i.external_event_id.as_str()).collect();
+        let hashes: Vec<String> = items
+            .iter()
+            .map(|i| {
+                hex::encode(Sha256::digest(
+                    serde_json::to_vec(&i.payload).unwrap_or_default(),
+                ))
+            })
+            .collect();
+        let occurred: Vec<chrono::DateTime<chrono::Utc>> =
+            items.iter().map(|i| i.occurred_at).collect();
+        let payloads: Vec<&serde_json::Value> = items.iter().map(|i| &i.payload).collect();
+
+        let mut tx = self.db.pool().begin().await?;
+        let inserted = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload) \
+             SELECT $1, $2, u.source_id, u.external_id, u.hash, $3, u.occurred_at, u.payload \
+             FROM UNNEST($4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::jsonb[]) \
+                  AS u(source_id, external_id, hash, occurred_at, payload) \
+             ON CONFLICT (source_kind, source_id, external_event_id) DO NOTHING \
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(source_kind)
+        .bind(event_type)
+        .bind(&source_ids)
+        .bind(&external_ids)
+        .bind(&hashes)
+        .bind(&occurred)
+        .bind(&payloads)
+        .fetch_all(&mut *tx)
+        .await?;
+        if !inserted.is_empty() {
+            sqlx::query(
+                "INSERT INTO jobs (kind, user_id, source_event_id, payload_reference_id) \
+                 SELECT 'process_event', $1, id, id FROM UNNEST($2::uuid[]) AS id",
+            )
+            .bind(user_id)
+            .bind(&inserted)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(inserted.into_iter().map(EventId).collect())
+    }
+}
+
+/// One event in a bulk ingest.
+pub struct BatchEvent {
+    pub source_id: String,
+    pub external_event_id: String,
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+    pub payload: serde_json::Value,
 }

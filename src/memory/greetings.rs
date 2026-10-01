@@ -1,9 +1,9 @@
 /**
- * Minimal user Redis sync from PostgreSQL.
+ * Minimal user and recent-recap Redis sync from PostgreSQL.
  */
 use super::{
     MemoryService,
-    cache::{CacheError, MinimalChannel, MinimalUserInfo},
+    cache::{CacheError, MinimalChannel, MinimalUserInfo, Recap, device_kinds},
 };
 use crate::identity::UserId;
 use std::collections::HashMap;
@@ -52,12 +52,66 @@ impl MemoryService {
             }
         }
 
+        let mut platforms: HashMap<Uuid, Vec<String>> = HashMap::new();
+        for (user_id, platform) in sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT user_id, platform FROM devices WHERE revoked_at IS NULL",
+        )
+        .fetch_all(self.db.pool())
+        .await?
+        {
+            platforms.entry(user_id).or_default().push(platform);
+        }
+        let mobile_consent: std::collections::HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
+            "SELECT DISTINCT user_id FROM data_source_consents \
+             WHERE granted_at IS NOT NULL AND revoked_at IS NULL",
+        )
+        .fetch_all(self.db.pool())
+        .await?
+        .into_iter()
+        .collect();
+
         let users: Vec<(UserId, MinimalUserInfo)> = by_user
             .into_iter()
-            .map(|(id, info)| (UserId(id), info))
+            .map(|(id, info)| {
+                let devices = device_kinds(
+                    platforms.get(&id).into_iter().flatten().map(String::as_str),
+                    mobile_consent.contains(&id),
+                );
+                (
+                    UserId(id),
+                    MinimalUserInfo::new(info.name, info.channels, devices),
+                )
+            })
             .collect();
         let count = users.len();
         cache.replace_users(&users).await?;
+
+        // Last 5 summarized conversations per user, general agent only so specialist
+        // agents' content never surfaces in a user-wide entry.
+        let mut recaps: HashMap<Uuid, Vec<Recap>> = HashMap::new();
+        for (user_id, recap, updated_at) in
+            sqlx::query_as::<_, (Uuid, String, chrono::DateTime<chrono::Utc>)>(
+                "SELECT user_id, recap, updated_at FROM ( \
+                 SELECT user_id, latest_summary->>'recap' AS recap, updated_at, \
+                        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC) AS rn \
+                 FROM conversations \
+                 WHERE summary_version > 0 AND agent_external_key = 'general' \
+             ) ranked WHERE rn <= 5 AND recap IS NOT NULL AND recap <> '' \
+             ORDER BY user_id, updated_at DESC",
+            )
+            .fetch_all(self.db.pool())
+            .await?
+        {
+            recaps
+                .entry(user_id)
+                .or_default()
+                .push(Recap { recap, updated_at });
+        }
+        let recaps: Vec<(UserId, Vec<Recap>)> = recaps
+            .into_iter()
+            .map(|(id, entries)| (UserId(id), entries))
+            .collect();
+        cache.replace_recaps(&recaps).await?;
         Ok(count)
     }
 
@@ -78,7 +132,7 @@ impl MemoryService {
             let delay = match result {
                 Ok(Ok(count)) => {
                     tracing::info!(count, "Synced minimal users to Redis");
-                    Duration::from_secs(3600)
+                    Duration::from_secs(600)
                 }
                 _ => {
                     tracing::warn!("Minimal user cache sync failed; retrying in one minute");
