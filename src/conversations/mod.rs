@@ -41,13 +41,3 @@ pub struct CompleteConversationRequest {
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SpeculateRequest {
-    pub agent_external_key: String,
-    pub identity: ChannelIdentity,
-    pub external_conversation_id: String,
-    pub text: String,
-    pub turn_id: String,
-    pub revision: u64,
-}

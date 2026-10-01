@@ -381,10 +381,6 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/durable-tasks/{id}/resume", post(durable_tasks::resume))
         .route("/v1/durable-tasks/{id}/cancel", post(durable_tasks::cancel))
         .route(
-            "/v1/conversations/speculate",
-            post(conversations::speculate),
-        )
-        .route(
             "/v1/conversations/respond/stream",
             post(conversations::respond_stream),
         )

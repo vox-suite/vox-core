@@ -28,13 +28,6 @@ pub struct AuthenticatedCompleteRequest {
     pub conversation: CompleteConversationRequest,
 }
 
-#[derive(Deserialize)]
-pub struct AuthenticatedSpeculateRequest {
-    pub host_context: crate::host_trust::HostContextRequest,
-    #[serde(flatten)]
-    pub conversation: crate::conversations::SpeculateRequest,
-}
-
 pub async fn respond(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -171,25 +164,6 @@ pub async fn complete(
     };
     match service.complete(context, request.conversation).await {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
-pub async fn speculate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<AuthenticatedSpeculateRequest>,
-) -> Response {
-    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
-    else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let Some(service) = state.conversations.as_ref() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    match service.speculate(context, request.conversation).await {
-        Ok(status) => Json(serde_json::json!({"status":status})).into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
