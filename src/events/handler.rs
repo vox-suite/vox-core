@@ -1,7 +1,6 @@
 use super::EventId;
 use crate::{
     agents::{
-        event_planner::EventPlanning,
         schema_extractor::{SchemaExtracting, SchemaExtractionPrompt},
         tools::records::validate_data_against_schema,
     },
@@ -11,7 +10,6 @@ use crate::{
         event_triage::{EventTriageAction, EventTriager},
         schema_classifier::{SchemaClassificationResult, SchemaClassifier, SchemaDescriptor},
     },
-    memory::MemoryService,
 };
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
@@ -25,10 +23,6 @@ const BATCH_CONCURRENCY: usize = 4;
 #[derive(Clone)]
 pub struct EventHandler {
     db: Db,
-    #[allow(dead_code)]
-    planner: Arc<dyn EventPlanning>,
-    #[allow(dead_code)]
-    memory: MemoryService,
     triager: Option<Arc<EventTriager>>,
     schema_classifier: Option<Arc<SchemaClassifier>>,
     schema_extractor: Option<Arc<dyn SchemaExtracting>>,
@@ -45,35 +39,18 @@ pub enum EventHandlerError {
 }
 
 impl EventHandler {
-    pub fn new(db: Db, planner: Arc<dyn EventPlanning>) -> Self {
-        let memory = MemoryService::new(db.clone(), None);
-        Self::with_memory(db, planner, memory)
+    pub fn new(db: Db) -> Self {
+        Self::with_jev(db, None, None, None)
     }
 
-    pub fn with_memory(db: Db, planner: Arc<dyn EventPlanning>, memory: MemoryService) -> Self {
-        Self {
-            db,
-            planner,
-            memory,
-            triager: None,
-            schema_classifier: None,
-            schema_extractor: None,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn with_jev(
         db: Db,
-        planner: Arc<dyn EventPlanning>,
-        memory: MemoryService,
         triager: Option<Arc<EventTriager>>,
         schema_classifier: Option<Arc<SchemaClassifier>>,
         schema_extractor: Option<Arc<dyn SchemaExtracting>>,
     ) -> Self {
         Self {
             db,
-            planner,
-            memory,
             triager,
             schema_classifier,
             schema_extractor,
@@ -167,7 +144,7 @@ impl EventHandler {
                 }
                 tracing::info!(
                     event_id = %event_id.0,
-                    schema = %schema.qualified_name,
+                    schema_id = %schema.id,
                     confidence,
                     "Jev System 1: matched existing schema"
                 );
@@ -183,8 +160,8 @@ impl EventHandler {
                 )
                 .await?;
             }
-            SchemaClassificationResult::Novel { reason, .. } => {
-                tracing::info!(event_id = %event_id.0, reason, "Jev System 1: novel schema, escalating to System 2");
+            SchemaClassificationResult::Novel { .. } => {
+                tracing::info!(event_id = %event_id.0, "Jev System 1: novel schema, escalating to System 2");
                 let Some(extractor) = &self.schema_extractor else {
                     self.mark_failed(event_id, "schema_extractor_not_configured")
                         .await?;
