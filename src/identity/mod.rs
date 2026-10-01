@@ -3,9 +3,26 @@
 */
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const MAX_HOST_USER_ID_BYTES: usize = 512;
+const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(30);
+const CONTEXT_CACHE_MAX: usize = 1024;
+
+type ContextCacheKey = (Uuid, Uuid, Option<Uuid>, String);
+
+/// Short-lived cache of resolved host contexts. Assertion authentication (credential,
+/// signature, nonce) still runs on every request; this only skips the ~5 sequential
+/// lookups that map an authenticated host user to a context. A phone link or account
+/// merge is picked up within the TTL.
+fn context_cache() -> &'static Mutex<HashMap<ContextCacheKey, (Instant, ResolvedUserContext)>> {
+    static CACHE: OnceLock<Mutex<HashMap<ContextCacheKey, (Instant, ResolvedUserContext)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 const TRUSTED_CHANNEL_HOST: (&str, &str) = ("vox.standalone.deployment", "vox.standalone.bridge");
 
 /// Extra first-party channel-host credentials (the bridge's `VOX_HOST_CREDENTIAL_ID`),
@@ -196,6 +213,32 @@ impl IdentityService {
     }
 
     pub async fn resolve_context(
+        &self,
+        subject: &UserContextSubject,
+    ) -> Result<ResolvedUserContext, IdentityError> {
+        let key: ContextCacheKey = (
+            subject.deployment_id.0,
+            subject.host_app_id.0,
+            subject.organization_id.map(|id| id.0),
+            subject.host_user_id.clone(),
+        );
+        if let Ok(cache) = context_cache().lock()
+            && let Some((stored_at, context)) = cache.get(&key)
+            && stored_at.elapsed() < CONTEXT_CACHE_TTL
+        {
+            return Ok(context.clone());
+        }
+        let context = self.resolve_context_uncached(subject).await?;
+        if let Ok(mut cache) = context_cache().lock() {
+            if cache.len() >= CONTEXT_CACHE_MAX {
+                cache.clear();
+            }
+            cache.insert(key, (Instant::now(), context.clone()));
+        }
+        Ok(context)
+    }
+
+    async fn resolve_context_uncached(
         &self,
         subject: &UserContextSubject,
     ) -> Result<ResolvedUserContext, IdentityError> {
