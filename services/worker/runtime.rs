@@ -75,14 +75,7 @@ pub async fn run_worker(
     });
     let outbound = Arc::new(OutboundCallService::new(db.clone(), bridge_client));
 
-    let events = EventHandler::with_jev(
-        db.clone(),
-        planner.clone(),
-        memory.clone(),
-        triager,
-        schema_classifier,
-        schema_extractor,
-    );
+    let events = EventHandler::with_jev(db.clone(), triager, schema_classifier, schema_extractor);
     let mut schedules = ScheduleHandler::with_jev(db.clone(), planner, jev_client.clone());
     schedules = schedules.with_outbound(outbound.clone());
     let ticker = ScheduleTicker::new(db.clone());
