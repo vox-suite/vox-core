@@ -376,6 +376,7 @@ pub fn router(state: AppState) -> Router {
             post(approvals::approve),
         )
         .route("/v1/durable-tasks", post(durable_tasks::start))
+        .route("/v1/durable-tasks/query", post(durable_tasks::query))
         .route("/v1/durable-tasks/{id}", post(durable_tasks::get))
         .route("/v1/durable-tasks/{id}/wait", post(durable_tasks::wait))
         .route("/v1/durable-tasks/{id}/resume", post(durable_tasks::resume))

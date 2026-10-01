@@ -215,7 +215,7 @@ impl ApprovalService {
                  JOIN assigned_task_runs run ON run.job_id=j.id \
                  WHERE j.id=$1 AND s.id=$2 AND j.user_context_id=$3 \
                  AND s.user_id=$4 AND s.user_context_id=$3 AND run.user_context_id=$3 \
-                 AND run.actor_snapshot->'agent'->'definition'->>'external_key'=$5 \
+                 AND run.actor_snapshot->'definition'->>'external_key'=$5 \
                  AND j.state='running' AND j.wait_reason IS NULL \
                  AND j.lease_owner=$6 AND j.lease_generation=$7 AND j.lease_expires_at>now() \
                  AND s.status <> 'cancelled' FOR UPDATE OF j,run",

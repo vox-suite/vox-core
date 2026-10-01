@@ -82,12 +82,18 @@ pub async fn run_worker(
 
     let summarizer = Arc::new(GeminiSummarizer::new(&config));
     let summaries = SummaryHandler::with_jev(db.clone(), summarizer, jev_client.clone());
-    let mut task_executor = TaskExecutorHandler::with_jev(db.clone(), &config, jev_client);
-    task_executor = task_executor.with_outbound(outbound);
+    let task_executor = TaskExecutorHandler::new(db.clone(), &config);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
     let sms_retention = SmsRetentionSweeper::new(db.clone());
 
     let worker_id = Uuid::new_v4().to_string();
+    let assigned_cancellation = cancellation.clone();
+    let assigned_worker_id = worker_id.clone();
+    let assigned_handle = tokio::spawn(async move {
+        task_executor
+            .run(&assigned_worker_id, assigned_cancellation)
+            .await
+    });
     let status_handle = if let Some(key) = config.status_webhook_key.as_deref() {
         let secrets = EncryptedWebhookSecretStore::from_hex_key(db.clone(), key)?;
         let delivery = StatusService::new(db.clone())
@@ -127,7 +133,6 @@ pub async fn run_worker(
         schedules,
         ticker,
         summaries,
-        task_executor,
         wa_sweeper,
         sms_retention,
         worker_id,
@@ -138,6 +143,7 @@ pub async fn run_worker(
 
     let result = worker.run(cancellation.clone()).await;
     cancellation.cancel();
+    assigned_handle.await?;
     if let Some(handle) = status_handle {
         handle.await?;
     }

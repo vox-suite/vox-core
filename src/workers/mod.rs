@@ -15,7 +15,6 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use futures_util::{StreamExt, stream};
-use task_executor::TaskExecutorHandler;
 use tokio_util::sync::CancellationToken;
 use whatsapp_sweeper::WhatsAppSweeper;
 
@@ -25,7 +24,6 @@ pub struct Worker {
     schedules: Option<ScheduleHandler>,
     ticker: Option<ScheduleTicker>,
     summaries: Option<SummaryHandler>,
-    task_executor: Option<TaskExecutorHandler>,
     wa_sweeper: Option<WhatsAppSweeper>,
     sms_retention: Option<SmsRetentionSweeper>,
     space_runtime: Option<std::sync::Arc<crate::agents::space_runtime::SpaceRuntime>>,
@@ -40,7 +38,6 @@ impl Worker {
             schedules: None,
             ticker: None,
             summaries: None,
-            task_executor: None,
             wa_sweeper: None,
             sms_retention: None,
             space_runtime: None,
@@ -55,7 +52,6 @@ impl Worker {
         schedules: ScheduleHandler,
         ticker: ScheduleTicker,
         summaries: SummaryHandler,
-        task_executor: TaskExecutorHandler,
         wa_sweeper: WhatsAppSweeper,
         sms_retention: SmsRetentionSweeper,
         worker_id: String,
@@ -66,7 +62,6 @@ impl Worker {
             schedules: Some(schedules),
             ticker: Some(ticker),
             summaries: Some(summaries),
-            task_executor: Some(task_executor),
             wa_sweeper: Some(wa_sweeper),
             sms_retention: Some(sms_retention),
             space_runtime: None,
@@ -157,13 +152,7 @@ impl Worker {
                     .map_err(|_| "summary_processing"),
                 None => Err("summary_handler_unavailable"),
             },
-            JobKind::EvaluateSpan | JobKind::ExecuteSpan => match &self.task_executor {
-                Some(executor) => executor
-                    .handle(reference_id)
-                    .await
-                    .map_err(|_| "task_execution"),
-                None => Err("task_executor_unavailable"),
-            },
+            JobKind::EvaluateSpan | JobKind::ExecuteSpan => Err("assigned_run_binding_required"),
             JobKind::RunSpace => match &self.space_runtime {
                 Some(runner) => runner
                     .run_space(reference_id, None)
