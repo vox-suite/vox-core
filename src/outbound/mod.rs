@@ -59,7 +59,7 @@ impl OutboundCallService {
         self.bridge.as_ref()
     }
 
-    pub async fn initiate_call_to_phone(
+    async fn initiate_call_to_phone(
         &self,
         owner: ResourceOwner,
         phone_number: &str,
@@ -88,17 +88,6 @@ impl OutboundCallService {
         let call_id = Uuid::new_v4();
         let conversation_id = Uuid::new_v4();
         let created_at = Utc::now();
-
-        let _ = sqlx::query(
-            "INSERT INTO channel_identities (user_id, channel, normalized_external_id) \
-             VALUES ($1, 'phone', $2) \
-             ON CONFLICT (channel, provider_scope, normalized_external_id) \
-             WHERE revoked_at IS NULL DO NOTHING",
-        )
-        .bind(owner.user_id.0)
-        .bind(phone_clean)
-        .execute(self.db.pool())
-        .await;
 
         sqlx::query(
             "INSERT INTO conversations (id, user_context_id, user_id, channel, external_conversation_id, agent_external_key) \

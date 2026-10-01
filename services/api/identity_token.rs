@@ -19,6 +19,7 @@ pub struct VerifiedIdentity {
     pub issuer: String,
     pub subject: String,
     pub email: Option<String>,
+    pub email_verified: bool,
     pub name: Option<String>,
 }
 
@@ -32,6 +33,8 @@ struct TokenClaims {
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
+    email_verified: Option<bool>,
+    #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     user_metadata: Option<SupabaseUserMetadata>,
@@ -43,6 +46,20 @@ struct SupabaseUserMetadata {
     full_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    email_verified: Option<bool>,
+}
+
+fn claims_email_verified(claims: &TokenClaims) -> bool {
+    claims
+        .email_verified
+        .or_else(|| {
+            claims
+                .user_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.email_verified)
+        })
+        .unwrap_or(false)
 }
 
 fn claims_name(claims: &TokenClaims) -> Option<String> {
@@ -164,7 +181,11 @@ fn identity_from_payload(
     Ok(VerifiedIdentity {
         issuer,
         subject: subject.to_string(),
-        email: claims.email.filter(|value| !value.trim().is_empty()),
+        email: claims
+            .email
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        email_verified: claims_email_verified(&claims),
         name,
     })
 }
@@ -248,6 +269,7 @@ fn verify_asymmetric_components(
             .email
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        email_verified: claims_email_verified(&data.claims),
         name: claims_name(&data.claims),
     })
 }

@@ -122,6 +122,24 @@ pub async fn exchange_token(
         }
     };
 
+    if identity.email_verified
+        && let Some(email) = identity
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        sqlx::query(
+            "UPDATE users SET verified_email = $2, verified_email_at = now() \
+             WHERE id = $1 AND verified_email IS DISTINCT FROM $2",
+        )
+        .bind(user_id)
+        .bind(email.to_lowercase())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
     let has_context = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
     )
