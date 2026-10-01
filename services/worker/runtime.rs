@@ -75,7 +75,26 @@ pub async fn run_worker(
     });
     let outbound = Arc::new(OutboundCallService::new(db.clone(), bridge_client));
 
-    let events = EventHandler::with_jev(db.clone(), triager, schema_classifier, schema_extractor);
+    let notifier = match (&config.smtp_url, &config.email_from) {
+        (Some(url), Some(from)) => vox_core::user_notifications::SmtpEmailSender::new(url, from)
+            .ok()
+            .map(|sender| {
+                Arc::new(vox_core::user_notifications::UserNotifier::new(
+                    db.pool().clone(),
+                    Arc::new(sender),
+                ))
+            }),
+        _ => None,
+    };
+    let mut events =
+        EventHandler::with_jev(db.clone(), triager, schema_classifier, schema_extractor);
+    if config.event_agent_enabled {
+        events = events.with_agent(Arc::new(vox_core::agents::event_agent::EventAgent::new(
+            db.clone(),
+            &config,
+            notifier,
+        )));
+    }
     let mut schedules = ScheduleHandler::with_jev(db.clone(), planner, jev_client.clone());
     schedules = schedules.with_outbound(outbound.clone());
     let ticker = ScheduleTicker::new(db.clone());

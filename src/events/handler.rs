@@ -1,6 +1,7 @@
 use super::EventId;
 use crate::{
     agents::{
+        event_agent::{EventAgent, EventContext},
         schema_extractor::{SchemaExtracting, SchemaExtractionPrompt},
         tools::records::validate_data_against_schema,
     },
@@ -26,6 +27,7 @@ pub struct EventHandler {
     triager: Option<Arc<EventTriager>>,
     schema_classifier: Option<Arc<SchemaClassifier>>,
     schema_extractor: Option<Arc<dyn SchemaExtracting>>,
+    agent: Option<Arc<EventAgent>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,7 +56,13 @@ impl EventHandler {
             triager,
             schema_classifier,
             schema_extractor,
+            agent: None,
         }
+    }
+
+    pub fn with_agent(mut self, agent: Arc<EventAgent>) -> Self {
+        self.agent = Some(agent);
+        self
     }
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
@@ -69,7 +77,7 @@ impl EventHandler {
         };
 
         let user_id = UserId(row.get("user_id"));
-        let _owner = IdentityService::new(self.db.clone())
+        let owner = IdentityService::new(self.db.clone())
             .owner_for_user(user_id)
             .await
             .map_err(|error| match error {
@@ -112,6 +120,30 @@ impl EventHandler {
             tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
             self.delete_inbound_event(event_id).await?;
             return Ok(());
+        }
+
+        if triage.action == EventTriageAction::PlanAction
+            && let Some(agent) = &self.agent
+        {
+            let context = EventContext {
+                event_id: event_id.0,
+                owner,
+                source_kind: source_kind.clone(),
+                event_type: event_type.clone(),
+                occurred_at,
+                payload: payload.clone(),
+            };
+            return match agent.run(context).await {
+                Ok(outcome) => {
+                    self.record_decision(user_id.0, &source_kind, &event_type, &outcome)
+                        .await?;
+                    self.delete_inbound_event(event_id).await
+                }
+                Err(error) => {
+                    self.fail_transient(event_id, format!("event_agent_failed: {error}"))
+                        .await
+                }
+            };
         }
 
         if triage.action != EventTriageAction::StoreRecord {
@@ -329,6 +361,26 @@ impl EventHandler {
         }
 
         self.delete_inbound_event(event_id).await
+    }
+
+    async fn record_decision(
+        &self,
+        user_id: Uuid,
+        source_kind: &str,
+        event_type: &str,
+        outcome: &str,
+    ) -> Result<(), EventHandlerError> {
+        sqlx::query(
+            "INSERT INTO event_agent_decisions (user_id, source_kind, event_type, outcome) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(user_id)
+        .bind(source_kind)
+        .bind(event_type)
+        .bind(outcome.chars().take(1500).collect::<String>())
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 
     async fn delete_inbound_event(&self, event_id: EventId) -> Result<(), EventHandlerError> {

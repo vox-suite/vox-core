@@ -4,6 +4,7 @@ pub mod agent_memory;
 */
 pub mod data_query;
 pub mod dependencies;
+pub mod event_actions;
 pub mod google_maps;
 pub mod library;
 pub mod records;

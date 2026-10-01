@@ -32,6 +32,7 @@ pub struct Config {
     pub google_maps_api_key: Option<String>,
     pub bridge_url: Option<String>,
     pub smtp_url: Option<String>,
+    pub event_agent_enabled: bool,
     pub email_from: Option<String>,
     pub core_api_url: Option<String>,
     pub jev_api_key: Option<String>,
@@ -105,6 +106,10 @@ impl Config {
                 .filter(|value| !value.trim().is_empty()),
             bridge_url: get("VOX_BRIDGE_URL").filter(|value| !value.trim().is_empty()),
             smtp_url: get("VOX_SMTP_URL").filter(|value| !value.trim().is_empty()),
+            event_agent_enabled: !matches!(
+                get("VOX_EVENT_AGENT_ENABLED").as_deref().map(str::trim),
+                Some("false" | "0")
+            ),
             email_from: get("VOX_EMAIL_FROM").filter(|value| !value.trim().is_empty()),
             core_api_url: get("VOX_CORE_API_URL").filter(|value| !value.trim().is_empty()),
             jev_api_key,

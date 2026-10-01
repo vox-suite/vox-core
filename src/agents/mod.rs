@@ -3,6 +3,7 @@
 */
 pub mod chart_suggester;
 pub mod conversation;
+pub mod event_agent;
 pub mod event_planner;
 pub mod prompts;
 pub mod schema_extractor;
