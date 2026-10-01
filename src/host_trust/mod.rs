@@ -275,6 +275,7 @@ impl HostTrustService {
         origin: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<ResolvedUserContext, HostTrustError> {
+        let timing_started = std::time::Instant::now();
         let request = NormalizedHostContextRequest::from_request(request)?;
         let credential = sqlx::query_as::<_, (Uuid, Uuid, Vec<u8>, String, String, Vec<String>)>(
             "SELECT c.deployment_id, c.host_app_id, c.secret_hash, d.external_key, h.external_key, h.allowed_origins \
@@ -312,6 +313,7 @@ impl HostTrustService {
         if !bool::from(provided_hash.as_slice().ct_eq(credential.2.as_slice())) {
             return Err(HostTrustError::AuthenticationDenied);
         }
+        let credential_ms = timing_started.elapsed().as_millis() as u64;
         let signature =
             hex::decode(&assertion.signature).map_err(|_| HostTrustError::InvalidAssertion)?;
         let mut verifier = HmacSha256::new_from_slice(assertion.secret.as_bytes())
@@ -369,7 +371,9 @@ impl HostTrustService {
         } else {
             None
         };
-        self.identities
+        let nonce_ms = timing_started.elapsed().as_millis() as u64;
+        let resolved = self
+            .identities
             .resolve_context(&UserContextSubject {
                 deployment_id: DeploymentId(credential.0),
                 host_app_id: HostAppId(credential.1),
@@ -377,7 +381,15 @@ impl HostTrustService {
                 host_user_id: request.host_user_id,
             })
             .await
-            .map_err(HostTrustError::from)
+            .map_err(HostTrustError::from);
+        tracing::info!(
+            credential_lookup_ms = credential_ms,
+            through_nonce_ms = nonce_ms,
+            total_ms = timing_started.elapsed().as_millis() as u64,
+            ok = resolved.is_ok(),
+            "CORE_HOST_CONTEXT"
+        );
+        resolved
     }
 }
 

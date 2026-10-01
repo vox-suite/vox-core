@@ -265,12 +265,16 @@ impl ConversationService {
         context: ResolvedUserContext,
         mut request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
+        let phase_started = std::time::Instant::now();
         let selected_agent = self
             .selected_agent(&context, &request.agent_external_key)
             .await?;
+        let agent_select_ms = phase_started.elapsed().as_millis() as u64;
         let owner = context.owner();
+        let opening_started = std::time::Instant::now();
         self.wait_for_opening(owner, &request.identity, &request.external_conversation_id)
             .await?;
+        let opening_wait_ms = opening_started.elapsed().as_millis() as u64;
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
@@ -337,6 +341,8 @@ impl ConversationService {
             .await?;
 
         tracing::info!(
+            agent_select_ms,
+            opening_wait_ms,
             identity_ms = identity_resolved
                 .duration_since(request_started)
                 .as_millis(),
