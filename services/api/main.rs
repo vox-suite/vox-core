@@ -43,9 +43,7 @@ async fn main() {
     let user_events = vox_core::realtime::UserEventHub::new();
     let agent = Arc::new(
         ConversationAgent::with_db(&config, db.clone())
-            .expect("Vox Core agent configuration is invalid")
-            .with_device_hub(device_hub.clone())
-            .with_user_events(user_events.clone()),
+            .expect("Vox Core agent configuration is invalid"),
     );
     let cache = RedisContextCache::new(&config.redis_url)
         .ok()

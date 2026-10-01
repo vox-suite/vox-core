@@ -2,8 +2,6 @@
 * Conversational agent logic, prompting structures, and TTS token chunking.
 */
 use super::{AgentError, tools};
-use crate::outbound::OutboundCallService;
-use crate::realtime::{DeviceHub, UserEventHub};
 use crate::{
     config::Config,
     db::Db,
@@ -54,15 +52,8 @@ pub struct ConversationPrompt {
 pub struct ConversationAgent {
     api_key: String,
     connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
-    http: reqwest::Client,
-    exa_api_key: String,
-    google_maps_api_key: Option<String>,
     db: Option<Db>,
-    outbound: Option<Arc<OutboundCallService>>,
-    tool_router: Option<crate::jev::ToolRouter>,
     tts_provider: String,
-    device_hub: Option<DeviceHub>,
-    user_events: Option<UserEventHub>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -80,67 +71,22 @@ pub trait ConversationResponder: Send + Sync {
 
 impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
-        let dependencies =
-            tools::dependencies::ToolDependencies::new().map_err(|_| AgentError::Provider)?;
-        let tool_router = if let Some(ref api_key) = config.jev_api_key {
-            let client =
-                crate::jev::JevClient::new(api_key.clone(), Some(config.jev_base_url.clone()));
-            Some(crate::jev::ToolRouter::new(client))
-        } else {
-            None
-        };
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             connected_apps: None,
-            http: dependencies.http,
-            exa_api_key: config.exa_api_key.clone(),
-            google_maps_api_key: config.google_maps_api_key.clone(),
             db: None,
-            outbound: None,
-            tool_router,
             tts_provider: config.tts_provider.clone(),
-            device_hub: None,
-            user_events: None,
         })
     }
 
     pub fn with_db(config: &Config, db: Db) -> Result<Self, AgentError> {
         let mut agent = Self::new(config)?;
-        let bridge_client = config.bridge_url.as_ref().and_then(|url| {
-            crate::bridge_client::BridgeClient::new(url.clone(), config.service_token.clone())
-                .ok()
-                .map(|c| Arc::new(c) as Arc<dyn crate::bridge_client::OutboundBridge>)
-        });
-        agent.outbound = Some(Arc::new(OutboundCallService::new(
-            db.clone(),
-            bridge_client,
-        )));
         agent.connected_apps = Some(Arc::new(crate::connected_apps::from_config(
             db.clone(),
             config,
         )));
         agent.db = Some(db);
         Ok(agent)
-    }
-
-    pub fn with_outbound(mut self, outbound: Arc<OutboundCallService>) -> Self {
-        self.outbound = Some(outbound);
-        self
-    }
-
-    pub fn with_tool_router(mut self, router: crate::jev::ToolRouter) -> Self {
-        self.tool_router = Some(router);
-        self
-    }
-
-    pub fn with_device_hub(mut self, hub: DeviceHub) -> Self {
-        self.device_hub = Some(hub);
-        self
-    }
-
-    pub fn with_user_events(mut self, hub: UserEventHub) -> Self {
-        self.user_events = Some(hub);
-        self
     }
 
     async fn build_agent_and_input(
@@ -167,327 +113,36 @@ impl ConversationAgent {
             onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding)
         };
 
-        // ponytail: fixed 0.55 cutoff, tune from routed-domain/confidence logs if it misfires elsewhere
-        const TOOL_DOMAIN_CONFIDENCE_THRESHOLD: f64 = 0.55;
-        // One id per agent turn: device commands proposed in this turn can
-        // only be confirmed by a later one (see RunTerminalCommand).
-        let turn = uuid::Uuid::new_v4();
-
-        let awaiting_device_confirmation = self
-            .device_hub
-            .as_ref()
-            .is_some_and(|hub| hub.has_pending_command(prompt.user_id.0));
-        let routed_domain = if is_call_opening {
-            crate::jev::ToolDomain::None
-        } else if awaiting_device_confirmation {
-            // A bare "yes" would otherwise route to no tools and the pending
-            // device command could never be confirmed.
-            crate::jev::ToolDomain::Device
-        } else if is_voice && asks_for_phone_call(&prompt.user_text) {
-            crate::jev::ToolDomain::Calls
-        } else if let Some(router) = &self.tool_router {
-            match router.classify(&prompt.user_text).await {
-                Ok((domain, confidence)) if confidence >= TOOL_DOMAIN_CONFIDENCE_THRESHOLD => {
-                    domain
-                }
-                Ok((domain, confidence)) => {
-                    tracing::warn!(
-                        ?domain,
-                        confidence,
-                        "Jev tool router confidence too low for a single domain, falling back to all tools"
-                    );
-                    crate::jev::ToolDomain::All
-                }
-                Err(err) => {
-                    tracing::warn!(%err, "Jev tool router classification failed, falling back to all tools");
-                    crate::jev::ToolDomain::All
-                }
-            }
-        } else {
-            crate::jev::ToolDomain::All
-        };
-
-        tracing::Span::current().record("vox.tool_domain", tracing::field::debug(routed_domain));
-        // Names the agent after the tool set each branch gives it, so traces
-        // show which one ran.
-        let new_agent = |kind: &str| {
-            let name = format!("{kind}-agent");
-            tracing::Span::current().record("gen_ai.agent.name", name.as_str());
-            client
-                .agent(&prompt.selected_agent.model_configuration.model)
-                .name(&name)
-                .tool(tools::library::AgentLibrary::new(
-                    self.db.clone(),
-                    self.connected_apps.clone(),
-                    prompt.context.clone(),
-                    prompt.selected_agent.definition.external_key.clone(),
-                ))
-                .record_content_telemetry(crate::telemetry::record_content())
-                .tool(tools::terminal::OpenTerminal::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                    self.device_hub.clone().unwrap_or_default(),
-                ))
-                .tool(tools::terminal::RunTerminalCommand::new(
-                    self.db.clone(),
-                    prompt.user_id,
-                    self.device_hub.clone().unwrap_or_default(),
-                    turn,
-                ))
-        };
-        let agent =
-            if is_call_opening || (is_voice && routed_domain == crate::jev::ToolDomain::None) {
-                new_agent("chat")
-                    .preamble(preamble)
-                    .tool(tools::agent_memory::UpdateAgentMemory::new(
-                        self.db.clone(),
-                        prompt.context.owner(),
-                        prompt.selected_agent.definition.external_key.clone(),
-                    ))
-                    .default_max_turns(6)
-                    .build()
-            } else if is_voice {
-                match routed_domain {
-                    crate::jev::ToolDomain::WebSearch => new_agent("web-search")
-                        .preamble(preamble)
-                        .tool(tools::web_search::WebSearch::new(
-                            self.http.clone(),
-                            self.exa_api_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                    crate::jev::ToolDomain::Maps => new_agent("maps")
-                        .preamble(preamble)
-                        .tool(tools::google_maps::SearchPlaces::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::GetRoute::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                    crate::jev::ToolDomain::TasksAndRecords => new_agent("tasks-and-records")
-                        .preamble(preamble)
-                        .tool(tools::spans::CreateSpan::new(
-                            self.db.clone(),
-                            prompt.owner,
-                            self.user_events.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
-                        .tool(tools::spans::GetSpan::new(self.db.clone(), prompt.owner))
-                        .tool(tools::spans::UpdateSpan::new(
-                            self.db.clone(),
-                            prompt.owner,
-                            self.user_events.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::collections::CreateCollection::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::collections::ListCollections::new(
-                            self.db.clone(),
-                            prompt.user_id,
-                        ))
-                        .tool(tools::calls::ScheduleOutboundCall::new(
-                            self.db.clone(),
-                            self.outbound.clone(),
-                            prompt.owner,
-                        ))
-                        .tool(tools::calls::TriggerOutboundCall::new(
-                            self.db.clone(),
-                            self.outbound.clone(),
-                            prompt.owner,
-                        ))
-                        .tool(tools::agent_memory::GetAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                    crate::jev::ToolDomain::Calendar => new_agent("calendar")
-                        .preamble(preamble)
-                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
-                        .tool(tools::agent_memory::GetAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                    crate::jev::ToolDomain::Device => new_agent("device")
-                        .preamble(preamble)
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                    crate::jev::ToolDomain::Calls => {
-                        tracing::Span::current().record("gen_ai.agent.name", "calls-agent");
-                        client
-                            .agent(&prompt.selected_agent.model_configuration.model)
-                            .name("calls-agent")
-                            .record_content_telemetry(crate::telemetry::record_content())
-                            .preamble(preamble)
-                            .tool(tools::calls::ScheduleOutboundCall::new(
-                                self.db.clone(),
-                                self.outbound.clone(),
-                                prompt.owner,
-                            ))
-                            .tool(tools::calls::TriggerOutboundCall::new(
-                                self.db.clone(),
-                                self.outbound.clone(),
-                                prompt.owner,
-                            ))
-                            .tool(tools::agent_memory::UpdateAgentMemory::new(
-                                self.db.clone(),
-                                prompt.context.owner(),
-                                prompt.selected_agent.definition.external_key.clone(),
-                            ))
-                            .default_max_turns(6)
-                            .build()
-                    }
-                    _ => new_agent("voice-general")
-                        .preamble(preamble)
-                        .tool(tools::web_search::WebSearch::new(
-                            self.http.clone(),
-                            self.exa_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::SearchPlaces::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::google_maps::GetRoute::new(
-                            self.http.clone(),
-                            self.google_maps_api_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::GetAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .tool(tools::agent_memory::UpdateAgentMemory::new(
-                            self.db.clone(),
-                            prompt.context.owner(),
-                            prompt.selected_agent.definition.external_key.clone(),
-                        ))
-                        .tool(tools::spans::CreateSpan::new(
-                            self.db.clone(),
-                            prompt.owner,
-                            self.user_events.clone().unwrap_or_default(),
-                        ))
-                        .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
-                        .tool(tools::calls::ScheduleOutboundCall::new(
-                            self.db.clone(),
-                            self.outbound.clone(),
-                            prompt.owner,
-                        ))
-                        .tool(tools::calls::TriggerOutboundCall::new(
-                            self.db.clone(),
-                            self.outbound.clone(),
-                            prompt.owner,
-                        ))
-                        .default_max_turns(6)
-                        .build(),
-                }
-            } else {
-                new_agent("all-tools")
-                    .preamble(preamble)
-                    .tool(tools::web_search::WebSearch::new(
-                        self.http.clone(),
-                        self.exa_api_key.clone(),
-                    ))
-                    .tool(tools::google_maps::SearchPlaces::new(
-                        self.http.clone(),
-                        self.google_maps_api_key.clone(),
-                    ))
-                    .tool(tools::google_maps::GetRoute::new(
-                        self.http.clone(),
-                        self.google_maps_api_key.clone(),
-                    ))
-                    .tool(tools::agent_memory::GetAgentMemory::new(
-                        self.db.clone(),
-                        prompt.context.owner(),
-                        prompt.selected_agent.definition.external_key.clone(),
-                    ))
-                    .tool(tools::agent_memory::UpdateAgentMemory::new(
-                        self.db.clone(),
-                        prompt.context.owner(),
-                        prompt.selected_agent.definition.external_key.clone(),
-                    ))
-                    .tool(tools::collections::CreateCollection::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::collections::ListCollections::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::collections::GetCollection::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::collections::UpdateCollection::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::spans::CreateSpan::new(
-                        self.db.clone(),
-                        prompt.owner,
-                        self.user_events.clone().unwrap_or_default(),
-                    ))
-                    .tool(tools::spans::ListSpans::new(self.db.clone(), prompt.owner))
-                    .tool(tools::spans::GetSpan::new(self.db.clone(), prompt.owner))
-                    .tool(tools::spans::UpdateSpan::new(
-                        self.db.clone(),
-                        prompt.owner,
-                        self.user_events.clone().unwrap_or_default(),
-                    ))
-                    .tool(tools::calls::ScheduleOutboundCall::new(
-                        self.db.clone(),
-                        self.outbound.clone(),
-                        prompt.owner,
-                    ))
-                    .tool(tools::calls::TriggerOutboundCall::new(
-                        self.db.clone(),
-                        self.outbound.clone(),
-                        prompt.owner,
-                    ))
-                    .tool(tools::records::DefineDataSchema::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .tool(tools::records::ListDataSchemas::new(
-                        self.db.clone(),
-                        prompt.user_id,
-                    ))
-                    .default_max_turns(10)
-                    .build()
-            };
+        // Tool exposure is independent of inferred intent and channel. The library
+        // rechecks owned-agent access on every operation; loading is not authority.
+        let name = &prompt.selected_agent.definition.external_key;
+        tracing::Span::current().record("gen_ai.agent.name", name.as_str());
+        let agent = client
+            .agent(&prompt.selected_agent.model_configuration.model)
+            .name(name)
+            .preamble(&format!(
+                "{preamble}\n{}",
+                super::prompts::GOVERNED_CAPABILITIES
+            ))
+            .record_content_telemetry(crate::telemetry::record_content())
+            .tool(tools::library::AgentLibrary::new(
+                self.db.clone(),
+                self.connected_apps.clone(),
+                prompt.context.clone(),
+                name.clone(),
+            ))
+            .tool(tools::agent_memory::GetAgentMemory::new(
+                self.db.clone(),
+                prompt.context.owner(),
+                name.clone(),
+            ))
+            .tool(tools::agent_memory::UpdateAgentMemory::new(
+                self.db.clone(),
+                prompt.context.owner(),
+                name.clone(),
+            ))
+            .default_max_turns(10)
+            .build();
 
         let mut history = String::new();
         history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse the library tool to discover enabled skills and granted integrations for this task. Load relevant skills on demand. Proposed external changes require an authenticated user decision; never report a proposal as execution.\n", prompt.selected_agent.definition.purpose));
@@ -855,20 +510,6 @@ fn remove_markdown_links(value: &str) -> String {
     output
 }
 
-fn asks_for_phone_call(text: &str) -> bool {
-    let text = text.to_lowercase();
-    [
-        "call me",
-        "call back",
-        "ring me",
-        "phone me",
-        "give me a call",
-        "give me a ring",
-    ]
-    .iter()
-    .any(|phrase| text.contains(phrase))
-}
-
 fn is_url(word: &str) -> bool {
     let word = word.trim_start_matches(['(', '[']);
     word.starts_with("http://") || word.starts_with("https://") || word.starts_with("www.")
@@ -882,5 +523,66 @@ impl ConversationResponder for ConversationAgent {
 
     async fn respond_stream(&self, prompt: ConversationPrompt) -> Result<AgentStream, AgentError> {
         self.generate_stream(prompt).await
+    }
+}
+
+#[cfg(test)]
+mod governed_tool_surface_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn prompt(channel: &str, text: &str) -> ConversationPrompt {
+        let id = uuid::Uuid::new_v4();
+        serde_json::from_value(json!({
+            "context": {"id": id, "user_id": id, "subject": {
+                "deployment_id": id, "host_app_id": id, "organization_id": null,
+                "host_user_id": "fixture-user"
+            }},
+            "selected_agent": {"definition": {
+                "id": id, "deployment_id": id, "external_key": "fixture-assistant",
+                "display_name": "Personal Assistant", "is_default": true,
+                "instruction_version": 1, "purpose": "Help with permitted capabilities",
+                "requested_capability_categories": []
+            }, "model_configuration": {
+                "id": id, "version": 1, "model_adapter": "gemini", "model": "fixture-model"
+            }},
+            "user_id": id, "owner": {"user_context_id": id, "user_id": id},
+            "channel": channel, "user_context": "", "recent_messages": [],
+            "user_text": text, "initiation_context": null, "needs_onboarding": false
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_channel_exposes_only_governed_library_and_scoped_memory() {
+        let agent = ConversationAgent {
+            api_key: "fixture-only".into(),
+            connected_apps: None,
+            db: None,
+            tts_provider: "fixture".into(),
+        };
+        for (channel, text) in [
+            ("web", "run a terminal command"),
+            ("phone", "call me in five minutes"),
+            ("whatsapp", "check my calendar"),
+        ] {
+            let (built, _, _) = agent
+                .build_agent_and_input(&prompt(channel, text))
+                .await
+                .unwrap();
+            let mut names: Vec<_> = built
+                .tool_definitions(None)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect();
+            names.sort();
+            assert_eq!(
+                names,
+                ["get_agent_memory", "library", "update_agent_memory"],
+                "{channel} must not expose a direct legacy execution path"
+            );
+        }
     }
 }

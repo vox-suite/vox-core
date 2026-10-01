@@ -135,7 +135,6 @@ impl JevClient {
 #[cfg(test)]
 mod content_redaction_tests {
     use super::*;
-    use crate::jev::ToolRouter;
     use axum::{Json, Router, routing::post};
     use serde_json::json;
     use std::io::{self, Write};
@@ -158,7 +157,7 @@ mod content_redaction_tests {
 
     async fn exercise(
         response: Router,
-    ) -> (String, Result<(super::super::ToolDomain, f64), JevError>) {
+    ) -> (String, Result<super::super::SystemOneResponse, JevError>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -169,14 +168,15 @@ mod content_redaction_tests {
         let subscriber = tracing_subscriber::fmt()
             .without_time()
             .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
             .with_writer(move || writer.clone())
             .finish();
-        let router = ToolRouter::new(JevClient::new(
-            "test-only-key".into(),
-            Some(format!("http://{address}/")),
-        ));
-        let result = router
-            .classify("private-prompt-canary-9182")
+        let client = JevClient::new("test-only-key".into(), Some(format!("http://{address}/")));
+        let result = client
+            .evaluate(
+                json!({"user_prompt": "private-prompt-canary-9182"}),
+                Default::default(),
+            )
             .with_subscriber(subscriber)
             .await;
         server.abort();
@@ -185,7 +185,7 @@ mod content_redaction_tests {
     }
 
     #[tokio::test]
-    async fn classifier_logs_route_metadata_without_conversation_content() {
+    async fn classifier_logs_bounded_metadata_without_conversation_content() {
         let response = Router::new().route(
             "/",
             post(|Json(request): Json<Value>| async move {
@@ -203,8 +203,8 @@ mod content_redaction_tests {
             }),
         );
         let (logs, result) = exercise(response).await;
-        assert_eq!(result.unwrap(), (super::super::ToolDomain::Calendar, 0.9));
-        assert!(logs.contains("domain=Calendar"), "{logs}");
+        assert!(result.unwrap().answers.contains_key("decision"));
+        assert!(logs.contains("questions_count=1"), "{logs}");
         assert!(!logs.contains("private-prompt-canary-9182"), "{logs}");
     }
 
