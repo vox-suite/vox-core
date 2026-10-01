@@ -9,7 +9,7 @@ PostgreSQL is authoritative. Set `DATABASE_URL` to the Supabase PostgreSQL conne
 
 ## Run the stack
 
-Keep `vox-core` and `vox-bridge` as sibling directories. Copy `.env.example` to `.env`, replace every placeholder, then run:
+Keep `vox-core` and `vox-bridge` as sibling directories. Copy `../vox-edge/.env.example` (the single reference for every variable core and bridge read) to `.env`, replace every placeholder, then run:
 
 ```sh
 docker compose up --build -d
@@ -38,7 +38,7 @@ the next write/sync. Deploy/restart Core API for this change.
 ```sh
 cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
-VOX_ENV_FILE=.env.example docker compose --env-file .env.example config
+VOX_ENV_FILE=../vox-edge/.env.example docker compose --env-file ../vox-edge/.env.example config
 ```
 
 Platform V1 authority and outcome semantics are executable without a database or
