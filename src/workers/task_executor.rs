@@ -4,7 +4,7 @@ use crate::{
         agent_memory::{
             GetAgentMemory, GetAgentMemoryArgs, UpdateAgentMemory, UpdateAgentMemoryArgs,
         },
-        library::{AgentLibrary, LibraryRequest},
+        library::{AgentLibrary, LibraryError, LibraryRequest},
     },
     config::Config,
     db::Db,
@@ -43,9 +43,25 @@ impl RunTools {
         if self.halt.is_cancelled() {
             return Err(TaskExecutorError);
         }
-        if self.service.enter_tool(&self.run).await.is_err() {
-            // A lost lease cannot write this outcome; an exhausted budget can.
-            let _=self.service.finish_assigned(&self.run,RunOutcome::Waiting {reason:WaitReason::Budget,checkpoint:json!({"code":"tool_budget_exhausted_or_authority_unavailable"})}).await;
+        if let Err(error) = self.service.enter_tool(&self.run).await {
+            let reason = match error {
+                DurableTaskError::BudgetExceeded => WaitReason::Budget,
+                DurableTaskError::NotFound => WaitReason::Authentication,
+                _ => {
+                    self.halt.cancel();
+                    return Err(TaskExecutorError);
+                }
+            };
+            let _ = self
+                .service
+                .finish_assigned(
+                    &self.run,
+                    RunOutcome::Waiting {
+                        reason,
+                        checkpoint: json!({"code":"run_budget_or_actor_unavailable"}),
+                    },
+                )
+                .await;
             self.halt.cancel();
             return Err(TaskExecutorError);
         }
@@ -111,11 +127,24 @@ impl RunTools {
             }
             LibraryRequest::Search { .. } => {}
         }
-        let mut response = self
-            .library
-            .invoke(request)
-            .await
-            .map_err(|_| TaskExecutorError)?;
+        let mut response = match self.library.invoke(request).await {
+            Ok(response) => response,
+            Err(LibraryError::BudgetExhausted) => {
+                let _ = self
+                    .service
+                    .finish_assigned(
+                        &self.run,
+                        RunOutcome::Waiting {
+                            reason: WaitReason::Budget,
+                            checkpoint: json!({"code":"capability_context_budget_exhausted"}),
+                        },
+                    )
+                    .await;
+                self.halt.cancel();
+                return Err(TaskExecutorError);
+            }
+            Err(LibraryError::Unavailable) => return Err(self.unavailable().await),
+        };
         if let Some(results) = response.get_mut("results").and_then(Value::as_array_mut) {
             results.retain(|item| match item.get("kind").and_then(Value::as_str) {
                 Some("tool") => self.run.actor.authority.capabilities.iter().any(|cap| {
@@ -318,12 +347,17 @@ impl TaskExecutorHandler {
         run: AssignedRun,
         cancellation: CancellationToken,
     ) -> Result<(), DurableTaskError> {
-        if self.service.verify_run(&run).await.is_err() {
+        if let Err(error) = self.service.verify_run(&run).await {
+            let reason = match error {
+                DurableTaskError::BudgetExceeded => WaitReason::Budget,
+                DurableTaskError::NotFound => WaitReason::Authentication,
+                _ => return Ok(()),
+            };
             self.service
                 .finish_assigned(
                     &run,
                     RunOutcome::Waiting {
-                        reason: WaitReason::Authentication,
+                        reason,
                         checkpoint: json!({"code":"actor_unavailable_or_run_limit"}),
                     },
                 )
@@ -374,17 +408,17 @@ impl TaskExecutorHandler {
         };
         heartbeat.abort();
         if let Some(mut outcome) = outcome {
-            if matches!(outcome, RunOutcome::Completed { .. }) {
-                if let Err(error) = self.service.verify_run(&run).await {
-                    outcome = RunOutcome::Waiting {
-                        reason: if matches!(error, DurableTaskError::NotFound) {
-                            WaitReason::Authentication
-                        } else {
-                            WaitReason::Budget
-                        },
-                        checkpoint: json!({"code":"actor_unavailable_or_run_limit"}),
-                    };
-                }
+            if matches!(outcome, RunOutcome::Completed { .. })
+                && let Err(error) = self.service.verify_run(&run).await
+            {
+                outcome = RunOutcome::Waiting {
+                    reason: if matches!(error, DurableTaskError::NotFound) {
+                        WaitReason::Authentication
+                    } else {
+                        WaitReason::Budget
+                    },
+                    checkpoint: json!({"code":"actor_unavailable_or_run_limit"}),
+                };
             }
             match self.service.finish_assigned(&run, outcome).await {
                 Ok(()) | Err(DurableTaskError::Conflict) => {}

@@ -100,3 +100,11 @@ jobs:
         run: |
           createdb -h 127.0.0.1 -U postgres vox_core_durable_tasks
           cargo test --locked --lib durable_task_context_and_worker_wait_boundaries -- --ignored
+      - name: Governed assigned-run recovery and fencing
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_assigned_runs
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_assigned_runs
+          cargo test --locked --lib assigned_worker_is_pinned_fenced_recoverable_and_queryable -- --ignored
+          cargo test --locked --lib cancelled_task_denies_new_approval_start_and_dispatch -- --ignored

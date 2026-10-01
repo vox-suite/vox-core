@@ -1,6 +1,7 @@
 //! Immutable assigned-run authority and lease-fenced state transitions.
 use super::*;
 use crate::agent_registry::{AgentRegistry, SelectedAgent};
+use chrono::{DateTime, Duration};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -145,8 +146,25 @@ impl DurableTaskService {
             return Err(DurableTaskError::Invalid);
         }
         let mut tx = self.db.pool().begin().await?;
-        let row=sqlx::query("WITH candidate AS (SELECT j.id FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id JOIN spans s ON s.id=j.span_id JOIN user_contexts c ON c.id=r.user_context_id WHERE (SELECT count(*) FROM jobs active JOIN assigned_task_runs ar ON ar.job_id=active.id WHERE ar.user_context_id=r.user_context_id AND active.state='running' AND active.lease_expires_at>$1)<2 AND j.kind='execute_span' AND j.wait_reason IS NULL AND ((j.state='pending' AND j.available_at<=$1) OR (j.state='running' AND j.lease_expires_at<=$1)) AND s.status<>'cancelled' ORDER BY j.priority DESC,j.available_at,j.created_at FOR UPDATE OF j,c SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running',lease_generation=j.lease_generation+1,attempt_count=j.attempt_count+1,lease_owner=$2,lease_expires_at=$3 FROM candidate WHERE j.id=candidate.id RETURNING j.id,j.span_id,j.checkpoint,j.lease_generation")
-            .bind(now).bind(worker).bind(now+lease).fetch_optional(&mut *tx).await?;
+        // Lock the context in a separate statement before counting running
+        // work, then lock span before job consistently with cancel/proposals.
+        let context_id:Option<Uuid>=sqlx::query_scalar("SELECT c.id FROM user_contexts c WHERE (SELECT count(*) FROM jobs active JOIN assigned_task_runs ar ON ar.job_id=active.id WHERE ar.user_context_id=c.id AND active.state='running' AND active.lease_expires_at>$1)<2 AND EXISTS(SELECT 1 FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE r.user_context_id=c.id AND j.kind='execute_span' AND j.wait_reason IS NULL AND ((j.state='pending' AND j.available_at<=$1) OR (j.state='running' AND j.lease_expires_at<=$1))) ORDER BY c.id FOR UPDATE OF c SKIP LOCKED LIMIT 1").bind(now).fetch_optional(&mut *tx).await?;
+        let Some(context_id) = context_id else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let running:i64=sqlx::query_scalar("SELECT count(*) FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE r.user_context_id=$1 AND j.state='running' AND j.lease_expires_at>$2").bind(context_id).bind(now).fetch_one(&mut *tx).await?;
+        if running >= 2 {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let candidate=sqlx::query("SELECT j.id,j.span_id FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id JOIN spans s ON s.id=j.span_id WHERE r.user_context_id=$2 AND j.kind='execute_span' AND j.wait_reason IS NULL AND ((j.state='pending' AND j.available_at<=$1) OR (j.state='running' AND j.lease_expires_at<=$1)) AND s.status<>'cancelled' ORDER BY j.priority DESC,j.available_at,j.created_at FOR UPDATE OF s SKIP LOCKED LIMIT 1").bind(now).bind(context_id).fetch_optional(&mut *tx).await?;
+        let Some(candidate) = candidate else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let row=sqlx::query("UPDATE jobs SET state='running',lease_generation=lease_generation+1,attempt_count=attempt_count+1,lease_owner=$2,lease_expires_at=$3 WHERE id=$4 AND wait_reason IS NULL AND ((state='pending' AND available_at<=$1) OR (state='running' AND lease_expires_at<=$1)) RETURNING id,span_id,checkpoint,lease_generation")
+            .bind(now).bind(worker).bind(now+lease).bind(candidate.get::<Uuid,_>("id")).fetch_optional(&mut *tx).await?;
         let Some(row) = row else {
             tx.commit().await?;
             return Ok(None);
@@ -183,10 +201,12 @@ impl DurableTaskService {
     }
 
     pub async fn verify_run(&self, run: &AssignedRun) -> Result<(), DurableTaskError> {
-        let current:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id JOIN spans s ON s.id=j.span_id WHERE j.id=$1 AND j.state='running' AND j.lease_owner=$2 AND j.lease_generation=$3 AND j.lease_expires_at>now() AND j.wait_reason IS NULL AND s.status<>'cancelled' AND r.deadline_at>now() AND j.attempt_count<=j.max_attempts)")
-            .bind(run.task.run_id).bind(&run.lease_owner).bind(run.lease_generation).fetch_one(self.db.pool()).await?;
-        if !current {
-            return Err(DurableTaskError::Conflict);
+        let current=sqlx::query("SELECT r.deadline_at,j.attempt_count,j.max_attempts FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id JOIN spans s ON s.id=j.span_id WHERE j.id=$1 AND j.state='running' AND j.lease_owner=$2 AND j.lease_generation=$3 AND j.lease_expires_at>now() AND j.wait_reason IS NULL AND s.status<>'cancelled'")
+            .bind(run.task.run_id).bind(&run.lease_owner).bind(run.lease_generation).fetch_optional(self.db.pool()).await?.ok_or(DurableTaskError::Conflict)?;
+        if current.get::<DateTime<Utc>, _>("deadline_at") <= Utc::now()
+            || current.get::<i32, _>("attempt_count") > current.get::<i32, _>("max_attempts")
+        {
+            return Err(DurableTaskError::BudgetExceeded);
         }
         let selected = AgentRegistry::new(self.db.clone())
             .selected_for_context(&run.context, &run.actor.agent.definition.external_key)
@@ -210,7 +230,8 @@ impl DurableTaskService {
         let changed=sqlx::query("UPDATE assigned_task_runs r SET tool_calls=tool_calls+1 FROM jobs j WHERE r.job_id=$1 AND j.id=r.job_id AND j.state='running' AND j.lease_owner=$2 AND j.lease_generation=$3 AND j.lease_expires_at>now() AND r.tool_calls<r.max_tool_calls")
             .bind(run.task.run_id).bind(&run.lease_owner).bind(run.lease_generation).execute(self.db.pool()).await?.rows_affected();
         if changed != 1 {
-            return Err(DurableTaskError::Conflict);
+            self.verify_run(run).await?;
+            return Err(DurableTaskError::BudgetExceeded);
         }
         Ok(())
     }
@@ -236,10 +257,10 @@ impl DurableTaskService {
         if let RunOutcome::Completed { summary } = &outcome {
             text(summary, 16 * 1024)?;
         }
-        if let RunOutcome::Waiting { checkpoint, .. } = &outcome {
-            if !checkpoint.is_object() {
-                return Err(DurableTaskError::Invalid);
-            }
+        if let RunOutcome::Waiting { checkpoint, .. } = &outcome
+            && !checkpoint.is_object()
+        {
+            return Err(DurableTaskError::Invalid);
         }
         let mut tx = self.db.pool().begin().await?;
         // Lock span before job, the same order as public cancel/wait/resume.
@@ -255,10 +276,10 @@ impl DurableTaskService {
             RunOutcome::Failed { .. } => ("failed", "failed", None),
         };
         let checkpoint = match &outcome {
-            RunOutcome::Waiting { checkpoint, .. } => checkpoint.clone(),
-            _ => run.checkpoint.clone(),
+            RunOutcome::Waiting { checkpoint, .. } => Some(checkpoint.clone()),
+            _ => None,
         };
-        let changed=sqlx::query("UPDATE jobs SET state=$4,wait_reason=$5,checkpoint=$6,lease_owner=NULL,lease_expires_at=NULL,completed_at=CASE WHEN $4='pending' THEN NULL ELSE now() END WHERE id=$1 AND state='running' AND lease_owner=$2 AND lease_generation=$3 AND lease_expires_at>now()")
+        let changed=sqlx::query("UPDATE jobs SET state=$4,wait_reason=$5,checkpoint=COALESCE($6,checkpoint),lease_owner=NULL,lease_expires_at=NULL,completed_at=CASE WHEN $4='pending' THEN NULL ELSE now() END WHERE id=$1 AND state='running' AND lease_owner=$2 AND lease_generation=$3 AND lease_expires_at>now() AND ($4<>'completed' OR (attempt_count<=max_attempts AND EXISTS(SELECT 1 FROM assigned_task_runs r WHERE r.job_id=jobs.id AND r.deadline_at>now())))")
             .bind(run.task.run_id).bind(&run.lease_owner).bind(run.lease_generation).bind(state).bind(reason).bind(checkpoint).execute(&mut *tx).await?.rows_affected();
         if changed != 1 {
             return Err(DurableTaskError::Conflict);
@@ -272,26 +293,6 @@ impl DurableTaskService {
             .bind(run.task.id).bind(span_state).bind(serialized).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
-    }
-
-    pub async fn wait_for_proposal(
-        &self,
-        run: &AssignedRun,
-        proposal_id: Uuid,
-    ) -> Result<(), DurableTaskError> {
-        let changed=sqlx::query("UPDATE assigned_task_runs r SET pending_proposal_id=$2 FROM action_proposals p,jobs j WHERE r.job_id=$1 AND p.id=$2 AND p.user_context_id=r.user_context_id AND p.actor_key=$3 AND j.id=r.job_id AND j.state='running' AND j.lease_owner=$4 AND j.lease_generation=$5 AND j.lease_expires_at>now()")
-            .bind(run.task.run_id).bind(proposal_id).bind(&run.actor.agent.definition.external_key).bind(&run.lease_owner).bind(run.lease_generation).execute(self.db.pool()).await?.rows_affected();
-        if changed != 1 {
-            return Err(DurableTaskError::Conflict);
-        }
-        self.finish_assigned(
-            run,
-            RunOutcome::Waiting {
-                reason: WaitReason::Approval,
-                checkpoint: serde_json::json!({"proposal_id":proposal_id,"executed":false}),
-            },
-        )
-        .await
     }
 }
 impl DurableTaskService {
@@ -309,5 +310,296 @@ impl DurableTaskService {
             return Err(DurableTaskError::Conflict);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod assigned_tests {
+    use super::*;
+    use crate::{
+        identity::IdentityService,
+        workers::task_executor::{
+            AssignedTaskRunner, RunTools, TaskExecutorError, TaskExecutorHandler,
+        },
+    };
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    struct WorkProduct;
+    #[async_trait]
+    impl AssignedTaskRunner for WorkProduct {
+        async fn run(
+            &self,
+            run: AssignedRun,
+            _: RunTools,
+        ) -> Result<RunOutcome, TaskExecutorError> {
+            assert_eq!(run.instruction, "Write the requested report");
+            Ok(RunOutcome::Completed {
+                summary: "The requested report is here.".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated TEST_DATABASE_URL"]
+    async fn assigned_worker_is_pinned_fenced_recoverable_and_queryable() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let context = IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let service = DurableTaskService::new(db.clone());
+        let request = || StartTaskRequest {
+            title: "Assigned report".into(),
+            instruction: "Write the requested report".into(),
+            agent_external_key: None,
+        };
+        let task = service.start(&context, request()).await.unwrap();
+        assert!(task.agent_external_key.is_some());
+        assert_eq!(task.instruction_version, Some(1));
+        let before = service.query(&context, None, 1).await.unwrap();
+        assert_eq!(before.tasks[0].id, task.id);
+        let original = service
+            .claim_assigned("old-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        let changed = sqlx::query("UPDATE assigned_task_runs SET authority='{}' WHERE job_id=$1")
+            .bind(task.run_id)
+            .execute(db.pool())
+            .await;
+        assert!(
+            changed.is_err(),
+            "database must reject authority replacement"
+        );
+        sqlx::query("UPDATE jobs SET lease_expires_at=now()-interval '1 second' WHERE id=$1")
+            .bind(task.run_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let recovered = service
+            .claim_assigned("new-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(recovered.lease_generation > original.lease_generation);
+        assert!(matches!(
+            service
+                .finish_assigned(
+                    &original,
+                    RunOutcome::Completed {
+                        summary: "stale result".into()
+                    }
+                )
+                .await,
+            Err(DurableTaskError::Conflict)
+        ));
+        service
+            .save_checkpoint(&recovered, &serde_json::json!({"read_evidence":"retained"}))
+            .await
+            .unwrap();
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(WorkProduct))
+            .execute_claim(recovered, CancellationToken::new())
+            .await
+            .unwrap();
+        let result = service.get(&context, task.id).await.unwrap();
+        assert_eq!(result.state, RunState::Completed);
+        assert_eq!(result.result["summary"], "The requested report is here.");
+        let checkpoint: Value = sqlx::query_scalar("SELECT checkpoint FROM jobs WHERE id=$1")
+            .bind(task.run_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(checkpoint["last_tool_result"]["read_evidence"], "retained");
+        let task = service.start(&context, request()).await.unwrap();
+        let claim = service
+            .claim_assigned("cancelled-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        service.cancel(&context, task.id).await.unwrap();
+        assert!(matches!(
+            service
+                .finish_assigned(
+                    &claim,
+                    RunOutcome::Completed {
+                        summary: "must not overwrite cancel".into()
+                    }
+                )
+                .await,
+            Err(DurableTaskError::Conflict)
+        ));
+        assert_eq!(
+            service.get(&context, task.id).await.unwrap().state,
+            RunState::Cancelled
+        );
+        let limited = service.start(&context, request()).await.unwrap();
+        sqlx::query("UPDATE jobs SET attempt_count=max_attempts WHERE id=$1")
+            .bind(limited.run_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let claim = service
+            .claim_assigned("budget-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            service.verify_run(&claim).await,
+            Err(DurableTaskError::BudgetExceeded)
+        ));
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(WorkProduct))
+            .execute_claim(claim, CancellationToken::new())
+            .await
+            .unwrap();
+        let limited = service.get(&context, limited.id).await.unwrap();
+        assert_eq!(limited.wait_reason, Some(WaitReason::Budget));
+        assert!(matches!(
+            service.resume(&context, limited.id, None).await,
+            Err(DurableTaskError::Conflict)
+        ));
+        let expired = service.start(&context, request()).await.unwrap();
+        let mut claim = service
+            .claim_assigned("deadline-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        // Read-only injected claim time cannot replace the database deadline.
+        claim.deadline_at = Utc::now() - Duration::seconds(1);
+        assert!(service.verify_run(&claim).await.is_ok());
+        service.cancel(&context, expired.id).await.unwrap();
+        let extension:Uuid=sqlx::query_scalar("INSERT INTO remote_extensions(user_context_id,external_key,display_name,protocol,endpoint_url,operator_id,operator_name,conformance_status,operator_enabled,lifecycle_state) VALUES($1,'assigned-write-fixture','Assigned write fixture','mcp','https://example.com/mcp','fixture','Fixture','passed',true,'active') RETURNING id").bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+        let capability = serde_json::json!({"external_key":"fixture.write","display_name":"Controlled write","effect":"write","consequential":true,"input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"data_recipients":["Fixture"],"access_needs":[],"supported_regions":[],"optional_guarantees":{}});
+        sqlx::query("INSERT INTO remote_extension_versions(extension_id,version,endpoint_url,operator_id,operator_name,capabilities,conformance_status) VALUES($1,1,'https://example.com/mcp','fixture','Fixture',$2,'passed')").bind(extension).bind(serde_json::json!([capability.clone()])).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO remote_extension_credentials(extension_id,issuer,token_endpoint,client_id,resource,access_token_ciphertext,tools) VALUES($1,'https://example.com','https://example.com/token','fixture','https://example.com/mcp',$2,$3)")
+            .bind(extension).bind(vec![1u8,2,3]).bind(serde_json::json!([{"name":"fixture.write","inputSchema":capability["input_schema"]}])).execute(db.pool()).await.unwrap();
+        let connection:Uuid=sqlx::query_scalar("INSERT INTO external_connections(user_context_id,remote_extension_id,external_account_hash,credential_custody,authorization_state,authorized_capabilities) VALUES($1,$2,$3,'platform_held','authorized',ARRAY['fixture.write']) RETURNING id").bind(context.id.0).bind(extension).bind(vec![4u8;32]).fetch_one(db.pool()).await.unwrap();
+        let selected = capture_actor(&db, &context, None).await.unwrap().agent;
+        sqlx::query("INSERT INTO agent_capability_grants(user_context_id,agent_definition_id,connection_id,capability_external_key) VALUES($1,$2,$3,'fixture.write')").bind(context.id.0).bind(selected.definition.id).bind(connection).execute(db.pool()).await.unwrap();
+        let proposed_task = service.start(&context, request()).await.unwrap();
+        let claim = service
+            .claim_assigned("proposal-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        let proposal_request = || crate::approvals::CreateProposalRequest {
+            span_id: proposed_task.id,
+            task_run_id: proposed_task.run_id,
+            agent_external_key: selected.definition.external_key.clone(),
+            capability_external_key: "fixture.write".into(),
+            details: serde_json::json!({"execution":{"connection_id":connection},"invocation":{"tool_name":"fixture.write","arguments":{"text":"exact approved content"}}}),
+            expires_at: Utc::now() + Duration::minutes(10),
+            replaces_proposal_id: None,
+        };
+        let approvals = crate::approvals::ApprovalService::new(db.clone());
+        let proposal = approvals
+            .propose_for_run(
+                &context,
+                proposal_request(),
+                Utc::now(),
+                &claim.lease_owner,
+                claim.lease_generation,
+            )
+            .await
+            .unwrap();
+        let waiting = service.get(&context, proposed_task.id).await.unwrap();
+        assert_eq!(waiting.state, RunState::Waiting);
+        assert_eq!(waiting.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(waiting.result["reason"], "approval");
+        assert_eq!(
+            waiting.result["checkpoint"]["proposal_id"],
+            proposal.id.to_string()
+        );
+        assert!(
+            approvals
+                .propose_for_run(
+                    &context,
+                    proposal_request(),
+                    Utc::now(),
+                    &claim.lease_owner,
+                    claim.lease_generation
+                )
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            service.resume(&context, proposed_task.id, None).await,
+            Err(DurableTaskError::Conflict)
+        ));
+        assert!(
+            service
+                .claim_assigned("another-worker", Utc::now(), Duration::seconds(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM executions WHERE proposal_id=$1")
+                .bind(proposal.id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        service.cancel(&context, proposed_task.id).await.unwrap();
+        let clarification = service.start(&context, request()).await.unwrap();
+        let claim = service
+            .claim_assigned("clarification-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        service
+            .finish_assigned(
+                &claim,
+                RunOutcome::Waiting {
+                    reason: WaitReason::Clarification,
+                    checkpoint: serde_json::json!({"question":"Which reporting period?"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            service
+                .resume(&context, clarification.id, None)
+                .await
+                .is_err()
+        );
+        service
+            .resume(&context, clarification.id, Some("September".into()))
+            .await
+            .unwrap();
+        let resumed = service
+            .claim_assigned("clarification-resumed", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(resumed.checkpoint.to_string().contains("September"));
+        assert_eq!(
+            resumed.actor.agent.definition.external_key,
+            claim.actor.agent.definition.external_key
+        );
+        service.cancel(&context, clarification.id).await.unwrap();
+        let mut other = context.clone();
+        other.id = UserContextId(Uuid::new_v4());
+        assert!(
+            service
+                .query(&other, None, 20)
+                .await
+                .unwrap()
+                .tasks
+                .is_empty()
+        );
+        assert!(matches!(
+            service.query(&context, None, 51).await,
+            Err(DurableTaskError::Invalid)
+        ));
     }
 }

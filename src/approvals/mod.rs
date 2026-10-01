@@ -210,6 +210,11 @@ impl ApprovalService {
         }
         let mut tx = self.db.pool().begin().await?;
         if let Some((owner, generation)) = run_fence {
+            let owned_span=sqlx::query_scalar::<_,Uuid>("SELECT id FROM spans WHERE id=$1 AND user_id=$2 AND user_context_id=$3 AND status<>'cancelled' FOR UPDATE")
+                .bind(r.span_id).bind(context.user_id.0).bind(context.id.0).fetch_optional(&mut *tx).await?;
+            if owned_span.is_none() {
+                return Err(ApprovalError::NotApprovable);
+            }
             let valid = sqlx::query_scalar::<_, Uuid>(
                 "SELECT j.id FROM jobs j JOIN spans s ON s.id=j.span_id \
                  JOIN assigned_task_runs run ON run.job_id=j.id \
@@ -218,7 +223,7 @@ impl ApprovalService {
                  AND run.actor_snapshot->'definition'->>'external_key'=$5 \
                  AND j.state='running' AND j.wait_reason IS NULL \
                  AND j.lease_owner=$6 AND j.lease_generation=$7 AND j.lease_expires_at>now() \
-                 AND s.status <> 'cancelled' FOR UPDATE OF j,run",
+                 AND s.status <> 'cancelled' AND run.deadline_at>now() AND j.attempt_count<=j.max_attempts FOR UPDATE OF j,run",
             )
             .bind(r.task_run_id)
             .bind(r.span_id)
@@ -286,16 +291,20 @@ impl ApprovalService {
         .fetch_one(&mut *tx)
         .await?;
         if run_fence.is_some() {
-            sqlx::query("UPDATE assigned_task_runs SET pending_proposal_id=$2 WHERE job_id=$1")
-                .bind(r.task_run_id)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            let waiting = serde_json::json!({"state":"waiting","reason":"approval","checkpoint":{"proposal_id":id,"executed":false}});
+            sqlx::query(
+                "UPDATE assigned_task_runs SET pending_proposal_id=$2,result=$3 WHERE job_id=$1",
+            )
+            .bind(r.task_run_id)
+            .bind(id)
+            .bind(&waiting)
+            .execute(&mut *tx)
+            .await?;
             sqlx::query("UPDATE jobs SET state='pending',wait_reason='approval',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1")
                 .bind(r.task_run_id).execute(&mut *tx).await?;
-            sqlx::query("UPDATE spans SET execution_result=$2,updated_at=now() WHERE id=$1")
+            sqlx::query("UPDATE spans SET status='waiting_user',execution_result=$2,updated_at=now() WHERE id=$1")
                 .bind(r.span_id)
-                .bind(serde_json::json!({"state":"waiting","wait_reason":"approval","proposal_id":id}))
+                .bind(waiting)
                 .execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -347,6 +356,22 @@ impl ApprovalService {
         now: DateTime<Utc>,
     ) -> Result<Proposal, ApprovalError> {
         let mut tx = self.db.pool().begin().await?;
+        // Cancellation and approval serialize on the owned task before either
+        // transaction locks its proposal rows.
+        let task = sqlx::query_scalar::<_, Uuid>(
+            "SELECT s.id FROM spans s JOIN action_proposals p ON p.span_id=s.id
+             WHERE p.id=$1 AND p.user_id=$2 AND p.user_context_id=$3
+               AND s.user_id=$2 AND s.user_context_id=$3 AND s.status<>'cancelled'
+             FOR UPDATE OF s",
+        )
+        .bind(proposal_id)
+        .bind(context.user_id.0)
+        .bind(context.id.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if task.is_none() {
+            return Err(ApprovalError::NotApprovable);
+        }
         let row = sqlx::query(
             "SELECT details, details_hash, expires_at, state, capability \
              FROM action_proposals WHERE id = $1 AND user_id = $2 AND user_context_id = $3 FOR UPDATE",

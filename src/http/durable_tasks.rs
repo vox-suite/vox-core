@@ -77,11 +77,18 @@ pub async fn wait(
     reply(tasks.wait(&c, id, r.wait).await, StatusCode::OK)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeBody {
+    pub host_context: HostContextRequest,
+    pub reply: Option<String>,
+}
+
 pub async fn resume(
     State(s): State<AppState>,
     h: HeaderMap,
     Path(id): Path<Uuid>,
-    Json(r): Json<ContextRequest>,
+    Json(r): Json<ResumeBody>,
 ) -> Response {
     let Some(tasks) = s.durable_tasks.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -89,7 +96,7 @@ pub async fn resume(
     let Some(c) = context(s.host_trust.as_deref(), &h, r.host_context).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    reply(tasks.resume(&c, id).await, StatusCode::OK)
+    reply(tasks.resume(&c, id, r.reply).await, StatusCode::OK)
 }
 
 pub async fn cancel(
@@ -115,7 +122,9 @@ fn reply(
         Ok(v) => (ok, Json(v)).into_response(),
         Err(DurableTaskError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(DurableTaskError::NotFound) => StatusCode::NOT_FOUND.into_response(),
-        Err(DurableTaskError::Conflict) => StatusCode::CONFLICT.into_response(),
+        Err(DurableTaskError::Conflict | DurableTaskError::BudgetExceeded) => {
+            StatusCode::CONFLICT.into_response()
+        }
         Err(DurableTaskError::Database(_)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

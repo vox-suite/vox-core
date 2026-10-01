@@ -6,7 +6,7 @@ use crate::{
         UserContextSubject, UserId,
     },
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
@@ -60,12 +60,6 @@ pub struct DurableTask {
     pub result: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ClaimedRun {
-    pub task: DurableTask,
-    pub checkpoint: Value,
-}
-
 #[derive(Clone)]
 pub struct DurableTaskService {
     db: Db,
@@ -79,6 +73,8 @@ pub enum DurableTaskError {
     NotFound,
     #[error("task cannot transition from its current state")]
     Conflict,
+    #[error("task execution budget exhausted")]
+    BudgetExceeded,
     #[error("task storage unavailable")]
     Database(#[from] sqlx::Error),
 }
@@ -164,15 +160,22 @@ impl DurableTaskService {
         )
         .bind(span_id)
         .bind(wait_name(&request.reason))
-        .bind(request.checkpoint)
+        .bind(&request.checkpoint)
         .execute(&mut *tx)
         .await?
         .rows_affected();
         if changed != 1 {
             return Err(DurableTaskError::Conflict);
         }
-        sqlx::query("UPDATE spans SET status='waiting_user', updated_at=now() WHERE id=$1")
-            .bind(span_id)
+        let outcome = serde_json::to_value(runs::RunOutcome::Waiting {
+            reason: request.reason,
+            checkpoint: request.checkpoint,
+        })
+        .map_err(|_| DurableTaskError::Invalid)?;
+        sqlx::query("UPDATE assigned_task_runs SET result=$2 WHERE job_id IN (SELECT id FROM jobs WHERE span_id=$1)")
+            .bind(span_id).bind(&outcome).execute(&mut *tx).await?;
+        sqlx::query("UPDATE spans SET status='waiting_user',execution_result=$2, updated_at=now() WHERE id=$1")
+            .bind(span_id).bind(outcome)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -183,9 +186,29 @@ impl DurableTaskService {
         &self,
         context: &ResolvedUserContext,
         span_id: Uuid,
+        reply: Option<String>,
     ) -> Result<DurableTask, DurableTaskError> {
         let mut tx = self.db.pool().begin().await?;
         self.lock_task(&mut tx, context, span_id).await?;
+        let waiting: Option<String> = sqlx::query_scalar(
+            "SELECT wait_reason FROM jobs WHERE span_id=$1 AND state='pending' FOR UPDATE",
+        )
+        .bind(span_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+        match (waiting.as_deref(), reply.as_deref()) {
+            (Some("clarification"), Some(answer)) => {
+                text(answer, 8192)?;
+            }
+            (Some("clarification"), None) | (_, Some(_)) => return Err(DurableTaskError::Invalid),
+            _ => {}
+        }
+        if let Some(answer) = reply {
+            // User content is data for this task, never mutable actor authority.
+            sqlx::query("UPDATE jobs SET checkpoint=checkpoint || jsonb_build_object('user_reply',$2) WHERE span_id=$1")
+                .bind(span_id).bind(answer).execute(&mut *tx).await?;
+        }
         let pending:Option<Uuid>=sqlx::query_scalar("SELECT pending_proposal_id FROM assigned_task_runs WHERE job_id IN (SELECT id FROM jobs WHERE span_id=$1)").bind(span_id).fetch_optional(&mut *tx).await?.flatten();
         if let Some(proposal) = pending {
             let outcome:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('proposal_id',p.id,'proposal_state',p.state,'execution_state',e.state,'confirmation_evidence',e.confirmation_evidence) FROM action_proposals p LEFT JOIN executions e ON e.proposal_id=p.id AND e.user_context_id=p.user_context_id WHERE p.id=$1 AND p.user_context_id=$2 AND (p.state IN ('rejected','expired') OR e.state IN ('succeeded','failed'))")
@@ -241,55 +264,13 @@ impl DurableTaskService {
         .bind(span_id)
         .execute(&mut *tx)
         .await?;
+        // Stop invalidates unused decisions, retaining proposals and approvals
+        // as historical evidence. Already consumed actions keep their outcome
+        // and reconciliation path; cancellation is never an undo claim.
+        sqlx::query("UPDATE action_proposals p SET state='expired' WHERE p.span_id=$1 AND p.user_context_id=$2 AND p.state IN ('proposed','approved') AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.proposal_id=p.id AND e.user_context_id=p.user_context_id)")
+            .bind(span_id).bind(context.id.0).execute(&mut *tx).await?;
         tx.commit().await?;
         self.load(context, span_id).await
-    }
-
-    pub async fn recover_expired(&self, now: DateTime<Utc>) -> Result<u64, DurableTaskError> {
-        Ok(sqlx::query(
-            "UPDATE jobs SET state='pending', lease_owner=NULL, lease_expires_at=NULL WHERE state='running' AND lease_expires_at <= $1",
-        )
-        .bind(now)
-        .execute(self.db.pool())
-        .await?
-        .rows_affected())
-    }
-
-    pub async fn claim_next(
-        &self,
-        worker: &str,
-        now: DateTime<Utc>,
-        lease: Duration,
-    ) -> Result<Option<ClaimedRun>, DurableTaskError> {
-        if text(worker, 255).is_err() {
-            return Err(DurableTaskError::Invalid);
-        }
-        let mut tx = self.db.pool().begin().await?;
-        let row = sqlx::query(
-            "WITH candidate AS (SELECT j.id FROM jobs j JOIN spans t ON t.id=j.span_id WHERE j.kind='execute_span' AND j.wait_reason IS NULL AND ((j.state='pending' AND j.available_at <= $1) OR (j.state='running' AND j.lease_expires_at <= $1)) AND t.status <> 'cancelled' ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE jobs j SET state='running', lease_owner=$2, lease_expires_at=$3 FROM candidate WHERE j.id=candidate.id RETURNING j.id, j.span_id, j.checkpoint",
-        )
-        .bind(now)
-        .bind(worker)
-        .bind(now + lease)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(row) = row else {
-            tx.commit().await?;
-            return Ok(None);
-        };
-        let run_id: Uuid = row.get("id");
-        let span_id: Uuid = row.get("span_id");
-        let checkpoint: Value = row.get("checkpoint");
-        sqlx::query("UPDATE spans SET status='active', updated_at=now() WHERE id=$1")
-            .bind(span_id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        let context = self.context_for_task(span_id).await?;
-        let mut task = self.load(&context, span_id).await?;
-        task.run_id = run_id;
-        task.state = RunState::Running;
-        Ok(Some(ClaimedRun { task, checkpoint }))
     }
 
     async fn lock_task(
@@ -348,7 +329,7 @@ impl DurableTaskService {
         span_id: Uuid,
     ) -> Result<DurableTask, DurableTaskError> {
         let row = sqlx::query(
-            "SELECT t.title, j.id, j.state, j.wait_reason, r.actor_snapshot->'definition'->>'external_key' AS actor_key,r.instruction_version,t.execution_result FROM spans t JOIN jobs j ON j.span_id=t.id LEFT JOIN assigned_task_runs r ON r.job_id=j.id WHERE t.id=$1 AND t.user_id=$2 AND t.user_context_id=$3 AND j.user_context_id=$3 AND j.kind='execute_span' ORDER BY j.created_at DESC LIMIT 1",
+            "SELECT t.title, j.id, j.state, j.wait_reason, r.actor_snapshot->'definition'->>'external_key' AS actor_key,r.instruction_version,t.execution_result,r.pending_proposal_id,(SELECT e.state FROM executions e WHERE e.proposal_id=r.pending_proposal_id AND e.user_context_id=t.user_context_id LIMIT 1) AS pending_execution_state FROM spans t JOIN jobs j ON j.span_id=t.id LEFT JOIN assigned_task_runs r ON r.job_id=j.id WHERE t.id=$1 AND t.user_id=$2 AND t.user_context_id=$3 AND j.user_context_id=$3 AND j.kind='execute_span' ORDER BY j.created_at DESC LIMIT 1",
         )
         .bind(span_id)
         .bind(context.user_id.0)
@@ -356,6 +337,22 @@ impl DurableTaskService {
         .fetch_optional(self.db.pool())
         .await?
         .ok_or(DurableTaskError::NotFound)?;
+        let mut result: Value = row.get("execution_result");
+        let mut wait_reason = row
+            .get::<Option<String>, _>(3)
+            .map(|v| wait(&v))
+            .transpose()?;
+        let job_state: String = row.get("state");
+        if matches!(job_state.as_str(), "pending" | "cancelled")
+            && matches!(
+                row.get::<Option<String>, _>("pending_execution_state")
+                    .as_deref(),
+                Some("reconciling" | "in_progress")
+            )
+        {
+            wait_reason = Some(WaitReason::Reconciliation);
+            result = serde_json::json!({"state":if job_state=="cancelled"{"cancelled"}else{"waiting"},"reason":"reconciliation","checkpoint":{"code":"provider_outcome_unconfirmed","proposal_id":row.get::<Option<Uuid>,_>("pending_proposal_id")}});
+        }
         Ok(DurableTask {
             id: span_id,
             title: row.get(0),
@@ -366,11 +363,8 @@ impl DurableTaskService {
             )?,
             agent_external_key: row.get("actor_key"),
             instruction_version: row.get("instruction_version"),
-            result: row.get("execution_result"),
-            wait_reason: row
-                .get::<Option<String>, _>(3)
-                .map(|v| wait(&v))
-                .transpose()?,
+            result,
+            wait_reason,
         })
     }
 }
@@ -428,6 +422,7 @@ fn wait_name(v: &WaitReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::{db::jobs::JobRepository, identity::IdentityService};
+    use chrono::Duration;
 
     #[tokio::test]
     #[ignore = "requires an isolated TEST_DATABASE_URL"]
@@ -496,7 +491,7 @@ mod tests {
             .unwrap();
         assert!(
             service
-                .claim_next("governed-fixture", Utc::now(), Duration::seconds(30))
+                .claim_assigned("governed-fixture", Utc::now(), Duration::seconds(30))
                 .await
                 .unwrap()
                 .is_none()
@@ -518,7 +513,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            service.resume(&substituted, task.id).await,
+            service.resume(&substituted, task.id, None).await,
             Err(DurableTaskError::NotFound)
         ));
         let repository = JobRepository::new(db.clone());
@@ -549,7 +544,7 @@ mod tests {
         .execute(db.pool())
         .await
         .unwrap();
-        service.resume(&context, task.id).await.unwrap();
+        service.resume(&context, task.id, None).await.unwrap();
         assert_eq!(
             service.get(&context, task.id).await.unwrap().state,
             RunState::Queued
@@ -589,11 +584,8 @@ mod tests {
             .execute(db.pool())
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id=$1")
-            .bind(user)
-            .execute(db.pool())
-            .await
-            .unwrap();
+        // The disposable database retains the owned actor and its immutable
+        // run evidence; deleting its user would violate ownership references.
     }
 }
 

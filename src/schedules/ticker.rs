@@ -90,34 +90,6 @@ impl ScheduleTicker {
             }
         }
 
-        let due_tasks = sqlx::query(
-            "SELECT id, user_id FROM spans \
-             WHERE status = 'planned' AND execution_type = 'autonomous' AND category <> 'call' AND due_at IS NOT NULL AND due_at <= $1 \
-             FOR UPDATE SKIP LOCKED",
-        )
-        .bind(now)
-        .fetch_all(&mut *tx)
-        .await?;
-
-        for row in due_tasks {
-            let span_id: Uuid = row.get("id");
-            let user_id: Uuid = row.get("user_id");
-            sqlx::query(
-                "INSERT INTO jobs (user_id, kind, payload_reference_id, span_id) \
-                 VALUES ($1, 'execute_span', $2, $2) \
-                 ON CONFLICT DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(span_id)
-            .execute(&mut *tx)
-            .await?;
-
-            sqlx::query("UPDATE spans SET status = 'active', updated_at = now() WHERE id = $1")
-                .bind(span_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-
         tx.commit().await?;
         Ok(count)
     }
