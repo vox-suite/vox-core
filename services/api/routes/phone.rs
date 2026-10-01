@@ -18,13 +18,33 @@ pub struct PhoneApiState {
 
 #[derive(Debug, Deserialize)]
 pub struct StartVerificationRequest {
-    pub phone_number: String,
+    pub phone_number: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ConfirmVerificationRequest {
-    pub phone_number: String,
+    pub phone_number: Option<String>,
     pub code: String,
+}
+
+async fn resolve_phone(
+    pool: &PgPool,
+    user_id: Uuid,
+    provided: Option<&str>,
+) -> Result<String, StatusCode> {
+    match provided.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => vox_core::phone::normalize_e164(raw).ok_or(StatusCode::BAD_REQUEST),
+        None => sqlx::query_scalar::<_, String>(
+            "SELECT normalized_external_id FROM channel_identities \
+             WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL \
+             ORDER BY (otp_verified_at IS NULL) DESC, created_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND),
+    }
 }
 
 fn verification_status(error: &PhoneVerificationError) -> StatusCode {
@@ -44,8 +64,7 @@ pub async fn start_phone_verification(
     let Some(bridge) = state.bridge.as_ref() else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
-    let phone =
-        vox_core::phone::normalize_e164(&payload.phone_number).ok_or(StatusCode::BAD_REQUEST)?;
+    let phone = resolve_phone(&state.pool, actor.user_id, payload.phone_number.as_deref()).await?;
     let issued = state
         .verification
         .issue(actor.user_id, &phone)
@@ -58,7 +77,18 @@ pub async fn start_phone_verification(
             tracing::warn!(%error, "Phone verification code was not delivered");
             StatusCode::BAD_GATEWAY
         })?;
-    Ok(Json(serde_json::json!({ "expires_at": issued.expires_at })))
+    let phone_last4: String = phone
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    Ok(Json(serde_json::json!({
+        "expires_at": issued.expires_at,
+        "phone_last4": phone_last4,
+    })))
 }
 
 pub async fn confirm_phone_verification(
@@ -66,8 +96,7 @@ pub async fn confirm_phone_verification(
     State(state): State<PhoneApiState>,
     Json(payload): Json<ConfirmVerificationRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let phone =
-        vox_core::phone::normalize_e164(&payload.phone_number).ok_or(StatusCode::BAD_REQUEST)?;
+    let phone = resolve_phone(&state.pool, actor.user_id, payload.phone_number.as_deref()).await?;
     state
         .verification
         .confirm(actor.user_id, &phone, &payload.code)
