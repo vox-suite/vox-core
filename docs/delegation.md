@@ -12,6 +12,8 @@ Ordinary chat keeps the Personal Assistant. An identical repeated delegation cal
 - `POST /v1/delegation-permissions/{id}/revoke` revokes subsequent use.
 - `POST /v1/durable-tasks/stop-all` cancels active assigned work in the authenticated context; `{cancelled, undo:false}` does not undo provider effects.
 
+An ordinary-chat request lacking parent access first returns a task in clarification consent wait. Nonstream `POST /v1/conversations/respond` retains `text` and adds the exact server-owned `task`; the host binds once permission to this task's `run_id` and resumes with an explicit reply. The worker resolves and consumes that exact permission before invoking a model. Without matching consent it waits again. Streaming responses do not yet carry this task envelope.
+
 Only signed, authenticated hosts may create consent. Model tools cannot grant or expand it. Permission creation resolves an owned distinct assistant pair, limits 64 enabled permissions, 1–32 distinct capabilities, and at most eight selected nonsensitive preference keys. Shared selected preference values total at most 2048 bytes and are pinned by value digest. Changed, removed, sensitive or revoked preferences require renewed consent. The specialist receives only these selected advisory values; they confer no execution authority. Private memory tools are disabled for delegated runs. Skills are not delegated in this initial scope.
 
 ## Runtime boundaries

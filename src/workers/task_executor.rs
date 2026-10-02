@@ -399,6 +399,25 @@ impl TaskExecutorHandler {
                 .await?;
             return Ok(());
         }
+        let consent = crate::delegation::DelegationService::new(self.db.clone())
+            .continue_consent(&run)
+            .await;
+        match consent {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(_) => {
+                self.service
+                    .finish_assigned(
+                        &run,
+                        RunOutcome::Waiting {
+                            reason: WaitReason::Clarification,
+                            checkpoint: run.checkpoint.clone(),
+                        },
+                    )
+                    .await?;
+                return Ok(());
+            }
+        }
         let halt = CancellationToken::new();
         let tools = RunTools {
             db: self.db.clone(),

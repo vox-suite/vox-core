@@ -201,6 +201,23 @@ impl DelegationService {
         if permission.is_none() && !subset(&authority, &parent_authority) {
             return Err(DurableTaskError::NotFound);
         }
+        let parent_job: Uuid = row.get("parent_run_id");
+        sqlx::query(
+            "SELECT s.id FROM spans s JOIN jobs j ON j.span_id=s.id WHERE j.id=$1 FOR SHARE OF s",
+        )
+        .bind(parent_job)
+        .fetch_one(&mut **tx)
+        .await?;
+        let live=sqlx::query("SELECT j.state,j.attempt_count,j.max_attempts,r.deadline_at,r.tool_calls,r.max_tool_calls FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE j.id=$1 FOR SHARE OF j").bind(parent_job).fetch_one(&mut **tx).await?;
+        if matches!(
+            live.get::<String, _>("state").as_str(),
+            "cancelled" | "failed" | "completed"
+        ) || live.get::<chrono::DateTime<chrono::Utc>, _>("deadline_at") <= chrono::Utc::now()
+            || live.get::<i32, _>("tool_calls") > live.get::<i32, _>("max_tool_calls")
+            || live.get::<i32, _>("attempt_count") > live.get::<i32, _>("max_attempts")
+        {
+            return Err(DurableTaskError::BudgetExceeded);
+        }
         let ids = vec![parent_agent, child_agent];
         // Freeze all mutable inputs of effective grants, then re-evaluate them.
         // Rows are locked even when revoked, so a committed revoke cannot hide
@@ -264,6 +281,19 @@ impl DelegationService {
             self.authorize_run(&run).await?;
         }
         Ok(())
+    }
+    /// Resume exact consent work without asking a model to reconstruct scope.
+    pub async fn continue_consent(&self, run: &AssignedRun) -> Result<bool, DurableTaskError> {
+        if run.checkpoint["code"] != "delegation_consent_required" {
+            return Ok(false);
+        }
+        let mut request: DelegateRequest =
+            serde_json::from_value(run.checkpoint["delegation_request"].clone())
+                .map_err(|_| DurableTaskError::Invalid)?;
+        let permission:Option<Uuid>=sqlx::query_scalar("SELECT p.id FROM agent_delegation_permissions p JOIN agent_definitions a ON a.id=p.specialist_agent_id WHERE p.user_context_id=$1 AND p.requester_agent_id=$2 AND a.external_key=$3 AND p.parent_run_id=$4 AND p.state='enabled' AND NOT p.used ORDER BY p.created_at DESC LIMIT 1").bind(run.context.id.0).bind(run.actor.agent.definition.id).bind(&request.specialist_agent_key).bind(run.task.run_id).fetch_optional(self.db.pool()).await?;
+        request.permission_id = Some(permission.ok_or(DurableTaskError::NotFound)?);
+        self.delegate(run, request).await?;
+        Ok(true)
     }
     pub async fn delegate_conversation(
         &self,
@@ -665,6 +695,37 @@ mod tests {
             })
         }
     }
+    struct ConsentResponder {
+        db: Db,
+        specialist: String,
+        scope: CapabilitySelection,
+    }
+    #[async_trait]
+    impl crate::agents::conversation::ConversationResponder for ConsentResponder {
+        async fn respond(
+            &self,
+            prompt: crate::agents::conversation::ConversationPrompt,
+        ) -> Result<String, crate::agents::AgentError> {
+            let library = crate::agents::tools::library::AgentLibrary::new(
+                Some(self.db.clone()),
+                None,
+                prompt.context,
+                prompt.selected_agent.definition.external_key,
+            )
+            .with_task_capture(prompt.task_capture);
+            let result = library
+                .invoke(crate::agents::tools::library::LibraryRequest::Delegate {
+                    specialist_agent_key: self.specialist.clone(),
+                    brief: "Only report the selected repository count".into(),
+                    scope: self.scope.clone(),
+                    permission_id: None,
+                })
+                .await
+                .map_err(|_| crate::agents::AgentError::Provider)?;
+            assert_eq!(result["state"], "requires_delegation_consent");
+            Ok("Please approve the named specialist tools.".into())
+        }
+    }
     #[tokio::test]
     #[ignore = "requires isolated TEST_DATABASE_URL"]
     async fn delegation_is_scoped_revocable_and_returns_only_bounded_work() {
@@ -1002,10 +1063,39 @@ mod tests {
             "shared budget cannot be reset by resume"
         );
         assert!(service.stop_all(&context).await.unwrap() > 0);
-        let consent = delegation
-            .delegate_conversation(&context, &default.definition.external_key, delegate(None))
+        let conversations = crate::conversations::service::ConversationService::new(
+            db.clone(),
+            Arc::new(ConsentResponder {
+                db: db.clone(),
+                specialist: child.definition.external_key.clone(),
+                scope: CapabilitySelection::from_authority(&scope),
+            }),
+        );
+        let response = conversations
+            .respond(
+                context.clone(),
+                crate::conversations::RespondRequest {
+                    agent_external_key: default.definition.external_key.clone(),
+                    identity: crate::identity::ChannelIdentity {
+                        channel: "web".into(),
+                        external_id: context.subject.host_user_id.clone(),
+                    },
+                    external_conversation_id: "consent-envelope-proof".into(),
+                    text: "Have the specialist report the repository count".into(),
+                    initiation_context: None,
+                    turn_id: None,
+                    revision: None,
+                    tts_provider: None,
+                    filler: None,
+                },
+            )
             .await
             .unwrap();
+        assert_eq!(response.text, "Please approve the named specialist tools.");
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json.get("text").is_some());
+        assert!(json["task"]["run_id"].is_string());
+        let consent = response.task.unwrap();
         assert_eq!(
             consent.result["checkpoint"]["code"],
             "delegation_consent_required"
@@ -1027,14 +1117,26 @@ mod tests {
             )
             .await
             .unwrap();
-        let authorized = delegation
-            .delegate_conversation(
+        service
+            .resume(
                 &context,
-                &default.definition.external_key,
-                delegate(Some(once)),
+                consent.id,
+                Some("Approved the exact selected specialist scope.".into()),
             )
             .await
             .unwrap();
+        let resumed = service
+            .claim_assigned("consent-continuation", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.task.id, consent.id);
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(resumed, CancellationToken::new())
+            .await
+            .unwrap();
+        let authorized_id:Uuid=sqlx::query_scalar("SELECT span_id FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE r.parent_run_id=$1").bind(consent.run_id).fetch_one(db.pool()).await.unwrap();
+        let authorized = service.get(&context, authorized_id).await.unwrap();
         assert_eq!(
             authorized.parent_task_id,
             Some(consent.id),
@@ -1069,6 +1171,23 @@ mod tests {
             .validate_assignment_authority(&context, child_task.run_id)
             .await
             .unwrap();
+        let single = Db::connect_with_pool(&std::env::var("TEST_DATABASE_URL").unwrap(), 1, 1)
+            .await
+            .unwrap();
+        let mut transaction = single.pool().begin().await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            DelegationService::new(single.clone()).lock_assignment_authority(
+                &context,
+                child_task.run_id,
+                &mut transaction,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        transaction.rollback().await.unwrap();
+
         let mut revoke = db.pool().begin().await.unwrap();
         sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2 AND connection_id=$3").bind(context.id.0).bind(default.definition.id).bind(connection).execute(&mut *revoke).await.unwrap();
         let coordinator = crate::execution::ExecutionCoordinator::new(db.clone());
