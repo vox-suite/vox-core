@@ -32,6 +32,7 @@ pub enum WaitReason {
     Authentication,
     Reconciliation,
     Budget,
+    Delegation,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -224,7 +225,7 @@ impl DurableTaskService {
             sqlx::query("UPDATE assigned_task_runs SET pending_proposal_id=NULL WHERE pending_proposal_id=$1").bind(proposal).execute(&mut *tx).await?;
         }
         let changed = sqlx::query(
-            "UPDATE jobs SET state='pending', wait_reason=NULL WHERE span_id=$1 AND kind='execute_span' AND state='pending' AND wait_reason IS NOT NULL AND wait_reason <> 'budget'",
+            "UPDATE jobs SET state='pending', wait_reason=NULL WHERE span_id=$1 AND kind='execute_span' AND state='pending' AND wait_reason IS NOT NULL AND wait_reason NOT IN ('budget','delegation')",
         )
         .bind(span_id)
         .execute(&mut *tx)
@@ -264,6 +265,16 @@ impl DurableTaskService {
         .bind(span_id)
         .execute(&mut *tx)
         .await?;
+        let descendants:Vec<Uuid>=sqlx::query_scalar("SELECT j.span_id FROM assigned_task_runs r JOIN jobs j ON j.id=r.job_id WHERE r.parent_run_id IN (SELECT id FROM jobs WHERE span_id=$1) AND j.state IN ('pending','running') ORDER BY j.span_id").bind(span_id).fetch_all(&mut *tx).await?;
+        for child in descendants {
+            sqlx::query("SELECT id FROM spans WHERE id=$1 FOR UPDATE")
+                .bind(child)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE jobs SET state='cancelled',wait_reason=NULL,lease_owner=NULL,lease_expires_at=NULL,completed_at=now() WHERE span_id=$1 AND state IN ('pending','running')").bind(child).execute(&mut *tx).await?;
+            sqlx::query("UPDATE spans SET status='cancelled',cancellation_requested_at=now(),completed_at=now() WHERE id=$1").bind(child).execute(&mut *tx).await?;
+            sqlx::query("UPDATE action_proposals p SET state='expired' WHERE p.span_id=$1 AND p.state IN ('proposed','approved') AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.proposal_id=p.id)").bind(child).execute(&mut *tx).await?;
+        }
         // Stop invalidates unused decisions, retaining proposals and approvals
         // as historical evidence. Already consumed actions keep their outcome
         // and reconciliation path; cancellation is never an undo claim.
@@ -403,6 +414,7 @@ fn wait(v: &str) -> Result<WaitReason, DurableTaskError> {
         "authentication" => Ok(WaitReason::Authentication),
         "reconciliation" => Ok(WaitReason::Reconciliation),
         "budget" => Ok(WaitReason::Budget),
+        "delegation" => Ok(WaitReason::Delegation),
         _ => Err(DurableTaskError::Invalid),
     }
 }
@@ -415,6 +427,7 @@ fn wait_name(v: &WaitReason) -> &'static str {
         WaitReason::Authentication => "authentication",
         WaitReason::Reconciliation => "reconciliation",
         WaitReason::Budget => "budget",
+        WaitReason::Delegation => "delegation",
     }
 }
 
@@ -617,5 +630,20 @@ impl DurableTaskService {
             None
         };
         Ok(TaskPage { tasks, next_cursor })
+    }
+}
+
+impl DurableTaskService {
+    pub async fn stop_all(&self, context: &ResolvedUserContext) -> Result<u64, DurableTaskError> {
+        let ids:Vec<Uuid>=sqlx::query_scalar("SELECT s.id FROM spans s JOIN jobs j ON j.span_id=s.id WHERE s.user_context_id=$1 AND s.user_id=$2 AND j.kind='execute_span' AND j.state IN ('pending','running') ORDER BY s.id LIMIT 128").bind(context.id.0).bind(context.user_id.0).fetch_all(self.db.pool()).await?;
+        let mut count = 0;
+        for id in ids {
+            match self.cancel(context, id).await {
+                Ok(_) => count += 1,
+                Err(DurableTaskError::Conflict) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(count)
     }
 }

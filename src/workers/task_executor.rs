@@ -83,6 +83,28 @@ impl RunTools {
     }
     pub async fn library(&self, request: LibraryRequest) -> Result<Value, TaskExecutorError> {
         self.enter().await?;
+        if let LibraryRequest::Delegate {
+            specialist_agent_key,
+            brief,
+            scope,
+            permission_id,
+        } = request
+        {
+            let task = crate::delegation::DelegationService::new(self.db.clone())
+                .delegate(
+                    &self.run,
+                    crate::delegation::DelegateRequest {
+                        specialist_agent_key,
+                        brief,
+                        scope,
+                        permission_id,
+                    },
+                )
+                .await
+                .map_err(|_| TaskExecutorError)?;
+            self.halt.cancel();
+            return Ok(json!({"state":"awaiting_specialist","child_task":task}));
+        }
         match &request {
             LibraryRequest::LoadTool {
                 connection_id,
@@ -126,6 +148,7 @@ impl RunTools {
                 }
             }
             LibraryRequest::Search { .. } => {}
+            LibraryRequest::Delegate { .. } => unreachable!(),
         }
         let mut response = match self.library.invoke(request).await {
             Ok(response) => response,
@@ -176,6 +199,9 @@ impl RunTools {
     }
     pub async fn memory_get(&self) -> Result<Value, TaskExecutorError> {
         self.enter().await?;
+        if self.run.parent_run_id.is_some() {
+            return Err(TaskExecutorError);
+        }
         let memory = crate::memory::MemoryService::new(self.db.clone(), None)
             .load(
                 self.run.context.owner(),
@@ -190,6 +216,9 @@ impl RunTools {
         facts: serde_json::Map<String, Value>,
     ) -> Result<Value, TaskExecutorError> {
         self.enter().await?;
+        if self.run.parent_run_id.is_some() {
+            return Err(TaskExecutorError);
+        }
         let facts = crate::memory::MemoryService::new(self.db.clone(), None)
             .update_facts(
                 self.run.context.owner(),
@@ -434,6 +463,13 @@ impl TaskExecutorHandler {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {
             tokio::select! {_=cancellation.cancelled()=>break,_=interval.tick()=>{}}
+            if crate::delegation::DelegationService::new(self.db.clone())
+                .reconcile_children()
+                .await
+                .is_err()
+            {
+                tracing::warn!("specialist reconciliation unavailable");
+            }
             stream::iter(0..2)
                 .map(|_| self.run_next(worker, cancellation.clone()))
                 .buffer_unordered(2)

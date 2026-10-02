@@ -19,6 +19,7 @@ pub mod consent;
 pub mod conversations;
 pub mod core_api_client;
 pub mod db;
+pub mod delegation;
 pub mod devices;
 pub mod domain;
 pub mod durable_tasks;
