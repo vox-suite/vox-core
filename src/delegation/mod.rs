@@ -273,6 +273,18 @@ impl DelegationService {
             }
         }
         if let Some(permission) = permission {
+            let consent=sqlx::query("SELECT scope,requester_agent_id,specialist_agent_id,parent_run_id FROM agent_delegation_permissions WHERE id=$1 AND user_context_id=$2 AND state='enabled'").bind(permission).bind(context.id.0).fetch_optional(&mut **tx).await?.ok_or(DurableTaskError::NotFound)?;
+            let scope: RunAuthority = serde_json::from_value(consent.get("scope"))
+                .map_err(|_| DurableTaskError::Invalid)?;
+            if consent.get::<Uuid, _>("requester_agent_id") != parent_agent
+                || consent.get::<Uuid, _>("specialist_agent_id") != child_agent
+                || consent
+                    .get::<Option<Uuid>, _>("parent_run_id")
+                    .is_some_and(|id| id != parent_job)
+                || !subset(&authority, &scope)
+            {
+                return Err(DurableTaskError::NotFound);
+            }
             let pins:Value=sqlx::query_scalar("SELECT shared_preferences FROM agent_delegation_permissions WHERE id=$1 AND user_context_id=$2 AND state='enabled'").bind(permission).bind(context.id.0).fetch_optional(&mut **tx).await?.ok_or(DurableTaskError::NotFound)?;
             for pin in pins.as_array().ok_or(DurableTaskError::Invalid)? {
                 let value:Value=sqlx::query_scalar("SELECT value FROM user_preferences WHERE user_context_id=$1 AND preference_key=$2 AND NOT is_sensitive").bind(context.id.0).bind(pin["key"].as_str().ok_or(DurableTaskError::Invalid)?).fetch_optional(&mut **tx).await?.ok_or(DurableTaskError::NotFound)?;
@@ -1269,6 +1281,24 @@ mod tests {
         .unwrap()
         .unwrap();
         transaction.rollback().await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::execution::ExecutionCoordinator::new(single.clone()).claim_dispatch(
+                &context,
+                execution,
+                Utc::now(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // Fixture has made no provider call; reset this claim for the revoke race.
+        sqlx::query("UPDATE executions SET state='pending' WHERE id=$1")
+            .bind(execution)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
         let mut first = db.pool().begin().await.unwrap();
         delegation
             .lock_assignment_authority(&context, child_task.run_id, &mut first)

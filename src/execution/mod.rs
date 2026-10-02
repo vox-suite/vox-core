@@ -153,13 +153,7 @@ impl ExecutionCoordinator {
             tx.commit().await?;
             return Ok(result);
         }
-        let assignment:Option<Uuid>=sqlx::query_scalar("SELECT p.job_id FROM action_approvals a JOIN action_proposals p ON p.id=a.proposal_id WHERE a.id=$1 AND a.user_context_id=$2").bind(request.approval_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.flatten();
-        if let Some(job) = assignment {
-            crate::delegation::DelegationService::new(self.db.clone())
-                .validate_assignment_authority(context, job)
-                .await
-                .map_err(|_| ExecutionError::Unavailable)?;
-        }
+        let assignment:Option<Uuid>=sqlx::query_scalar("SELECT p.job_id FROM action_approvals a JOIN action_proposals p ON p.id=a.proposal_id WHERE a.id=$1 AND a.user_context_id=$2").bind(request.approval_id).bind(context.id.0).fetch_optional(&mut *tx).await?.flatten();
         self.lock_delegation_authority(context, assignment, &mut tx)
             .await?;
         let task = sqlx::query_scalar::<_, Uuid>(
@@ -326,12 +320,6 @@ impl ExecutionCoordinator {
         now: DateTime<Utc>,
     ) -> Result<(), ExecutionError> {
         let assignment:Option<Uuid>=sqlx::query_scalar("SELECT p.job_id FROM executions e JOIN action_proposals p ON p.id=e.proposal_id WHERE e.id=$1 AND e.user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.flatten();
-        if let Some(job) = assignment {
-            crate::delegation::DelegationService::new(self.db.clone())
-                .validate_assignment_authority(context, job)
-                .await
-                .map_err(|_| ExecutionError::Unavailable)?;
-        }
         let mut tx = self.db.pool().begin().await?;
         self.lock_delegation_authority(context, assignment, &mut tx)
             .await?;
