@@ -189,7 +189,7 @@ impl DelegationService {
         job: Uuid,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), DurableTaskError> {
-        let row=sqlx::query("SELECT c.agent_id,c.authority,c.parent_run_id,c.delegation_permission_id,p.agent_id AS parent_agent_id,p.authority AS parent_authority FROM assigned_task_runs c JOIN assigned_task_runs p ON p.job_id=c.parent_run_id WHERE c.job_id=$1 AND c.user_context_id=$2 AND p.user_context_id=$2 FOR SHARE OF c,p").bind(job).bind(context.id.0).fetch_optional(&mut **tx).await?;
+        let row=sqlx::query("SELECT c.agent_id,c.authority,c.parent_run_id,c.delegation_permission_id,p.agent_id AS parent_agent_id,p.authority AS parent_authority FROM assigned_task_runs c JOIN assigned_task_runs p ON p.job_id=c.parent_run_id WHERE c.job_id=$1 AND c.user_context_id=$2 AND p.user_context_id=$2").bind(job).bind(context.id.0).fetch_optional(&mut **tx).await?;
         let Some(row) = row else { return Ok(()) };
         let authority: RunAuthority =
             serde_json::from_value(row.get("authority")).map_err(|_| DurableTaskError::Invalid)?;
@@ -207,6 +207,18 @@ impl DelegationService {
         )
         .bind(parent_job)
         .fetch_one(&mut **tx)
+        .await?;
+        sqlx::query(
+            "SELECT s.id FROM spans s JOIN jobs j ON j.span_id=s.id WHERE j.id=$1 FOR SHARE OF s",
+        )
+        .bind(job)
+        .fetch_one(&mut **tx)
+        .await?;
+        sqlx::query(
+            "SELECT job_id FROM assigned_task_runs WHERE job_id=ANY($1) ORDER BY job_id FOR SHARE",
+        )
+        .bind(vec![parent_job, job])
+        .fetch_all(&mut **tx)
         .await?;
         let live=sqlx::query("SELECT j.state,j.attempt_count,j.max_attempts,r.deadline_at,r.tool_calls,r.max_tool_calls FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE j.id=$1 FOR SHARE OF j").bind(parent_job).fetch_one(&mut **tx).await?;
         if matches!(
@@ -290,7 +302,16 @@ impl DelegationService {
         let mut request: DelegateRequest =
             serde_json::from_value(run.checkpoint["delegation_request"].clone())
                 .map_err(|_| DurableTaskError::Invalid)?;
-        let permission:Option<Uuid>=sqlx::query_scalar("SELECT p.id FROM agent_delegation_permissions p JOIN agent_definitions a ON a.id=p.specialist_agent_id WHERE p.user_context_id=$1 AND p.requester_agent_id=$2 AND a.external_key=$3 AND p.parent_run_id=$4 AND p.state='enabled' AND NOT p.used ORDER BY p.created_at DESC LIMIT 1").bind(run.context.id.0).bind(run.actor.agent.definition.id).bind(&request.specialist_agent_key).bind(run.task.run_id).fetch_optional(self.db.pool()).await?;
+        let available =
+            capture_actor(&self.db, &run.context, Some(&request.specialist_agent_key)).await?;
+        let requested = select_authority(&request.scope, &available.authority)?;
+        let permissions=sqlx::query("SELECT p.id,p.scope FROM agent_delegation_permissions p JOIN agent_definitions a ON a.id=p.specialist_agent_id WHERE p.user_context_id=$1 AND p.requester_agent_id=$2 AND a.external_key=$3 AND p.state='enabled' AND ((p.parent_run_id=$4 AND NOT p.used) OR p.mode='remembered') ORDER BY (p.parent_run_id=$4) DESC NULLS LAST,p.created_at DESC LIMIT 64").bind(run.context.id.0).bind(run.actor.agent.definition.id).bind(&request.specialist_agent_key).bind(run.task.run_id).fetch_all(self.db.pool()).await?;
+        let permission = permissions.into_iter().find_map(|row| {
+            serde_json::from_value::<RunAuthority>(row.get("scope"))
+                .ok()
+                .filter(|scope| subset(&requested, scope))
+                .map(|_| row.get::<Uuid, _>("id"))
+        });
         request.permission_id = Some(permission.ok_or(DurableTaskError::NotFound)?);
         self.delegate(run, request).await?;
         Ok(true)
@@ -1152,6 +1173,33 @@ mod tests {
                 .await
                 .is_err(),
             "once cannot attach a fresh unrelated root"
+        );
+        service.stop_all(&context).await.unwrap();
+        let remember_wait = delegation
+            .delegate_conversation(&context, &default.definition.external_key, delegate(None))
+            .await
+            .unwrap();
+        service
+            .resume(
+                &context,
+                remember_wait.id,
+                Some("Use the remembered exact specialist scope.".into()),
+            )
+            .await
+            .unwrap();
+        let remember_run = service
+            .claim_assigned("remember-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(remember_run, CancellationToken::new())
+            .await
+            .unwrap();
+        let remember_children:i64=sqlx::query_scalar("SELECT count(*) FROM assigned_task_runs WHERE parent_run_id=$1 AND delegation_permission_id=$2").bind(remember_wait.run_id).bind(remembered).fetch_one(db.pool()).await.unwrap();
+        assert_eq!(
+            remember_children, 1,
+            "worker continuation resolves remembered permission without a bound once id"
         );
         service.stop_all(&context).await.unwrap();
 
