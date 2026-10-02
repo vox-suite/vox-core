@@ -172,6 +172,14 @@ impl DurableTaskService {
         let run_id: Uuid = row.get("id");
         let span_id: Uuid = row.get("span_id");
         let snapshot=sqlx::query("SELECT actor_snapshot,authority,task_instruction,deadline_at,parent_run_id,delegation_permission_id FROM assigned_task_runs WHERE job_id=$1").bind(run_id).fetch_one(&mut *tx).await?;
+        if let Some(parent) = snapshot.get::<Option<Uuid>, _>("parent_run_id") {
+            let charged=sqlx::query("UPDATE jobs j SET attempt_count=attempt_count+1 FROM assigned_task_runs r WHERE j.id=$1 AND r.job_id=j.id AND j.state='pending' AND j.wait_reason='specialist' AND j.attempt_count<j.max_attempts AND r.deadline_at>$2").bind(parent).bind(now).execute(&mut *tx).await?.rows_affected();
+            if charged != 1 {
+                sqlx::query("UPDATE jobs SET state='pending',wait_reason='budget',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1").bind(run_id).execute(&mut *tx).await?;
+                tx.commit().await?;
+                return Ok(None);
+            }
+        }
         sqlx::query(
             "UPDATE spans SET status='active',updated_at=now() WHERE id=$1 AND status<>'cancelled'",
         )

@@ -43,9 +43,7 @@ not performance or scale guarantees.
 ## Release scope
 
 The initial runner supports the deployment-approved Gemini configuration.
-Unavailable actor/model configurations fail safely. Scoped specialist
-permissions and child-run execution are not implemented in this slice;
-lineage-bearing runs are rejected. Automatic proactive task creation and
+Unavailable actor/model configurations fail safely. Scoped specialist child runs use the same governed worker; see [delegation.md](delegation.md). Automatic proactive task creation and
 scheduled external actions are outside the accepted product scope.
 
 Generic span jobs without an assigned-run binding no longer invoke the old

@@ -376,6 +376,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/action-proposals/{id}/approve",
             post(approvals::approve),
         )
+        .route("/v1/delegation-scopes", post(delegation::scopes))
         .route("/v1/delegation-permissions", post(delegation::create))
         .route("/v1/delegation-permissions/query", post(delegation::list))
         .route(

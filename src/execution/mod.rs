@@ -90,6 +90,40 @@ impl ExecutionCoordinator {
         Self { db }
     }
 
+    /// Lock consent before the final task/proposal fence. Revocation takes the
+    /// same permission row exclusively, so it cannot race a dispatch claim.
+    async fn lock_delegation_authority(
+        &self,
+        context: &ResolvedUserContext,
+        assignment: Option<Uuid>,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(), ExecutionError> {
+        if let Some(job) = assignment {
+            let denied:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assigned_task_runs c JOIN assigned_task_runs p ON p.job_id=c.parent_run_id JOIN jobs pj ON pj.id=p.job_id WHERE c.job_id=$1 AND (p.deadline_at<=now() OR p.tool_calls>p.max_tool_calls OR pj.attempt_count>pj.max_attempts OR pj.state IN ('cancelled','failed','completed'))) ").bind(job).fetch_one(&mut **tx).await?;
+            if denied {
+                return Err(ExecutionError::Unavailable);
+            }
+            let permission: Option<Uuid> = sqlx::query_scalar(
+                "SELECT delegation_permission_id FROM assigned_task_runs WHERE job_id=$1",
+            )
+            .bind(job)
+            .fetch_optional(&mut **tx)
+            .await?
+            .flatten();
+            if let Some(id) = permission {
+                let state:Option<String>=sqlx::query_scalar("SELECT state FROM agent_delegation_permissions WHERE id=$1 AND user_context_id=$2 FOR SHARE").bind(id).bind(context.id.0).fetch_optional(&mut **tx).await?;
+                if state.as_deref() != Some("enabled") {
+                    return Err(ExecutionError::Unavailable);
+                }
+            }
+            crate::delegation::DelegationService::new(self.db.clone())
+                .lock_assignment_authority(context, job, tx)
+                .await
+                .map_err(|_| ExecutionError::Unavailable)?;
+        }
+        Ok(())
+    }
+
     pub async fn start(
         &self,
         context: &ResolvedUserContext,
@@ -101,6 +135,7 @@ impl ExecutionCoordinator {
             return Err(ExecutionError::Invalid);
         }
         let mut tx = self.db.pool().begin().await?;
+
         if let Some(row) = sqlx::query(
             "SELECT id, approval_id, state, provider_reference, confirmation_evidence FROM executions \
              WHERE user_id = $1 AND user_context_id = $3 AND idempotency_key = $2 FOR UPDATE",
@@ -118,6 +153,15 @@ impl ExecutionCoordinator {
             tx.commit().await?;
             return Ok(result);
         }
+        let assignment:Option<Uuid>=sqlx::query_scalar("SELECT p.job_id FROM action_approvals a JOIN action_proposals p ON p.id=a.proposal_id WHERE a.id=$1 AND a.user_context_id=$2").bind(request.approval_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.flatten();
+        if let Some(job) = assignment {
+            crate::delegation::DelegationService::new(self.db.clone())
+                .validate_assignment_authority(context, job)
+                .await
+                .map_err(|_| ExecutionError::Unavailable)?;
+        }
+        self.lock_delegation_authority(context, assignment, &mut tx)
+            .await?;
         let task = sqlx::query_scalar::<_, Uuid>(
             "SELECT s.id FROM spans s JOIN action_proposals p ON p.span_id=s.id
              JOIN action_approvals a ON a.proposal_id=p.id
@@ -281,7 +325,17 @@ impl ExecutionCoordinator {
         execution_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<(), ExecutionError> {
+        let assignment:Option<Uuid>=sqlx::query_scalar("SELECT p.job_id FROM executions e JOIN action_proposals p ON p.id=e.proposal_id WHERE e.id=$1 AND e.user_context_id=$2").bind(execution_id).bind(context.id.0).fetch_optional(self.db.pool()).await?.flatten();
+        if let Some(job) = assignment {
+            crate::delegation::DelegationService::new(self.db.clone())
+                .validate_assignment_authority(context, job)
+                .await
+                .map_err(|_| ExecutionError::Unavailable)?;
+        }
         let mut tx = self.db.pool().begin().await?;
+        self.lock_delegation_authority(context, assignment, &mut tx)
+            .await?;
+
         let task = sqlx::query_scalar::<_, Uuid>(
             "SELECT s.id FROM spans s JOIN action_proposals p ON p.span_id=s.id
              JOIN executions e ON e.proposal_id=p.id

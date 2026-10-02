@@ -31,6 +31,8 @@ pub struct PromptMessage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConversationPrompt {
     pub context: crate::identity::ResolvedUserContext,
+    #[serde(skip)]
+    pub task_capture: tools::library::TaskCapture,
     pub selected_agent: crate::agent_registry::SelectedAgent,
     pub user_id: UserId,
     pub owner: ResourceOwner,
@@ -125,12 +127,15 @@ impl ConversationAgent {
                 super::prompts::GOVERNED_CAPABILITIES
             ))
             .record_content_telemetry(crate::telemetry::record_content())
-            .tool(tools::library::AgentLibrary::new(
-                self.db.clone(),
-                self.connected_apps.clone(),
-                prompt.context.clone(),
-                name.clone(),
-            ))
+            .tool(
+                tools::library::AgentLibrary::new(
+                    self.db.clone(),
+                    self.connected_apps.clone(),
+                    prompt.context.clone(),
+                    name.clone(),
+                )
+                .with_task_capture(prompt.task_capture.clone()),
+            )
             .tool(tools::agent_memory::GetAgentMemory::new(
                 self.db.clone(),
                 prompt.context.owner(),
