@@ -108,3 +108,10 @@ jobs:
           createdb -h 127.0.0.1 -U postgres vox_core_assigned_runs
           cargo test --locked --lib assigned_worker_is_pinned_fenced_recoverable_and_queryable -- --ignored
           cargo test --locked --lib cancelled_task_denies_new_approval_start_and_dispatch -- --ignored
+      - name: Scoped specialist delegation PostgreSQL regression
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_delegation
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_delegation
+          cargo test --locked --lib delegation_is_scoped_revocable_and_returns_only_bounded_work -- --ignored

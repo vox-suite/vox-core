@@ -146,6 +146,15 @@ impl PreferenceService {
         })
     }
 
+    /// Read only one explicitly selected nonsensitive advisory preference.
+    pub async fn selected_nonsensitive(
+        &self,
+        context: &ResolvedUserContext,
+        key: &str,
+    ) -> Result<Option<Value>, sqlx::Error> {
+        sqlx::query_scalar("SELECT value FROM user_preferences WHERE user_context_id=$1 AND preference_key=$2 AND NOT is_sensitive").bind(context.id.0).bind(key).fetch_optional(self.db.pool()).await
+    }
+
     pub async fn list_preferences(
         &self,
         context: &ResolvedUserContext,

@@ -182,6 +182,7 @@ impl ConversationService {
                 return Ok(RespondResponse {
                     conversation_id,
                     text: reply,
+                    task: None,
                 });
             }
             VoiceVerificationOutcome::Continue {
@@ -217,6 +218,7 @@ impl ConversationService {
             return Ok(RespondResponse {
                 conversation_id,
                 text: greeting,
+                task: None,
             });
         }
 
@@ -229,9 +231,12 @@ impl ConversationService {
             .memory
             .load(context.owner(), &selected_agent.definition.external_key)
             .await?;
+        let task_capture = crate::agents::tools::library::TaskCapture::default();
+        let task_context = context.clone();
         let text = self
             .agent
             .respond(ConversationPrompt {
+                task_capture: task_capture.clone(),
                 context,
                 selected_agent,
                 user_id: active_user_id,
@@ -254,9 +259,18 @@ impl ConversationService {
             .await?;
         self.append_message(conversation_id, "assistant", text.trim())
             .await?;
+        let task = if let Some(id) = task_capture.task_id() {
+            crate::durable_tasks::DurableTaskService::new(self.db.clone())
+                .get(&task_context, id)
+                .await
+                .ok()
+        } else {
+            None
+        };
         Ok(RespondResponse {
             conversation_id,
             text,
+            task,
         })
     }
 
@@ -443,6 +457,7 @@ impl ConversationService {
         let model_stream = stream::once(async move {
             agent
                 .respond_stream(ConversationPrompt {
+                    task_capture: Default::default(),
                     context,
                     selected_agent,
                     user_id: active_user_id,

@@ -13,6 +13,7 @@ pub mod connections;
 pub mod connector_setup;
 pub mod consequential_writes;
 pub mod conversations;
+pub mod delegation;
 pub mod durable_tasks;
 pub mod events;
 pub mod execution;
@@ -375,6 +376,14 @@ pub fn router(state: AppState) -> Router {
             "/v1/action-proposals/{id}/approve",
             post(approvals::approve),
         )
+        .route("/v1/delegation-scopes", post(delegation::scopes))
+        .route("/v1/delegation-permissions", post(delegation::create))
+        .route("/v1/delegation-permissions/query", post(delegation::list))
+        .route(
+            "/v1/delegation-permissions/{id}/revoke",
+            post(delegation::revoke),
+        )
+        .route("/v1/durable-tasks/stop-all", post(delegation::stop_all))
         .route("/v1/durable-tasks", post(durable_tasks::start))
         .route("/v1/durable-tasks/query", post(durable_tasks::query))
         .route("/v1/durable-tasks/{id}", post(durable_tasks::get))
