@@ -2,6 +2,7 @@
 * API service entry point running HTTP server and lifecycle listeners.
 */
 mod auth;
+mod cache_refresh;
 mod config;
 mod cors;
 mod identity_token;

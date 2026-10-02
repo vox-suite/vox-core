@@ -87,10 +87,21 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/sms/batches", post(submit_batch))
         .with_state(state.sms_ingestion.clone());
 
+    let refresh_cache = middleware::from_fn_with_state(
+        state.memory.clone(),
+        crate::cache_refresh::refresh_minimal_user_after,
+    );
+
     let sms_consent_routes = Router::new()
         .route("/v1/sms/consent/get", post(get_consent))
-        .route("/v1/sms/consent/grant", post(grant_consent))
-        .route("/v1/sms/consent/revoke", post(revoke_consent))
+        .route(
+            "/v1/sms/consent/grant",
+            post(grant_consent).layer(refresh_cache.clone()),
+        )
+        .route(
+            "/v1/sms/consent/revoke",
+            post(revoke_consent).layer(refresh_cache.clone()),
+        )
         .with_state(state.consent.clone());
 
     let location_routes = Router::new()
@@ -99,8 +110,14 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let location_consent_routes = Router::new()
         .route("/v1/location/consent/get", post(get_location_consent))
-        .route("/v1/location/consent/grant", post(grant_location_consent))
-        .route("/v1/location/consent/revoke", post(revoke_location_consent))
+        .route(
+            "/v1/location/consent/grant",
+            post(grant_location_consent).layer(refresh_cache.clone()),
+        )
+        .route(
+            "/v1/location/consent/revoke",
+            post(revoke_location_consent).layer(refresh_cache.clone()),
+        )
         .with_state(state.consent.clone());
 
     let client_log_routes = Router::new().route("/v1/logs/batches", post(submit_client_logs));
@@ -109,7 +126,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         devices: state.devices.clone(),
     };
     let device_routes = Router::new()
-        .route("/v1/devices", post(register_device))
+        .route(
+            "/v1/devices",
+            post(register_device).layer(refresh_cache.clone()),
+        )
         .route("/v1/devices/{id}/heartbeat", post(heartbeat))
         .with_state(device_api_state);
 

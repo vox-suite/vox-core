@@ -20,6 +20,10 @@ pub struct MinimalUserInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
     /// Kinds of linked devices: "desktop", "mobile".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -37,14 +41,24 @@ impl MinimalUserInfo {
             .iter()
             .find(|c| c.channel.eq_ignore_ascii_case("phone"))
             .map(|c| c.external_id.clone());
+        let (first_name, last_name) = split_name(name.as_deref());
         Self {
             name,
+            first_name,
+            last_name,
             phone,
             devices,
             connections: Vec::new(),
             channels,
         }
     }
+}
+
+fn split_name(name: Option<&str>) -> (Option<String>, Option<String>) {
+    let mut parts = name.unwrap_or_default().split_whitespace();
+    let first = parts.next().map(str::to_owned);
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    (first, (!rest.is_empty()).then_some(rest))
 }
 
 /// Maps device platforms (and mobile-only data consents) to the kinds shown in the cache.
@@ -80,6 +94,10 @@ pub trait ContextCache: Send + Sync {
     }
 
     async fn put_user(&self, _user_id: UserId, _info: &MinimalUserInfo) -> Result<(), CacheError> {
+        Ok(())
+    }
+
+    async fn delete_user(&self, _user_id: UserId) -> Result<(), CacheError> {
         Ok(())
     }
 
@@ -168,6 +186,24 @@ impl ContextCache for RedisContextCache {
             .query_async::<()>(&mut connection)
             .await
             .map_err(Into::into)
+    }
+
+    async fn delete_user(&self, user_id: UserId) -> Result<(), CacheError> {
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
+        let payload: Option<String> = connection.get(redis_keys::user(user_id)).await?;
+        if let Some(info) =
+            payload.and_then(|raw| serde_json::from_str::<MinimalUserInfo>(&raw).ok())
+        {
+            for channel in &info.channels {
+                let key = redis_keys::user_by_channel(&channel.channel, &channel.external_id);
+                let owner: Option<String> = connection.get(&key).await?;
+                if owner.as_deref() == Some(user_id.0.to_string().as_str()) {
+                    let _: () = connection.del(&key).await?;
+                }
+            }
+        }
+        let _: () = connection.del(redis_keys::user(user_id)).await?;
+        Ok(())
     }
 
     async fn get_user_by_channel(

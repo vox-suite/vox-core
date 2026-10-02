@@ -155,7 +155,7 @@ pub async fn exchange_token(
         "SELECT EXISTS(\
             SELECT 1 FROM channel_identities \
             WHERE user_id = $1 AND channel = 'phone' AND revoked_at IS NULL\
-        )",
+        ) OR EXISTS(SELECT 1 FROM pending_phone_links WHERE user_id = $1)",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

@@ -98,6 +98,12 @@ impl MemoryService {
         Ok(user_id.map(UserId))
     }
 
+    pub async fn forget_user(&self, user_id: UserId) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.delete_user(user_id).await;
+        }
+    }
+
     /// Re-derive the minimal Redis record (name + channel index) for a user
     /// from Postgres. Call this after any write that reassigns a
     /// `channel_identities` row (e.g. merging accounts on phone link) so the
