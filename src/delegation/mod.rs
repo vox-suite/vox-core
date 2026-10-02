@@ -209,7 +209,7 @@ impl DelegationService {
         .fetch_one(&mut **tx)
         .await?;
         sqlx::query(
-            "SELECT s.id FROM spans s JOIN jobs j ON j.span_id=s.id WHERE j.id=$1 FOR SHARE OF s",
+            "SELECT s.id FROM spans s JOIN jobs j ON j.span_id=s.id WHERE j.id=$1 FOR UPDATE OF s",
         )
         .bind(job)
         .fetch_one(&mut **tx)
@@ -588,7 +588,7 @@ impl DelegationService {
         let job:Uuid=sqlx::query_scalar("INSERT INTO jobs(user_id,user_context_id,kind,payload_reference_id,span_id,max_attempts) VALUES($1,$2,'execute_span',$3,$3,3) RETURNING id").bind(parent.context.user_id.0).bind(parent.context.id.0).bind(span).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO assigned_task_runs(job_id,user_context_id,agent_id,instruction_version,model_configuration_id,model_version,actor_snapshot,authority,task_instruction,parent_run_id,delegation_permission_id,deadline_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
    .bind(job).bind(parent.context.id.0).bind(actor.agent.definition.id).bind(actor.agent.definition.instruction_version).bind(actor.agent.model_configuration.id).bind(actor.agent.model_configuration.version).bind(json!(actor.agent)).bind(json!(actor.authority)).bind(r.brief).bind(parent.task.run_id).bind(r.permission_id).bind(parent.deadline_at).execute(&mut *tx).await?;
-        sqlx::query("UPDATE jobs SET state='pending',wait_reason='specialist',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1").bind(parent.task.run_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE jobs SET state='pending',wait_reason='specialist',checkpoint=checkpoint-'code'-'delegation_request',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1").bind(parent.task.run_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE spans SET status='waiting_user',execution_result=$2 WHERE id=$1").bind(parent.task.id).bind(json!({"state":"waiting","reason":"specialist","checkpoint":{"child_task_id":span}})).execute(&mut *tx).await?;
         tx.commit().await?;
         DurableTaskService::new(self.db.clone())
@@ -1163,6 +1163,40 @@ mod tests {
             Some(consent.id),
             "ordinary-chat once approval reuses its waiting root"
         );
+        let specialist_run = service
+            .claim_assigned("once-specialist", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(specialist_run.task.id, authorized.id);
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(specialist_run, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(delegation.reconcile_children().await.unwrap(), 1);
+        let parent_completion = service
+            .claim_assigned("once-parent-complete", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(parent_completion.task.id, consent.id);
+        assert!(
+            !delegation
+                .continue_consent(&parent_completion)
+                .await
+                .unwrap(),
+            "returned child result must not repeat consumed delegation"
+        );
+        service
+            .finish_assigned(
+                &parent_completion,
+                RunOutcome::Completed {
+                    summary: "Selected repository count: 3".into(),
+                },
+            )
+            .await
+            .unwrap();
+
         assert!(
             delegation
                 .delegate_conversation(
@@ -1235,6 +1269,30 @@ mod tests {
         .unwrap()
         .unwrap();
         transaction.rollback().await.unwrap();
+        let mut first = db.pool().begin().await.unwrap();
+        delegation
+            .lock_assignment_authority(&context, child_task.run_id, &mut first)
+            .await
+            .unwrap();
+        let second_db = db.clone();
+        let second_context = context.clone();
+        let second_job = child_task.run_id;
+        let mut second = tokio::spawn(async move {
+            let mut tx = second_db.pool().begin().await.unwrap();
+            DelegationService::new(second_db)
+                .lock_assignment_authority(&second_context, second_job, &mut tx)
+                .await?;
+            tx.commit().await?;
+            Ok::<_, DurableTaskError>(())
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
+                .await
+                .is_err(),
+            "duplicate final fences serialize before acquiring authority locks"
+        );
+        first.commit().await.unwrap();
+        second.await.unwrap().unwrap();
 
         let mut revoke = db.pool().begin().await.unwrap();
         sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2 AND connection_id=$3").bind(context.id.0).bind(default.definition.id).bind(connection).execute(&mut *revoke).await.unwrap();
