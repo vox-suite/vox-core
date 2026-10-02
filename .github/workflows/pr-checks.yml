@@ -115,3 +115,10 @@ jobs:
         run: |
           createdb -h 127.0.0.1 -U postgres vox_core_delegation
           cargo test --locked --lib delegation_is_scoped_revocable_and_returns_only_bounded_work -- --ignored
+      - name: Streamed conversation task event PostgreSQL regression
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_stream_tasks
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_stream_tasks
+          cargo test --locked --lib streaming_task_events_follow_text_and_errors_with_exact_owned_handles -- --ignored
