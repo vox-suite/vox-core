@@ -236,6 +236,10 @@ impl DelegationService {
         // from the subsequent check and an in-flight revoke serializes here.
         sqlx::query("SELECT id FROM agent_definitions WHERE id=ANY($1) OR id IN (SELECT template_id FROM agent_definitions WHERE id=ANY($1)) ORDER BY id FOR SHARE").bind(&ids).fetch_all(&mut **tx).await?;
         sqlx::query("SELECT agent_definition_id FROM deployment_agent_selections WHERE agent_definition_id=ANY($1) ORDER BY agent_definition_id FOR SHARE").bind(&ids).fetch_all(&mut **tx).await?;
+        let current_actors:i64=sqlx::query_scalar("SELECT count(*) FROM assigned_task_runs r JOIN agent_definitions a ON a.id=r.agent_id JOIN deployment_agent_selections s ON s.agent_definition_id=a.id AND s.deployment_id=a.deployment_id WHERE r.job_id=ANY($1) AND r.user_context_id=$2 AND a.owner_user_context_id=$2 AND a.deployment_id=$3 AND a.state='enabled' AND s.model_configuration_id=r.model_configuration_id AND (a.template_id IS NULL OR EXISTS(SELECT 1 FROM agent_definitions t WHERE t.id=a.template_id AND t.state='enabled'))").bind(vec![parent_job,job]).bind(context.id.0).bind(context.subject.deployment_id.0).fetch_one(&mut **tx).await?;
+        if current_actors != 2 {
+            return Err(DurableTaskError::NotFound);
+        }
         let connections: Vec<Uuid> = authority
             .capabilities
             .iter()
@@ -1344,6 +1348,88 @@ mod tests {
             dispatch.await.unwrap().is_err(),
             "committed revoke wins before dispatch claim"
         );
+        let state: String = sqlx::query_scalar("SELECT state FROM executions WHERE id=$1")
+            .bind(execution)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(state, "pending");
+        service.stop_all(&context).await.unwrap();
+        registry
+            .mutate_owned(
+                &context,
+                AgentMutation::Create {
+                    name: "Requester specialist".into(),
+                    instructions: "Request scoped work".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let requester = registry
+            .owned_for_context(&context)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| a.definition.display_name == "Requester specialist")
+            .unwrap();
+        let permission = delegation
+            .create_permission(
+                &context,
+                PermissionRequest {
+                    requester_agent_key: requester.definition.external_key.clone(),
+                    specialist_agent_key: child.definition.external_key.clone(),
+                    scope: CapabilitySelection::from_authority(&scope),
+                    parent_run_id: None,
+                    preference_keys: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let task = service
+            .start(
+                &context,
+                StartTaskRequest {
+                    title: "Requester archive race".into(),
+                    instruction: "Request scoped repository facts".into(),
+                    agent_external_key: Some(requester.definition.external_key.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        let parent = service
+            .claim_assigned("archive-parent", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(parent.task.id, task.id);
+        let child_task = delegation
+            .delegate(&parent, delegate(Some(permission)))
+            .await
+            .unwrap();
+        let proposal:Uuid=sqlx::query_scalar("INSERT INTO action_proposals(user_id,user_context_id,span_id,job_id,actor_key,capability,details,details_hash,expires_at,state) VALUES($1,$2,$3,$4,$5,'repository.read','{}','archive-proof',now()+interval '1 hour','approved') RETURNING id").bind(user).bind(context.id.0).bind(child_task.id).bind(child_task.run_id).bind(&child.definition.external_key).fetch_one(db.pool()).await.unwrap();
+        let approval:Uuid=sqlx::query_scalar("INSERT INTO action_approvals(user_id,user_context_id,proposal_id,approved_details_hash) VALUES($1,$2,$3,'archive-proof') RETURNING id").bind(user).bind(context.id.0).bind(proposal).fetch_one(db.pool()).await.unwrap();
+        let execution:Uuid=sqlx::query_scalar("INSERT INTO executions(user_id,user_context_id,proposal_id,approval_id,idempotency_key) VALUES($1,$2,$3,$4,'requester-archive-race') RETURNING id").bind(user).bind(context.id.0).bind(proposal).bind(approval).fetch_one(db.pool()).await.unwrap();
+        let mut archive = db.pool().begin().await.unwrap();
+        sqlx::query("UPDATE agent_definitions SET state='disabled' WHERE id=$1")
+            .bind(requester.definition.id)
+            .execute(&mut *archive)
+            .await
+            .unwrap();
+        let coordinator = crate::execution::ExecutionCoordinator::new(db.clone());
+        let race_context = context.clone();
+        let mut dispatch = tokio::spawn(async move {
+            coordinator
+                .claim_dispatch(&race_context, execution, Utc::now())
+                .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut dispatch)
+                .await
+                .is_err(),
+            "permission does not bypass in-flight requester archive"
+        );
+        archive.commit().await.unwrap();
+        assert!(dispatch.await.unwrap().is_err());
         let state: String = sqlx::query_scalar("SELECT state FROM executions WHERE id=$1")
             .bind(execution)
             .fetch_one(db.pool())
