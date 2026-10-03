@@ -277,7 +277,27 @@ impl ConversationService {
     pub async fn respond_stream(
         &self,
         context: ResolvedUserContext,
+        request: RespondRequest,
+    ) -> Result<ConversationTextStream, ConversationError> {
+        self.respond_stream_captured(context, request, Default::default())
+            .await
+    }
+    pub(crate) async fn captured_task(
+        &self,
+        context: &ResolvedUserContext,
+        capture: &crate::agents::tools::library::TaskCapture,
+    ) -> Option<crate::durable_tasks::DurableTask> {
+        let id = capture.task_id()?;
+        crate::durable_tasks::DurableTaskService::new(self.db.clone())
+            .get(context, id)
+            .await
+            .ok()
+    }
+    pub(crate) async fn respond_stream_captured(
+        &self,
+        context: ResolvedUserContext,
         mut request: RespondRequest,
+        task_capture: crate::agents::tools::library::TaskCapture,
     ) -> Result<ConversationTextStream, ConversationError> {
         let phase_started = std::time::Instant::now();
         let selected_agent = self
@@ -457,7 +477,7 @@ impl ConversationService {
         let model_stream = stream::once(async move {
             agent
                 .respond_stream(ConversationPrompt {
-                    task_capture: Default::default(),
+                    task_capture,
                     context,
                     selected_agent,
                     user_id: active_user_id,
