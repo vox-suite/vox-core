@@ -14,7 +14,7 @@ use crate::{
     summaries::handler::SummaryHandler,
 };
 use chrono::{Duration, Utc};
-use futures_util::{StreamExt, stream};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use tokio_util::sync::CancellationToken;
 use whatsapp_sweeper::WhatsAppSweeper;
 
@@ -81,13 +81,11 @@ impl Worker {
         &self,
         cancellation: CancellationToken,
     ) -> Result<(), crate::db::jobs::JobError> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        loop {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Ok(()),
-                _ = interval.tick() => self.run_once().await?,
-            }
-        }
+        tokio::try_join!(
+            self.run_jobs(cancellation.clone()),
+            self.run_maintenance(cancellation),
+        )?;
+        Ok(())
     }
 
     const JOB_CLAIM_BATCH: i64 = 20;
@@ -192,11 +190,53 @@ impl Worker {
         Ok(())
     }
 
-    async fn run_once(&self) -> Result<(), crate::db::jobs::JobError> {
+    async fn run_jobs(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<(), crate::db::jobs::JobError> {
+        let mut inflight = FuturesUnordered::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
-            let now = Utc::now();
+            tokio::select! {
+                _ = cancellation.cancelled() => return Ok(()),
+                _ = interval.tick() => {}
+                Some(result) = inflight.next(), if !inflight.is_empty() => {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "job handling failed");
+                    }
+                }
+            }
+            let free = Self::JOB_CONCURRENCY - inflight.len();
+            if free == 0 {
+                continue;
+            }
+            let jobs = self
+                .jobs
+                .claim(
+                    &self.worker_id,
+                    Utc::now(),
+                    Duration::seconds(30),
+                    (free as i64).min(Self::JOB_CLAIM_BATCH),
+                )
+                .await?;
+            for job in jobs {
+                inflight.push(self.handle_one(job));
+            }
+        }
+    }
+
+    async fn run_maintenance(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<(), crate::db::jobs::JobError> {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                _ = cancellation.cancelled() => return Ok(()),
+                _ = interval.tick() => {}
+            }
             if let Some(ticker) = &self.ticker
-                && let Err(error) = ticker.tick(now).await
+                && let Err(error) = ticker.tick(Utc::now()).await
             {
                 tracing::warn!(%error, "schedule ticker failed");
             }
@@ -214,31 +254,6 @@ impl Worker {
                 && let Err(error) = sweeper.purge_expired().await
             {
                 tracing::warn!(%error, "sms retention sweeper failed");
-            }
-
-            let jobs = self
-                .jobs
-                .claim(
-                    &self.worker_id,
-                    now,
-                    Duration::seconds(30),
-                    Self::JOB_CLAIM_BATCH,
-                )
-                .await?;
-            let claimed_full_batch = jobs.len() as i64 == Self::JOB_CLAIM_BATCH;
-
-            stream::iter(jobs)
-                .map(|job| self.handle_one(job))
-                .buffer_unordered(Self::JOB_CONCURRENCY)
-                .for_each(|result| async move {
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "job handling failed");
-                    }
-                })
-                .await;
-
-            if !claimed_full_batch {
-                return Ok(());
             }
         }
     }
