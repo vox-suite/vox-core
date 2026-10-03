@@ -8032,7 +8032,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vox-connections"
 version = "0.1.0"
-source = "git+https://github.com/vox-suite/vox-connections.git?branch=main#ae4294d90402efc429e7f54c65c2ea0f4a8bce9d"
+source = "git+https://github.com/vox-suite/vox-connections.git?branch=main#d2b258f1598157b78582d0a81b2efef15ee93d0f"
 dependencies = [
  "async-trait",
  "axum",
