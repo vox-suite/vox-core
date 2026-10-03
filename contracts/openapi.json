@@ -2607,6 +2607,359 @@
           "spans"
         ]
       }
+    },
+    "/v1/delegation-scopes": {
+      "post": {
+        "summary": "Discover owned specialist tool and advisory preference metadata",
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host_context": {
+                    "type": "object",
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "requester_agent_key": {
+                    "type": "string"
+                  },
+                  "specialist_agent_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host_context",
+                  "requester_agent_key",
+                  "specialist_agent_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        }
+      }
+    },
+    "/v1/delegation-permissions": {
+      "post": {
+        "summary": "Create immutable scoped specialist consent",
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host_context": {
+                    "type": "object",
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "permission": {
+                    "type": "object",
+                    "properties": {
+                      "requester_agent_key": {
+                        "type": "string"
+                      },
+                      "specialist_agent_key": {
+                        "type": "string"
+                      },
+                      "scope": {
+                        "type": "object",
+                        "properties": {
+                          "capabilities": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "connection_id": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "capability_external_key": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "connection_id",
+                                "capability_external_key"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "minItems": 1,
+                            "maxItems": 32
+                          }
+                        },
+                        "required": [
+                          "capabilities"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "parent_run_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uuid"
+                      },
+                      "preference_keys": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                          "type": "string",
+                          "maxLength": 128
+                        }
+                      }
+                    },
+                    "required": [
+                      "requester_agent_key",
+                      "specialist_agent_key",
+                      "scope"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "host_context",
+                  "permission"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        }
+      }
+    },
+    "/v1/delegation-permissions/query": {
+      "post": {
+        "summary": "List context-owned specialist permissions",
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host_context": {
+                    "type": "object",
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        }
+      }
+    },
+    "/v1/delegation-permissions/{id}/revoke": {
+      "post": {
+        "summary": "Revoke future specialist access",
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host_context": {
+                    "type": "object",
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/durable-tasks/stop-all": {
+      "post": {
+        "summary": "Stop assigned work without undoing provider effects",
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host_context": {
+                    "type": "object",
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        }
+      }
     }
   },
   "servers": [

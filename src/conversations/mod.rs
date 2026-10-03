@@ -33,6 +33,8 @@ pub struct RespondRequest {
 pub struct RespondResponse {
     pub conversation_id: ConversationId,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub task: Option<crate::durable_tasks::DurableTask>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
