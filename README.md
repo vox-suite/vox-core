@@ -91,6 +91,25 @@ Reusable integration declarations, provider transports, remote extension adapter
 Reviewed connector setup uses the signed host routes `POST /v1/connector-packages/setup` and `POST /v1/connector-packages/setup/callback`. A host presents the exact reviewed package and explicit owned-assistant access before starting; Core retains that consent through OAuth and applies grants and pinned guidance atomically. Changed or revoked access requires fresh review. A manual MCP callback without package consent links the account only. See the [host setup contract](https://github.com/vox-suite/vox-connections/blob/main/docs/packages.md). Migration `20260930000003_connector_setup.sql` must ship with these endpoints before the corresponding Web UI.
 
 
+## PlayStation gaming capture
+
+Connect your PSN account in [Vox Apps](https://app.voxagent.in/apps) under **Connected accounts and agent access → Connect PlayStation**. This covers Sony-reported PS5 and PS4 activity. Automatic capture checks once every 24 hours after a successful refresh; **Refresh** checks sooner while capture is enabled. Failed requests use retry backoff, and expired authorization requires reconnection.
+
+The first refresh establishes a cumulative-playtime baseline. Later increases become gaming spans with the observed duration, observation window, and Sony's last-played timestamp. Exact session start/end times are unknown. Pausing and resuming reset the baseline; disconnecting deletes credentials while retaining existing spans. Linking creates no agent grants.
+
+Core API exposes signed, context-owned `POST` routes:
+
+- `/v1/playstation/link`
+- `/v1/playstation/{id}/status`
+- `/v1/playstation/{id}/capture`
+- `/v1/playstation/{id}/sync`
+
+Core uses the `vox-connections` library for Sony account verification, encrypted credentials, and game reads. Core Worker owns daily polling and span ingestion. No separate Connections service is required for this flow.
+
+Set the same `VOX_CREDENTIAL_KEY` on API and Worker: a 32-byte key encoded as 64 hexadecimal characters. API startup applies `20261003000000_playstation.sql`; ensure the migration completes before relying on worker capture. Publish Connections and update Core's `Cargo.lock` before deploying both services.
+
+This uses a community PSN integration. Deployment and automated checks do not verify a real Sony account exchange; account linking and subsequent refresh need live verification. See [`docs/playstation.md`](docs/playstation.md) for the complete contract.
+
 ## Deploy on Railway
 
 Deploy this repo as two services, both with an empty root directory:
@@ -104,6 +123,7 @@ Shared variables (set once as Railway shared variables):
 
 - `DATABASE_URL`: the Supabase **direct** connection (`db.<ref>.supabase.co:5432`). Do not use the transaction pooler: sqlx uses named prepared statements, which collide there. The session pooler works but caps you at 15 clients. The direct host is IPv6-only, so run `railway outbound-network ipv6 enable --service <name>` for both `vox-core-api` and `vox-core-worker` and apply the staged change.
 - `REDIS_URL`
+- `VOX_CREDENTIAL_KEY`: the same 64-character hexadecimal encryption key on API and Worker for linked provider credentials.
 - `VOX_AUTH_TOKEN`: the same value on `vox-core-api`, `vox-core-worker` and `vox-bridge`.
 - `VOX_BRIDGE_URL`: `http://vox-bridge.railway.internal:<bridge PORT>`
 - `GEMINI_API_KEY`, `EXA_API_KEY`, `GOOGLE_MAPS_API_KEY`, `VOX_ADMIN_TOKEN`
