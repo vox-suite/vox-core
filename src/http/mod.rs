@@ -23,6 +23,7 @@ pub mod identity_adapters;
 pub mod integration_registry;
 pub mod library;
 pub mod packages;
+pub mod playstation;
 pub mod preferences;
 pub mod privacy;
 pub mod rate_limit;
@@ -61,6 +62,7 @@ pub struct AppState {
     pub(crate) execution_policy: Option<Arc<crate::execution_policy::ExecutionPolicyService>>,
     pub(crate) execution: Option<Arc<crate::execution::ExecutionCoordinator>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) playstation: Option<Arc<crate::playstation::PlayStationCapture>>,
     pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
     pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
     pub(crate) events: Option<Arc<EventService>>,
@@ -96,6 +98,7 @@ impl AppState {
             execution_policy: None,
             execution: None,
             conversations: None,
+            playstation: None,
             connections: None,
             capability_grants: None,
             events: None,
@@ -165,6 +168,7 @@ impl AppState {
                 db.clone(),
             ))),
             conversations: None,
+            playstation: None,
             connections: Some(Arc::new(crate::connections::ConnectionService::new(
                 db.pool().clone(),
             ))),
@@ -232,6 +236,11 @@ impl AppState {
             ))),
             service_token: Arc::from(service_token),
         }
+    }
+
+    pub fn with_playstation(mut self, capture: crate::playstation::PlayStationCapture) -> Self {
+        self.playstation = Some(Arc::new(capture));
+        self
     }
 
     pub fn with_admin_token(mut self, token: String) -> Self {
@@ -386,6 +395,13 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
+        .route("/v1/playstation/link", post(playstation::link))
+        .route("/v1/playstation/{id}/status", post(playstation::status))
+        .route(
+            "/v1/playstation/{id}/capture",
+            post(playstation::set_capture),
+        )
+        .route("/v1/playstation/{id}/sync", post(playstation::sync))
         .route("/v1/connections/list", post(connections::list))
         .route(
             "/v1/connections/{id}/disconnect",

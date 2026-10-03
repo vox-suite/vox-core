@@ -55,3 +55,5 @@ pub mod telemetry;
 pub mod tts;
 pub mod user_notifications;
 pub mod workers;
+
+pub mod playstation;

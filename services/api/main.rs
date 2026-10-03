@@ -50,6 +50,38 @@ async fn main() {
 
     let device_hub = vox_core::realtime::DeviceHub::new();
     let user_events = vox_core::realtime::UserEventHub::new();
+    let span_notification_pool = db.pool().clone();
+    let span_notification_hub = user_events.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Ok(mut listener) =
+                sqlx::postgres::PgListener::connect_with(&span_notification_pool).await
+                && listener.listen("vox_playstation_spans").await.is_ok()
+            {
+                while let Ok(notification) = listener.recv().await {
+                    if let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(notification.payload())
+                        && let (Some(user_id), Some(span_id)) = (
+                            payload
+                                .get("user_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                            payload
+                                .get("span_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                        )
+                    {
+                        span_notification_hub.notify(
+                            user_id,
+                            serde_json::json!({"type":"span_created","span_id":span_id}),
+                        );
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
     let agent = Arc::new(
         ConversationAgent::with_db(&config, db.clone())
             .expect("Vox Core agent configuration is invalid"),
@@ -70,6 +102,16 @@ async fn main() {
         config.service_token.clone(),
     );
     app_state = app_state.with_connected_apps(connected_apps);
+    if let Some(key) = config.credential_key.as_deref() {
+        app_state = app_state.with_playstation(
+            vox_core::playstation::PlayStationCapture::new(
+                db.pool().clone(),
+                key,
+                Some(user_events.clone()),
+            )
+            .expect("VOX_CREDENTIAL_KEY must be a 32-byte hex key"),
+        );
+    }
     if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN") {
         app_state = app_state.with_admin_token(token);
     }

@@ -55,6 +55,26 @@ impl SpanRepository {
         Ok(id)
     }
 
+    pub async fn record_in_transaction(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        input: NewSpan,
+    ) -> Result<Uuid, sqlx::Error> {
+        if let (Some(source), Some(source_ref)) = (&input.source, &input.source_ref)
+            && let Some(id) = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM spans WHERE user_id=$1 AND source=$2 AND source_ref=$3",
+            )
+            .bind(user_id)
+            .bind(source)
+            .bind(source_ref)
+            .fetch_optional(&mut **tx)
+            .await?
+        {
+            return Ok(id);
+        }
+        insert(tx, user_id, &input).await
+    }
+
     pub async fn get_by_id(&self, user_id: Uuid, id: Uuid) -> Result<Option<Span>, sqlx::Error> {
         let row = sqlx::query(&format!(
             "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN} WHERE s.id = $1 AND s.user_id = $2"

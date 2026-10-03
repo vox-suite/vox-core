@@ -36,6 +36,28 @@ pub async fn run_worker(
     )
     .await
     .expect("Vox Core database is unavailable");
+    let playstation_handle = if let Some(key) = config.credential_key.as_deref() {
+        let capture = vox_core::playstation::PlayStationCapture::new(db.pool().clone(), key, None)?;
+        let cancel = cancellation.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        tokio::select! {
+                            _ = cancel.cancelled() => break,
+                            result = capture.run_due() => {
+                                if result.is_err() { tracing::warn!("PlayStation polling unavailable"); }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
@@ -163,6 +185,9 @@ pub async fn run_worker(
     let result = worker.run(cancellation.clone()).await;
     cancellation.cancel();
     assigned_handle.await?;
+    if let Some(handle) = playstation_handle {
+        handle.await?;
+    }
     if let Some(handle) = status_handle {
         handle.await?;
     }

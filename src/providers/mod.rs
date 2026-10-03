@@ -26,9 +26,8 @@ pub use playstation::{
     PLAYSTATION_CAPABILITY_GAME_ACTIVITY, PLAYSTATION_CAPABILITY_GAME_ACTIVITY_SHORT,
     PLAYSTATION_CAPABILITY_RECENTLY_PLAYED, PLAYSTATION_CAPABILITY_RECENTLY_PLAYED_SHORT,
     PLAYSTATION_CAPABILITY_USER_TITLES, PLAYSTATION_CAPABILITY_USER_TITLES_SHORT,
-    PLAYSTATION_INTEGRATION_KEY, PlayStationActivityWorker, PlayStationError, PlayStationGame,
-    PlayStationProviderClient, PlayStationRecentActivityResponse, PlayStationService,
-    PlayStationSpanInput, PlayStationSyncResult,
+    PLAYSTATION_INTEGRATION_KEY, PlayStationError, PlayStationGame, PlayStationProviderClient,
+    PlayStationRecentActivityResponse, PlayStationService,
 };
 pub use uber::{
     DefaultUberProviderClient, MockUberProviderClient, UBER_CAPABILITY_HISTORY,

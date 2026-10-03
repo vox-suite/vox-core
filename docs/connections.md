@@ -36,9 +36,7 @@ generic authorization-session table is dropped by a forward migration.
   owned by the signed host user context. `POST /v1/connections/{id}/disconnect`
   revokes a record and its grants in one transaction. No public generic route
   currently creates an authorized connection.
-- The removed PlayStation Web flow accepted a user-entered account ID and
-  optional token without provider verification and fabricated activity. It is
-  no longer offered or callable.
+- PlayStation uses `/v1/playstation/link` with a Sony NPSSO session token, verified account identity and explicit capture consent. Credentials are encrypted with `VOX_CREDENTIAL_KEY`. `/v1/playstation/{id}/status`, `/capture` and `/sync` are signed, context-owned operations. Core polls enabled accounts once a day, establishes a baseline, then records observed playtime increases with provider last-played timestamps and source-event provenance. Exact session boundaries remain unknown. Pausing clears the baseline; disconnecting deletes credentials. See [PlayStation capture](playstation.md).
 
 ## Release gates
 
