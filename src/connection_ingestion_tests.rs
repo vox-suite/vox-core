@@ -376,6 +376,27 @@ async fn committed_ingestion_publishes_the_native_span_contract() {
         .unwrap();
     let mut listener = sqlx::postgres::PgListener::connect(&url).await.unwrap();
     listener.listen("vox_connection_spans").await.unwrap();
+    async fn receive_for_user(
+        listener: &mut sqlx::postgres::PgListener,
+        user: Uuid,
+    ) -> serde_json::Value {
+        loop {
+            let event = listener.recv().await.unwrap();
+            let payload: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+            if payload["user_id"] == user.to_string() {
+                return payload;
+            }
+        }
+    }
+    let unrelated = serde_json::json!({
+        "type": "span_updated",
+        "user_id": Uuid::new_v4().to_string(),
+    });
+    sqlx::query("SELECT pg_notify('vox_connection_spans', $1)")
+        .bind(unrelated.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
     let now = Utc::now();
     let connection = Uuid::new_v4();
     let mut tx = db.pool().begin().await.unwrap();
@@ -393,9 +414,12 @@ async fn committed_ingestion_publishes_the_native_span_contract() {
         .unwrap();
     tx.rollback().await.unwrap();
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), listener.recv())
-            .await
-            .is_err()
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            receive_for_user(&mut listener, user),
+        )
+        .await
+        .is_err()
     );
     let mut tx = db.pool().begin().await.unwrap();
     CoreIngestor
@@ -411,11 +435,12 @@ async fn committed_ingestion_publishes_the_native_span_contract() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let payload: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+    let payload = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receive_for_user(&mut listener, user),
+    )
+    .await
+    .unwrap();
     assert_eq!(payload["type"], "span_updated");
     assert_eq!(payload["user_id"], user.to_string());
 }
