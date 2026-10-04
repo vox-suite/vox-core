@@ -1,7 +1,7 @@
 /**
 * HTTP endpoints for publishing and receiving domain events.
 */
-use super::{AppState, remote_extensions::context};
+use super::{AppState, context::context};
 use crate::events::{IngestEventRequest, service::EventError};
 use axum::{
     Json,

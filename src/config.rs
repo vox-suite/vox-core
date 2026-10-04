@@ -45,11 +45,8 @@ pub struct Config {
     pub status_webhook_key: Option<String>,
     /// 32-byte hex key that encrypts connected-app OAuth tokens at rest.
     pub credential_key: Option<String>,
-    /// Exact redirect URIs hosts may use for connected-app OAuth callbacks.
-    pub mcp_oauth_redirect_uris: Vec<String>,
-    /// JSON map of MCP endpoint host -> OAuth client, for apps without
-    /// dynamic client registration.
-    pub mcp_oauth_clients: Option<String>,
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -119,16 +116,8 @@ impl Config {
             status_webhook_key: get("VOX_STATUS_WEBHOOK_KEY")
                 .filter(|value| !value.trim().is_empty()),
             credential_key: get("VOX_CREDENTIAL_KEY").filter(|value| !value.trim().is_empty()),
-            mcp_oauth_redirect_uris: get("VOX_MCP_OAUTH_REDIRECT_URIS")
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(|uri| uri.trim().to_string())
-                        .filter(|uri| !uri.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default(),
-            mcp_oauth_clients: get("VOX_MCP_OAUTH_CLIENTS")
+            google_client_id: get("GOOGLE_CLIENT_ID").filter(|value| !value.trim().is_empty()),
+            google_client_secret: get("GOOGLE_CLIENT_SECRET")
                 .filter(|value| !value.trim().is_empty()),
         })
     }

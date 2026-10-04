@@ -147,7 +147,7 @@ pub enum HostTrustError {
     #[error("host context request is invalid")]
     InvalidRequest,
     #[error("default skill publication unavailable")]
-    Defaults(#[from] vox_connections::skills::SkillError),
+    Defaults(#[from] crate::skills::SkillError),
     #[error("host assertion is invalid")]
     InvalidAssertion,
     #[error("host assertion is denied")]
@@ -196,8 +196,7 @@ impl HostTrustService {
         .bind(&deployment_external_key)
         .fetch_one(self.db.pool())
         .await?;
-        vox_connections::defaults::publish(self.db.pool().clone(), &deployment_external_key)
-            .await?;
+        crate::defaults::publish(self.db.pool().clone(), &deployment_external_key).await?;
         seed_default_general_agent(&self.db, deployment_id).await?;
 
         let mut tx = self.db.pool().begin().await?;

@@ -311,6 +311,92 @@
         ],
         "type": "object"
       },
+      "ConnectionItem": {
+        "properties": {
+          "account_display_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assistant_read": {
+            "type": "boolean"
+          },
+          "authorization_state": {
+            "type": "string"
+          },
+          "connector_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "failure_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_synced_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sync_timeline": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "connector_id",
+          "authorization_state",
+          "sync_timeline",
+          "assistant_read",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ConnectorDescriptor": {
+        "properties": {
+          "auth_type": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "supported_features": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "supported_features",
+          "auth_type",
+          "available"
+        ],
+        "type": "object"
+      },
       "CreateChartBoardInput": {
         "properties": {
           "charts": {
@@ -652,6 +738,23 @@
         ],
         "type": "string"
       },
+      "PreferencesRequest": {
+        "properties": {
+          "assistant_read": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "sync_timeline": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "QuerySpec": {
         "properties": {
           "aggregation": {
@@ -708,6 +811,22 @@
         },
         "type": "object"
       },
+      "RefreshResponse": {
+        "properties": {
+          "refreshed": {
+            "type": "boolean"
+          },
+          "spans_created": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "refreshed",
+          "spans_created"
+        ],
+        "type": "object"
+      },
       "RunState": {
         "enum": [
           "idle",
@@ -731,6 +850,30 @@
         },
         "required": [
           "message"
+        ],
+        "type": "object"
+      },
+      "SetupStatusResponse": {
+        "properties": {
+          "connection_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
         ],
         "type": "object"
       },
@@ -1231,6 +1374,58 @@
           "cancelled"
         ],
         "type": "string"
+      },
+      "StartConnectionRequest": {
+        "properties": {
+          "connector_id": {
+            "type": "string"
+          },
+          "consent": {
+            "type": "boolean"
+          },
+          "npsso": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connector_id",
+          "consent"
+        ],
+        "type": "object"
+      },
+      "StartConnectionResponse": {
+        "properties": {
+          "authorization_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connection_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setup_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
       },
       "SuggestChartsInput": {
         "oneOf": [
@@ -1739,6 +1934,305 @@
         "summary": "Streaming turn response for conversation"
       }
     },
+    "/v1/delegation-permissions": {
+      "post": {
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "host_context": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "type": "object"
+                  },
+                  "permission": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "parent_run_id": {
+                        "format": "uuid",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "preference_keys": {
+                        "items": {
+                          "maxLength": 128,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array"
+                      },
+                      "requester_agent_key": {
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "capabilities": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "capability_external_key": {
+                                  "type": "string"
+                                },
+                                "connection_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "connection_id",
+                                "capability_external_key"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "capabilities"
+                        ],
+                        "type": "object"
+                      },
+                      "specialist_agent_key": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "requester_agent_key",
+                      "specialist_agent_key",
+                      "scope"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "host_context",
+                  "permission"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "summary": "Create immutable scoped specialist consent"
+      }
+    },
+    "/v1/delegation-permissions/query": {
+      "post": {
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "host_context": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "summary": "List context-owned specialist permissions"
+      }
+    },
+    "/v1/delegation-permissions/{id}/revoke": {
+      "post": {
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "host_context": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "summary": "Revoke future specialist access"
+      }
+    },
+    "/v1/delegation-scopes": {
+      "post": {
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "host_context": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "type": "object"
+                  },
+                  "requester_agent_key": {
+                    "type": "string"
+                  },
+                  "specialist_agent_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host_context",
+                  "requester_agent_key",
+                  "specialist_agent_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "summary": "Discover owned specialist tool and advisory preference metadata"
+      }
+    },
     "/v1/devices": {
       "post": {
         "responses": {
@@ -1752,6 +2246,60 @@
           }
         ],
         "summary": "Enroll client device"
+      }
+    },
+    "/v1/durable-tasks/stop-all": {
+      "post": {
+        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "host_context": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "host_user_id": {
+                        "type": "string"
+                      },
+                      "organization_external_key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "host_user_id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "host_context"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful governed operation"
+          },
+          "401": {
+            "description": "Host assertion missing or invalid"
+          },
+          "404": {
+            "description": "Owned context scope unavailable"
+          },
+          "409": {
+            "description": "State or budget conflict"
+          }
+        },
+        "summary": "Stop assigned work without undoing provider effects"
       }
     },
     "/v1/events": {
@@ -1987,6 +2535,273 @@
         },
         "tags": [
           "pulse"
+        ]
+      }
+    },
+    "/v1/me/connections/list": {
+      "post": {
+        "operationId": "list_connections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/setup/{id}/cancel": {
+      "post": {
+        "operationId": "cancel_setup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/setup/{id}/status": {
+      "post": {
+        "operationId": "setup_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/start": {
+      "post": {
+        "operationId": "start_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartConnectionResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/{id}/disconnect": {
+      "post": {
+        "operationId": "disconnect_connection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/{id}/preferences": {
+      "post": {
+        "operationId": "update_preferences",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionItem"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connections/{id}/refresh": {
+      "post": {
+        "operationId": "refresh_connection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/me/connectors/list": {
+      "post": {
+        "operationId": "list_connectors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectorDescriptor"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "tags": [
+          "connections"
         ]
       }
     },
@@ -2606,359 +3421,6 @@
         "tags": [
           "spans"
         ]
-      }
-    },
-    "/v1/delegation-scopes": {
-      "post": {
-        "summary": "Discover owned specialist tool and advisory preference metadata",
-        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "host_context": {
-                    "type": "object",
-                    "properties": {
-                      "host_user_id": {
-                        "type": "string"
-                      },
-                      "organization_external_key": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "host_user_id"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "requester_agent_key": {
-                    "type": "string"
-                  },
-                  "specialist_agent_key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "host_context",
-                  "requester_agent_key",
-                  "specialist_agent_key"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful governed operation"
-          },
-          "401": {
-            "description": "Host assertion missing or invalid"
-          },
-          "404": {
-            "description": "Owned context scope unavailable"
-          },
-          "409": {
-            "description": "State or budget conflict"
-          }
-        }
-      }
-    },
-    "/v1/delegation-permissions": {
-      "post": {
-        "summary": "Create immutable scoped specialist consent",
-        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "host_context": {
-                    "type": "object",
-                    "properties": {
-                      "host_user_id": {
-                        "type": "string"
-                      },
-                      "organization_external_key": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "host_user_id"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "permission": {
-                    "type": "object",
-                    "properties": {
-                      "requester_agent_key": {
-                        "type": "string"
-                      },
-                      "specialist_agent_key": {
-                        "type": "string"
-                      },
-                      "scope": {
-                        "type": "object",
-                        "properties": {
-                          "capabilities": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "connection_id": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "capability_external_key": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "connection_id",
-                                "capability_external_key"
-                              ],
-                              "additionalProperties": false
-                            },
-                            "minItems": 1,
-                            "maxItems": 32
-                          }
-                        },
-                        "required": [
-                          "capabilities"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "parent_run_id": {
-                        "type": [
-                          "string",
-                          "null"
-                        ],
-                        "format": "uuid"
-                      },
-                      "preference_keys": {
-                        "type": "array",
-                        "maxItems": 8,
-                        "items": {
-                          "type": "string",
-                          "maxLength": 128
-                        }
-                      }
-                    },
-                    "required": [
-                      "requester_agent_key",
-                      "specialist_agent_key",
-                      "scope"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "host_context",
-                  "permission"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful governed operation"
-          },
-          "401": {
-            "description": "Host assertion missing or invalid"
-          },
-          "404": {
-            "description": "Owned context scope unavailable"
-          },
-          "409": {
-            "description": "State or budget conflict"
-          }
-        }
-      }
-    },
-    "/v1/delegation-permissions/query": {
-      "post": {
-        "summary": "List context-owned specialist permissions",
-        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "host_context": {
-                    "type": "object",
-                    "properties": {
-                      "host_user_id": {
-                        "type": "string"
-                      },
-                      "organization_external_key": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "host_user_id"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "host_context"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful governed operation"
-          },
-          "401": {
-            "description": "Host assertion missing or invalid"
-          },
-          "404": {
-            "description": "Owned context scope unavailable"
-          },
-          "409": {
-            "description": "State or budget conflict"
-          }
-        }
-      }
-    },
-    "/v1/delegation-permissions/{id}/revoke": {
-      "post": {
-        "summary": "Revoke future specialist access",
-        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "host_context": {
-                    "type": "object",
-                    "properties": {
-                      "host_user_id": {
-                        "type": "string"
-                      },
-                      "organization_external_key": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "host_user_id"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "host_context"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful governed operation"
-          },
-          "401": {
-            "description": "Host assertion missing or invalid"
-          },
-          "404": {
-            "description": "Owned context scope unavailable"
-          },
-          "409": {
-            "description": "State or budget conflict"
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ]
-      }
-    },
-    "/v1/durable-tasks/stop-all": {
-      "post": {
-        "summary": "Stop assigned work without undoing provider effects",
-        "description": "Requires the registered host signed assertion and canonical authenticated user context. Request bodies do not confer authority. See docs/delegation.md.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "host_context": {
-                    "type": "object",
-                    "properties": {
-                      "host_user_id": {
-                        "type": "string"
-                      },
-                      "organization_external_key": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "host_user_id"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "host_context"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful governed operation"
-          },
-          "401": {
-            "description": "Host assertion missing or invalid"
-          },
-          "404": {
-            "description": "Owned context scope unavailable"
-          },
-          "409": {
-            "description": "State or budget conflict"
-          }
-        }
       }
     }
   },

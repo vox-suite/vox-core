@@ -56,25 +56,19 @@ async fn main() {
         loop {
             if let Ok(mut listener) =
                 sqlx::postgres::PgListener::connect_with(&span_notification_pool).await
-                && listener.listen("vox_playstation_spans").await.is_ok()
+                && listener.listen("vox_connection_spans").await.is_ok()
             {
                 while let Ok(notification) = listener.recv().await {
                     if let Ok(payload) =
                         serde_json::from_str::<serde_json::Value>(notification.payload())
-                        && let (Some(user_id), Some(span_id)) = (
-                            payload
-                                .get("user_id")
-                                .and_then(|v| v.as_str())
-                                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-                            payload
-                                .get("span_id")
-                                .and_then(|v| v.as_str())
-                                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-                        )
+                        && let Some(user_id) = payload
+                            .get("user_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
                     {
                         span_notification_hub.notify(
                             user_id,
-                            serde_json::json!({"type":"span_created","span_id":span_id}),
+                            serde_json::json!({"type": payload.get("type").and_then(|v| v.as_str()).unwrap_or("span_created"),"span_id":payload.get("span_id")}),
                         );
                     }
                 }
@@ -84,7 +78,8 @@ async fn main() {
     });
     let agent = Arc::new(
         ConversationAgent::with_db(&config, db.clone())
-            .expect("Vox Core agent configuration is invalid"),
+            .expect("Vox Core agent configuration is invalid")
+            .with_user_events(user_events.clone()),
     );
     let cache = RedisContextCache::new(&config.redis_url)
         .ok()
@@ -94,24 +89,12 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");
-    let connected_apps = Arc::new(vox_core::connected_apps::from_config(db.clone(), &config));
     let mut app_state = AppState::with_memory(
         db.clone(),
         agent,
         memory.clone(),
         config.service_token.clone(),
     );
-    app_state = app_state.with_connected_apps(connected_apps);
-    if let Some(key) = config.credential_key.as_deref() {
-        app_state = app_state.with_playstation(
-            vox_core::playstation::PlayStationCapture::new(
-                db.pool().clone(),
-                key,
-                Some(user_events.clone()),
-            )
-            .expect("VOX_CREDENTIAL_KEY must be a 32-byte hex key"),
-        );
-    }
     if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN") {
         app_state = app_state.with_admin_token(token);
     }
@@ -152,7 +135,7 @@ async fn main() {
         device_hub,
         memory,
         user_events,
-        config.google_maps_api_key.clone(),
+        &config,
         tts,
         stt,
         chart_suggester,

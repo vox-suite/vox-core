@@ -68,12 +68,15 @@ pub async fn import_private(
         Ok(context) => context,
         Err(status) => return status.into_response(),
     };
-    let skill = match vox_connections::skill_format::import(&request.files) {
+    let skill = match crate::skill_format::import(&request.files) {
         Ok(skill) => skill,
         Err(error) => return reply_error(error),
     };
     if request.preview {
-        return Json(serde_json::json!({"skill":skill,"digest":vox_connections::skills::content_digest(&skill).ok()})).into_response();
+        return Json(
+            serde_json::json!({"skill":skill,"digest":crate::skills::content_digest(&skill).ok()}),
+        )
+        .into_response();
     }
     let Some(service) = state.skills.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

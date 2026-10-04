@@ -124,20 +124,30 @@ impl SpanRepository {
             _,
             (
                 i32,
+                String,
                 Option<chrono::DateTime<chrono::Utc>>,
                 Option<chrono::DateTime<chrono::Utc>>,
             ),
         >(
-            "SELECT version, start_at, end_at FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            "SELECT version, source, start_at, end_at FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
         )
         .bind(id)
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((current, old_start_at, old_end_at)) = row else {
+        let Some((current, source, old_start_at, old_end_at)) = row else {
             return Ok(ConcurrencyOutcome::NotFound);
         };
         if patch.expected_version.is_some_and(|v| v != current) {
+            return Ok(ConcurrencyOutcome::Conflict);
+        }
+
+        if source == "google_calendar"
+            && (patch.title.is_some()
+                || patch.start_at.is_some()
+                || patch.end_at.is_some()
+                || patch.status.is_some())
+        {
             return Ok(ConcurrencyOutcome::Conflict);
         }
 

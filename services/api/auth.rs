@@ -17,12 +17,14 @@ use vox_core::domain::identity::Actor;
 
 const LIVE_SOCKET_PATH: &str = "/v1/me/events/socket";
 const SUBPROTOCOL_TOKEN_PREFIX: &str = "bearer.";
-const WEB_SCOPE_PREFIXES: [&str; 6] = [
+const WEB_SCOPE_PREFIXES: [&str; 8] = [
     "/v1/spans",
     "/v1/collections",
     "/v1/me/schemas",
     "/v1/me/charts",
     "/v1/me/spaces",
+    "/v1/me/connectors",
+    "/v1/me/connections",
     LIVE_SOCKET_PATH,
 ];
 

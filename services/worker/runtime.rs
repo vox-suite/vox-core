@@ -36,28 +36,31 @@ pub async fn run_worker(
     )
     .await
     .expect("Vox Core database is unavailable");
-    let playstation_handle = if let Some(key) = config.credential_key.as_deref() {
-        let capture = vox_core::playstation::PlayStationCapture::new(db.pool().clone(), key, None)?;
-        let cancel = cancellation.clone();
-        Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            loop {
-                tokio::select! {
-                    _ = cancel.cancelled() => break,
-                    _ = interval.tick() => {
-                        tokio::select! {
-                            _ = cancel.cancelled() => break,
-                            result = capture.run_due() => {
-                                if result.is_err() { tracing::warn!("PlayStation polling unavailable"); }
-                            }
+    let fresh_connections = vox_core::fresh_connections::FreshConnectionsService::new(
+        db.pool().clone(),
+        config.credential_key.as_deref(),
+        None,
+        config.google_client_id.clone(),
+        config.google_client_secret.clone(),
+        config.core_api_url.clone(),
+    )?;
+    let connections_cancel = cancellation.clone();
+    let connections_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                _ = connections_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    tokio::select! {
+                        _ = connections_cancel.cancelled() => break,
+                        result = fresh_connections.run_due_syncs() => {
+                            if result.is_err() { tracing::warn!("Connections background sync unavailable"); }
                         }
                     }
                 }
             }
-        }))
-    } else {
-        None
-    };
+        }
+    });
     let planner = Arc::new(
         GeminiEventPlanner::new(&config).expect("Vox Core planner configuration is invalid"),
     );
@@ -185,9 +188,7 @@ pub async fn run_worker(
     let result = worker.run(cancellation.clone()).await;
     cancellation.cancel();
     assigned_handle.await?;
-    if let Some(handle) = playstation_handle {
-        handle.await?;
-    }
+    connections_handle.await?;
     if let Some(handle) = status_handle {
         handle.await?;
     }

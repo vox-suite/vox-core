@@ -45,6 +45,7 @@ pub struct ApiState {
     pub space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting>,
     pub space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
     pub bridge: Option<Arc<dyn vox_core::bridge_client::OutboundBridge>>,
+    pub connections: vox_core::fresh_connections::FreshConnectionsService,
 }
 
 impl ApiState {
@@ -55,7 +56,7 @@ impl ApiState {
         device_hub: DeviceHub,
         memory: MemoryService,
         user_events: UserEventHub,
-        google_maps_api_key: Option<String>,
+        config: &vox_core::config::Config,
         tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
         stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
         chart_suggester: Arc<dyn SuggestingCharts>,
@@ -77,8 +78,18 @@ impl ApiState {
         let schemas = SchemaService::new(schema_repo);
         let devices = DeviceService::new(device_repo);
         let sms_ingestion = SmsIngestionService::new(db.clone());
-        let location_ingestion = LocationIngestionService::new(db.clone(), google_maps_api_key);
+        let location_ingestion =
+            LocationIngestionService::new(db.clone(), config.google_maps_api_key.clone());
         let consent = ConsentService::new(db.clone());
+        let connections = vox_core::fresh_connections::FreshConnectionsService::new(
+            pool.clone(),
+            config.credential_key.as_deref(),
+            Some(user_events.clone()),
+            config.google_client_id.clone(),
+            config.google_client_secret.clone(),
+            config.core_api_url.clone(),
+        )
+        .expect("FreshConnectionsService initialization failed");
 
         Self {
             legacy,
@@ -102,6 +113,7 @@ impl ApiState {
             space_architect,
             space_runtime,
             bridge: None,
+            connections,
         }
     }
 }

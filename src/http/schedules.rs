@@ -1,7 +1,7 @@
 /**
 * HTTP endpoints for managing recurring schedules and cron triggers.
 */
-use super::{AppState, remote_extensions::context};
+use super::{AppState, context::context};
 use crate::schedules::{
     CreateScheduleRequest, ScheduleId, UpdateScheduleRequest, service::ScheduleError,
 };

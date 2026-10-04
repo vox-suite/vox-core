@@ -68,9 +68,28 @@ impl SpanService {
         id: Uuid,
         patch: SpanPatch,
     ) -> Result<Span, SpanServiceError> {
+        if let Some(span) = self.repo.get_by_id(actor.user_id, id).await?
+            && span.source == "google_calendar"
+            && (patch.title.is_some()
+                || patch.start_at.is_some()
+                || patch.end_at.is_some()
+                || patch.status.is_some())
+        {
+            return Err(SpanServiceError::Invalid(
+                "calendar title, time and status are managed by the provider",
+            ));
+        }
         match self.repo.update(actor.user_id, id, patch).await? {
             ConcurrencyOutcome::Success(span) => {
                 self.notify(actor.user_id, "span_updated", span.id);
+                self.user_events.sync_task_pin(
+                    actor.user_id,
+                    span.id,
+                    serde_json::to_value(span.status)
+                        .ok()
+                        .as_ref()
+                        .and_then(|v| v.as_str()),
+                );
                 Ok(span)
             }
             ConcurrencyOutcome::Conflict => Err(SpanServiceError::VersionConflict),
@@ -99,6 +118,7 @@ impl SpanService {
         let deleted = self.repo.delete(actor.user_id, id).await?;
         if deleted {
             self.notify(actor.user_id, "span_deleted", id);
+            self.user_events.sync_task_pin(actor.user_id, id, None);
         }
         Ok(deleted)
     }

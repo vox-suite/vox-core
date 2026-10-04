@@ -104,21 +104,19 @@ impl ResolvedUserContext {
     /// Converts to the minimal caller-identity boundary type the
     /// vox-connections crate (connections/capability_grants/integration_registry/
     /// provider clients) takes, instead of this crate's full identity model.
-    pub fn request_context(&self) -> vox_connections::identity::RequestContext {
-        vox_connections::identity::RequestContext {
-            id: vox_connections::identity::UserContextId(self.id.0),
-            user_id: vox_connections::identity::UserId(self.user_id.0),
-            subject: vox_connections::identity::RequestSubject {
-                deployment_id: vox_connections::identity::DeploymentId(
-                    self.subject.deployment_id.0,
-                ),
+    pub fn request_context(&self) -> crate::identity_contract::RequestContext {
+        crate::identity_contract::RequestContext {
+            id: crate::identity_contract::UserContextId(self.id.0),
+            user_id: crate::identity_contract::UserId(self.user_id.0),
+            subject: crate::identity_contract::RequestSubject {
+                deployment_id: crate::identity_contract::DeploymentId(self.subject.deployment_id.0),
             },
         }
     }
 }
 
-impl vox_connections::identity::RequestScope for ResolvedUserContext {
-    fn request_context(&self) -> vox_connections::identity::RequestContext {
+impl crate::identity_contract::RequestScope for ResolvedUserContext {
+    fn request_context(&self) -> crate::identity_contract::RequestContext {
         ResolvedUserContext::request_context(self)
     }
 }

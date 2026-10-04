@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fetch_all(db.pool())
             .await?;
     for deployment in &deployments {
-        vox_connections::defaults::publish(db.pool().clone(), deployment).await?;
+        vox_core::defaults::publish(db.pool().clone(), deployment).await?;
     }
     println!(
         "Published six reviewed default skills to {} deployments",

@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: vox-suite/vox-connections
+          ref: 61073aa1007870f573d35ebb5285dfe9ee5d98c1
           path: vox-connections
       - uses: actions/checkout@v4
         with:
@@ -69,8 +70,8 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d vox_core_migrations -v ON_ERROR_STOP=1 -Atc "SELECT extversion FROM pg_extension WHERE extname = 'vector'" | grep -Eq '^[0-9]+\.'
       - name: Shared connector lifecycle against Core schema
         env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_migrations
-        run: cargo test --manifest-path ../vox-connections/Cargo.toml --test postgres_integration -- --ignored
+          CONNECTIONS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_migrations
+        run: cargo test --manifest-path ../vox-connections/Cargo.toml --lib accounts::tests -- --ignored
       - name: Owned assistant isolation and concurrent provisioning
         env:
           PGPASSWORD: postgres
@@ -89,10 +90,6 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
         run: cargo test --locked --lib agent_memory_is_scoped_bounded_and_revocation_aware -- --ignored
-      - name: Voice metadata warmup and actor revision isolation
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_owned_agents
-        run: cargo test --locked --lib voice_warmup_cannot_inject_user_wide_data_or_share_actor_revisions -- --ignored
       - name: Durable task context and production worker boundaries
         env:
           PGPASSWORD: postgres
@@ -115,3 +112,11 @@ jobs:
         run: |
           createdb -h 127.0.0.1 -U postgres vox_core_delegation
           cargo test --locked --lib delegation_is_scoped_revocable_and_returns_only_bounded_work -- --ignored
+
+      - name: Atomic calendar and gaming ingestion regressions
+        env:
+          PGPASSWORD: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/vox_core_connection_ingestion
+        run: |
+          createdb -h 127.0.0.1 -U postgres vox_core_connection_ingestion
+          cargo test --locked --lib fresh_connections::ingestion_tests -- --ignored

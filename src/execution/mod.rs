@@ -216,7 +216,7 @@ impl ExecutionCoordinator {
             "identity": identity,
         });
         let connection_current = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM external_connections WHERE id=$1 AND user_context_id=$2
+            "SELECT id FROM retired_external_connections WHERE id=$1 AND user_context_id=$2
              AND authorization_state='authorized' AND (expires_at IS NULL OR expires_at>$3)
              AND $4=ANY(authorized_capabilities) FOR SHARE",
         )
@@ -230,9 +230,9 @@ impl ExecutionCoordinator {
             return Err(ExecutionError::Unavailable);
         }
         let grant_current = sqlx::query_scalar::<_, Uuid>(
-            "SELECT g.id FROM agent_capability_grants g
+            "SELECT g.id FROM retired_agent_capability_grants g
              JOIN agent_definitions a ON a.id=g.agent_definition_id
-             JOIN external_connections x ON x.id=g.connection_id
+             JOIN retired_external_connections x ON x.id=g.connection_id
              WHERE g.user_context_id=$1 AND g.connection_id=$2
                AND g.capability_external_key=$3 AND g.state='enabled'
                AND a.owner_user_context_id=$1 AND a.external_key=$4 AND a.deployment_id=$5 AND a.state='enabled' AND (a.template_id IS NULL OR EXISTS (SELECT 1 FROM agent_definitions template WHERE template.id=a.template_id AND template.state='enabled' AND ($3=ANY(template.requested_capability_categories) OR '*'=ANY(template.requested_capability_categories))))
@@ -240,9 +240,9 @@ impl ExecutionCoordinator {
                AND $3=ANY(x.authorized_capabilities)
                AND x.user_context_id=$1 AND x.authorization_state='authorized'
                AND (x.expires_at IS NULL OR x.expires_at>$6)
-               AND (EXISTS (SELECT 1 FROM integration_definitions i
+               AND (EXISTS (SELECT 1 FROM retired_integration_definitions i
                     WHERE i.id=x.integration_id AND i.deployment_id=$5 AND i.state='enabled')
-                 OR EXISTS (SELECT 1 FROM remote_extensions e
+                 OR EXISTS (SELECT 1 FROM retired_remote_extensions e
                     WHERE e.id=x.remote_extension_id AND e.user_context_id=$1
                       AND e.lifecycle_state='active' AND e.consent_status='consented'
                       AND e.conformance_status='passed' AND e.operator_enabled))

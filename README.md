@@ -48,15 +48,7 @@ production provider:
 cargo test --locked
 ```
 
-The shared `vox-connections` crate runs the canonical conformance fixture with `cargo test --test host_boundary`. See [`docs/conformance.md`](docs/conformance.md) for the versioned fixture,
-adapter contract, stable error vocabulary, and semantic coverage map.
-
-Provider integrations must follow the dated capability decisions and production
-enablement gates in
-[`docs/provider-feasibility.md`](docs/provider-feasibility.md). The record
-selects the first connected-read and consequential-write routes, distinguishes
-verified provider behavior from inference, and requires unsupported actions to
-remain labelled handoffs.
+This release supports Google Calendar and PlayStation connections. Steam, Valorant, Amazon shopper data and Zomato tracking remain outside this release. The older [provider research](docs/provider-feasibility.md) is historical and does not describe shipped functionality.
 
 The canonical deployment, host-app, optional organization, and host-user
 isolation contract is documented in
@@ -75,40 +67,15 @@ identity linking, and the non-merging context guarantee are documented in
 The model-neutral agent catalog and its explicit no-authority guarantee are
 documented in [`docs/agent-registry.md`](docs/agent-registry.md).
 
-Protocol-neutral integration declarations and discovery semantics are documented
-in [`docs/integration-registry.md`](docs/integration-registry.md).
-
 Conversation, schedule, task, and action ownership migration and compatibility
 rules are documented in
 [`docs/resource-context-migration.md`](docs/resource-context-migration.md).
 
 Database integration tests require an isolated PostgreSQL database and `TEST_DATABASE_URL`; run them serially with `--test-threads=1`.
 
-## Connector boundary
+## Connected Apps
 
-Reusable integration declarations, provider transports, remote extension adapters, connected-app OAuth and MCP sessions, declarative skill packages, and conformance fixtures live in [vox-connections](https://github.com/vox-suite/vox-connections). Core owns host trust, identity, agent presentation, grants and approval enforcement, durable execution, and audit. It passes a minimal request context and database pool to the shared crate. The remaining `connected_apps`, `remote_extensions`, `skills`, and `conformance` modules here are host wiring or API re-exports.
-
-Reviewed connector setup uses the signed host routes `POST /v1/connector-packages/setup` and `POST /v1/connector-packages/setup/callback`. A host presents the exact reviewed package and explicit owned-assistant access before starting; Core retains that consent through OAuth and applies grants and pinned guidance atomically. Changed or revoked access requires fresh review. A manual MCP callback without package consent links the account only. See the [host setup contract](https://github.com/vox-suite/vox-connections/blob/main/docs/packages.md). Migration `20260930000003_connector_setup.sql` must ship with these endpoints before the corresponding Web UI.
-
-
-## PlayStation gaming capture
-
-Connect your PSN account in [Vox Apps](https://app.voxagent.in/apps) under **Connected accounts and agent access → Connect PlayStation**. This covers Sony-reported PS5 and PS4 activity. Automatic capture checks once every 24 hours after a successful refresh; **Refresh** checks sooner while capture is enabled. Failed requests use retry backoff, and expired authorization requires reconnection.
-
-The first refresh establishes a cumulative-playtime baseline. Later increases become gaming spans with the observed duration, observation window, and Sony's last-played timestamp. Exact session start/end times are unknown. Pausing and resuming reset the baseline; disconnecting deletes credentials while retaining existing spans. Linking creates no agent grants.
-
-Core API exposes signed, context-owned `POST` routes:
-
-- `/v1/playstation/link`
-- `/v1/playstation/{id}/status`
-- `/v1/playstation/{id}/capture`
-- `/v1/playstation/{id}/sync`
-
-Core uses the `vox-connections` library for Sony account verification, encrypted credentials, and game reads. Core Worker owns daily polling and span ingestion. No separate Connections service is required for this flow.
-
-Set the same `VOX_CREDENTIAL_KEY` on API and Worker: a 32-byte key encoded as 64 hexadecimal characters. API startup applies `20261003000000_playstation.sql`; ensure the migration completes before relying on worker capture. Publish Connections and update Core's `Cargo.lock` before deploying both services.
-
-This uses a community PSN integration. Deployment and automated checks do not verify a real Sony account exchange; account linking and subsequent refresh need live verification. See [`docs/playstation.md`](docs/playstation.md) for the complete contract.
+Google Calendar and PlayStation linking use the authenticated `/v1/me/connectors` and `/v1/me/connections` API shared by desktop and Android. Connections owns encrypted tokens, provider reads and checkpoints; Core owns scheduling and transactional timeline ingestion. See [the connection contract](docs/connections.md).
 
 ## Deploy on Railway
 

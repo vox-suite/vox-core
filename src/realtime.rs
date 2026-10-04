@@ -3,10 +3,11 @@
 * request/response correlation, used to dispatch real-time commands
 * (e.g. terminal control) to a connected client device.
 */
+use crate::map_scene::MapScene;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -244,15 +245,70 @@ struct UserConnection {
     platform: String,
 }
 
+const SCENE_TTL: Duration = Duration::from_secs(30 * 60);
+
 #[derive(Clone, Default)]
 pub struct UserEventHub {
     conns: Arc<Mutex<HashMap<Uuid, Vec<UserConnection>>>>,
     next_generation: Arc<std::sync::atomic::AtomicU64>,
+    scenes: Arc<Mutex<HashMap<Uuid, (Instant, MapScene)>>>,
 }
 
 impl UserEventHub {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_scene(&self, user_id: Uuid, mut scene: MapScene) -> MapScene {
+        {
+            let mut scenes = self.scenes.lock().expect("map scene lock poisoned");
+            scene.rev = scenes.get(&user_id).map_or(0, |(_, s)| s.rev) + 1;
+            scenes.insert(user_id, (Instant::now(), scene.clone()));
+        }
+        self.notify(
+            user_id,
+            serde_json::json!({ "type": "map_scene", "scene": scene }),
+        );
+        scene
+    }
+
+    pub fn scene(&self, user_id: Uuid) -> MapScene {
+        match self
+            .scenes
+            .lock()
+            .expect("map scene lock poisoned")
+            .get(&user_id)
+        {
+            Some((at, scene)) if at.elapsed() < SCENE_TTL => scene.clone(),
+            Some((_, scene)) => MapScene {
+                rev: scene.rev,
+                ..MapScene::default()
+            },
+            None => MapScene::default(),
+        }
+    }
+
+    pub fn sync_task_pin(&self, user_id: Uuid, span_id: Uuid, status: Option<&str>) {
+        let updated = {
+            let scenes = self.scenes.lock().expect("map scene lock poisoned");
+            let Some((_, scene)) = scenes.get(&user_id) else {
+                return;
+            };
+            if !scene.pins.iter().any(|p| p.span_id == Some(span_id)) {
+                return;
+            }
+            let mut next = scene.clone();
+            match status {
+                Some(status) => {
+                    for pin in next.pins.iter_mut().filter(|p| p.span_id == Some(span_id)) {
+                        pin.state = Some(status.to_owned());
+                    }
+                }
+                None => next.pins.retain(|p| p.span_id != Some(span_id)),
+            }
+            next
+        };
+        self.set_scene(user_id, updated);
     }
 
     /// Registers a newly connected client for `user_id`, returning the

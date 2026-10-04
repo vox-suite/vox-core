@@ -96,7 +96,7 @@ impl AgentRegistry {
             AgentMutation::Archive { agent_key } => {
                 let id:Uuid=sqlx::query_scalar("UPDATE agent_definitions SET state='disabled',updated_at=now() WHERE owner_user_context_id=$1 AND external_key=$2 AND state='enabled' AND NOT is_default RETURNING id")
                     .bind(context.id.0).bind(agent_key).fetch_optional(&mut *tx).await?.ok_or(AgentRegistryError::NotFound)?;
-                sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now(),updated_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2 AND state='enabled'")
+                sqlx::query("UPDATE retired_agent_capability_grants SET state='revoked',revoked_at=now(),updated_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2 AND state='enabled'")
                     .bind(context.id.0).bind(id).execute(&mut *tx).await?;
                 sqlx::query("UPDATE skill_agent_enablements SET enabled=false,updated_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2")
                     .bind(context.id.0).bind(id).execute(&mut *tx).await?;

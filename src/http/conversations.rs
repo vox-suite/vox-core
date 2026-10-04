@@ -1,7 +1,7 @@
 /**
 * HTTP endpoints for conversation turns, audio streams, and history.
 */
-use super::{AppState, remote_extensions::context};
+use super::{AppState, context::context};
 use crate::conversations::{
     CompleteConversationRequest, RespondRequest, RespondResponse, service::ConversationError,
 };

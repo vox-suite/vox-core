@@ -4,6 +4,14 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(paths(
+    crate::routes::connections::list_connectors,
+    crate::routes::connections::list_connections,
+    crate::routes::connections::start_connection,
+    crate::routes::connections::setup_status,
+    crate::routes::connections::update_preferences,
+    crate::routes::connections::refresh_connection,
+    crate::routes::connections::disconnect_connection,
+    crate::routes::connections::cancel_setup,
     crate::routes::auth::mint_web_token,
     crate::routes::spans::list_spans,
     crate::routes::spans::create_span,

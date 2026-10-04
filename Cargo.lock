@@ -7682,7 +7682,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 
@@ -8032,33 +8031,25 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vox-connections"
 version = "0.1.0"
-source = "git+https://github.com/vox-suite/vox-connections.git?branch=main#d2b258f1598157b78582d0a81b2efef15ee93d0f"
+source = "git+https://github.com/vox-suite/vox-connections.git?rev=61073aa1007870f573d35ebb5285dfe9ee5d98c1#61073aa1007870f573d35ebb5285dfe9ee5d98c1"
 dependencies = [
  "async-trait",
- "axum",
  "base64 0.23.1",
- "bytes",
  "chrono",
- "futures-util",
+ "chrono-tz",
  "hex",
- "hmac",
- "jsonschema",
  "reqwest 0.13.5",
  "ring",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
- "subtle",
  "thiserror",
  "tokio",
- "tower",
- "tower-http",
  "tracing",
- "tracing-subscriber",
  "url",
+ "utoipa",
  "uuid",
- "yaml_serde",
 ]
 
 [[package]]
@@ -8106,6 +8097,7 @@ dependencies = [
  "uuid",
  "vox-connections",
  "vox-shared",
+ "yaml_serde",
 ]
 
 [[package]]

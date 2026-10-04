@@ -30,6 +30,7 @@ use crate::{
             get_consent as get_location_consent, grant_consent as grant_location_consent,
             revoke_consent as revoke_location_consent, submit_segments,
         },
+        map_scene::get_map_scene,
         phone::{PhoneApiState, confirm_phone_verification, link_phone, start_phone_verification},
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name, list_schemas},
@@ -172,6 +173,10 @@ pub fn build_api_router(state: ApiState) -> Router {
             pool: state.pool.clone(),
         });
 
+    let map_scene_routes = Router::new()
+        .route("/v1/me/map/scene", get(get_map_scene))
+        .with_state(state.user_events.clone());
+
     let voice_routes = Router::new()
         .route("/v1/me/voice/socket", get(voice_socket))
         .with_state(VoiceSocketState {
@@ -247,6 +252,48 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.clone());
 
+    let connection_routes = Router::new()
+        .route(
+            "/v1/me/connections/setup/{id}/cancel",
+            post(crate::routes::connections::cancel_setup),
+        )
+        .route(
+            "/v1/me/connectors/list",
+            post(crate::routes::connections::list_connectors),
+        )
+        .route(
+            "/v1/me/connections/list",
+            post(crate::routes::connections::list_connections),
+        )
+        .route(
+            "/v1/me/connections/start",
+            post(crate::routes::connections::start_connection),
+        )
+        .route(
+            "/v1/me/connections/setup/{id}/status",
+            post(crate::routes::connections::setup_status),
+        )
+        .route(
+            "/v1/me/connections/{id}/preferences",
+            post(crate::routes::connections::update_preferences),
+        )
+        .route(
+            "/v1/me/connections/{id}/refresh",
+            post(crate::routes::connections::refresh_connection),
+        )
+        .route(
+            "/v1/me/connections/{id}/disconnect",
+            post(crate::routes::connections::disconnect_connection),
+        )
+        .with_state(state.connections.clone());
+
+    let google_callback_route = Router::new()
+        .route(
+            "/v1/connectors/google/callback",
+            get(crate::routes::connections::google_callback),
+        )
+        .with_state(state.connections.clone());
+
     let protected_routes = span_routes
         .merge(collection_routes)
         .merge(record_routes)
@@ -262,10 +309,12 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(identity_routes)
         .merge(phone_routes)
         .merge(live_routes)
+        .merge(map_scene_routes)
         .merge(voice_routes)
         .merge(chart_routes)
         .merge(space_routes)
         .merge(web_token_routes)
+        .merge(connection_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,
@@ -277,6 +326,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(openapi_route)
         .merge(auth_routes)
         .merge(internal_routes)
+        .merge(google_callback_route)
         .merge(protected_routes)
         .layer(crate::cors::layer())
 }

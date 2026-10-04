@@ -67,3 +67,7 @@ Work reaches a device over its socket (`GET /v1/devices/{id}/socket`, WebSocket 
 - Devices never perform direct connector side effects (e.g. initiating real payments, modifying third-party bank accounts).
 - All device outputs are validated against the server-side JSON schema before commitment to `records` or `tasks`.
 - If a device lease expires, Vox Core recovers the job for server-side cloud fallback; late device submissions are safely rejected.
+
+## 5. User Event Socket & Map Scenes
+
+User devices maintain a live event stream via `GET /v1/me/events/socket?platform={platform}` (`Sec-WebSocket-Protocol: vox.v1`). Core pushes real-time notifications and `map_scene` frames (`{"type":"map_scene","scene":MapScene}`). Clients query initial state with `GET /v1/me/map/scene`.

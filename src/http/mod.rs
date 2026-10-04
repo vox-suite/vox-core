@@ -6,30 +6,25 @@ pub mod agent_registry;
 pub mod approvals;
 pub mod audit;
 pub mod auth;
-pub mod capability_grants;
-pub mod connected_apps;
-pub mod connected_reads;
-pub mod connections;
-pub mod connector_setup;
-pub mod consequential_writes;
+mod context;
+
 pub mod conversations;
 pub mod delegation;
 pub mod durable_tasks;
 pub mod events;
 pub mod execution;
 pub mod execution_policy;
-pub mod handoffs;
+
 pub mod host_apps;
 pub mod identity_adapters;
-pub mod integration_registry;
+
 pub mod library;
-pub mod packages;
-pub mod playstation;
+
 pub mod preferences;
 pub mod privacy;
 pub mod rate_limit;
 pub mod reminders;
-pub mod remote_extensions;
+
 pub mod schedules;
 pub mod skills;
 pub mod status;
@@ -63,25 +58,15 @@ pub struct AppState {
     pub(crate) execution_policy: Option<Arc<crate::execution_policy::ExecutionPolicyService>>,
     pub(crate) execution: Option<Arc<crate::execution::ExecutionCoordinator>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
-    pub(crate) playstation: Option<Arc<crate::playstation::PlayStationCapture>>,
-    pub(crate) connections: Option<Arc<crate::connections::ConnectionService>>,
-    pub(crate) capability_grants: Option<Arc<crate::capability_grants::CapabilityGrantService>>,
     pub(crate) events: Option<Arc<EventService>>,
     pub(crate) host_trust: Option<Arc<HostTrustService>>,
     pub(crate) identity_adapters: Option<Arc<crate::identity_adapters::IdentityAdapterService>>,
-    pub(crate) integration_registry: Option<Arc<crate::integration_registry::IntegrationRegistry>>,
     pub(crate) schedules: Option<Arc<ScheduleService>>,
     pub(crate) preferences: Option<Arc<crate::preferences::PreferenceService>>,
     pub(crate) privacy: Option<Arc<crate::privacy::PrivacyService>>,
     pub(crate) reminders: Option<Arc<crate::reminders::ReminderService>>,
-    pub(crate) remote_extensions: Option<Arc<crate::remote_extensions::RemoteExtensionService>>,
-    pub(crate) connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     pub(crate) skills: Option<Arc<crate::skills::SkillService>>,
     pub(crate) status: Option<Arc<crate::status::StatusService>>,
-    pub(crate) uber_read: Option<Arc<crate::providers::UberConnectedReadService>>,
-    pub(crate) expedia_write: Option<Arc<crate::providers::ExpediaLodgingService>>,
-    pub(crate) amazon: Option<Arc<crate::providers::AmazonService>>,
-    pub(crate) zomato: Option<Arc<crate::providers::ZomatoService>>,
     pub(crate) service_token: Arc<str>,
 }
 
@@ -99,25 +84,15 @@ impl AppState {
             execution_policy: None,
             execution: None,
             conversations: None,
-            playstation: None,
-            connections: None,
-            capability_grants: None,
             events: None,
             host_trust: None,
             identity_adapters: None,
-            integration_registry: None,
             schedules: None,
             preferences: None,
             privacy: None,
             reminders: None,
-            remote_extensions: None,
-            connected_apps: None,
             skills: None,
             status: None,
-            uber_read: None,
-            expedia_write: None,
-            amazon: None,
-            zomato: None,
             service_token: Arc::from(""),
         }
     }
@@ -169,20 +144,10 @@ impl AppState {
                 db.clone(),
             ))),
             conversations: None,
-            playstation: None,
-            connections: Some(Arc::new(crate::connections::ConnectionService::new(
-                db.pool().clone(),
-            ))),
-            capability_grants: Some(Arc::new(
-                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
-            )),
             events: None,
             host_trust: Some(Arc::new(HostTrustService::new(db.clone()))),
             identity_adapters: Some(Arc::new(
                 crate::identity_adapters::IdentityAdapterService::unavailable(db.clone()),
-            )),
-            integration_registry: Some(Arc::new(
-                crate::integration_registry::IntegrationRegistry::new(db.pool().clone()),
             )),
             schedules: None,
             preferences: Some(Arc::new(crate::preferences::PreferenceService::new(
@@ -193,55 +158,12 @@ impl AppState {
                 None,
             ))),
             reminders: Some(Arc::new(crate::reminders::ReminderService::new(db.clone()))),
-            remote_extensions: Some(Arc::new(
-                crate::remote_extensions::RemoteExtensionService::new(db.pool().clone()),
-            )),
-            connected_apps: None,
             skills: Some(Arc::new(crate::skills::SkillService::new(
                 db.pool().clone(),
             ))),
             status: Some(Arc::new(crate::status::StatusService::new(db.clone()))),
-            uber_read: Some(Arc::new(crate::providers::UberConnectedReadService::new(
-                db.pool().clone(),
-                crate::connections::ConnectionService::new(db.pool().clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
-                Arc::new(crate::providers::DefaultUberProviderClient::new(
-                    "https://api.uber.com",
-                )),
-            ))),
-            expedia_write: Some(Arc::new(crate::providers::ExpediaLodgingService::new(
-                db.clone(),
-                crate::connections::ConnectionService::new(db.pool().clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
-                crate::approvals::ApprovalService::new(db.clone()),
-                crate::execution::ExecutionCoordinator::new(db.clone()),
-                Arc::new(crate::providers::DefaultExpediaProviderClient::new(
-                    "https://api.expediagroup.com",
-                )),
-            ))),
-            amazon: Some(Arc::new(crate::providers::AmazonService::new(
-                db.pool().clone(),
-                crate::connections::ConnectionService::new(db.pool().clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
-                Arc::new(crate::providers::DefaultAmazonProviderClient::new(
-                    "https://webservices.amazon.com",
-                )),
-            ))),
-            zomato: Some(Arc::new(crate::providers::ZomatoService::new(
-                db.pool().clone(),
-                crate::connections::ConnectionService::new(db.pool().clone()),
-                crate::capability_grants::CapabilityGrantService::new(db.pool().clone()),
-                Arc::new(crate::providers::DefaultZomatoProviderClient::new(
-                    "https://api.zomato.com",
-                )),
-            ))),
             service_token: Arc::from(service_token),
         }
-    }
-
-    pub fn with_playstation(mut self, capture: crate::playstation::PlayStationCapture) -> Self {
-        self.playstation = Some(Arc::new(capture));
-        self
     }
 
     pub fn with_admin_token(mut self, token: String) -> Self {
@@ -270,32 +192,6 @@ impl AppState {
         Self::with_core_services(db, service_token)
     }
 
-    pub fn with_uber_read(
-        mut self,
-        service: Arc<crate::providers::UberConnectedReadService>,
-    ) -> Self {
-        self.uber_read = Some(service);
-        self
-    }
-
-    pub fn with_expedia_write(
-        mut self,
-        service: Arc<crate::providers::ExpediaLodgingService>,
-    ) -> Self {
-        self.expedia_write = Some(service);
-        self
-    }
-
-    pub fn with_amazon(mut self, service: Arc<crate::providers::AmazonService>) -> Self {
-        self.amazon = Some(service);
-        self
-    }
-
-    pub fn with_zomato(mut self, service: Arc<crate::providers::ZomatoService>) -> Self {
-        self.zomato = Some(service);
-        self
-    }
-
     pub fn with_reminders(mut self, service: Arc<crate::reminders::ReminderService>) -> Self {
         self.reminders = Some(service);
         self
@@ -320,14 +216,6 @@ impl AppState {
         identity_adapters: crate::identity_adapters::IdentityAdapterService,
     ) -> Self {
         self.identity_adapters = Some(Arc::new(identity_adapters));
-        self
-    }
-
-    pub fn with_connected_apps(
-        mut self,
-        service: Arc<crate::connected_apps::ConnectedAppsService>,
-    ) -> Self {
-        self.connected_apps = Some(service);
         self
     }
 
@@ -361,15 +249,6 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .route("/v1/conversations/respond", post(conversations::respond))
         .route("/v1/library/invoke", post(library::invoke))
-        .route("/v1/connector-packages/publish", post(packages::publish))
-        .route("/v1/connector-packages/list", post(packages::list))
-        .route("/v1/connector-packages/install", post(packages::install))
-        .route("/v1/connector-packages/setup", post(connector_setup::start))
-        .route(
-            "/v1/connector-packages/setup/callback",
-            post(connector_setup::complete),
-        )
-        .route("/v1/connector-packages/withdraw", post(packages::withdraw))
         .route("/v1/action-proposals", post(approvals::propose))
         .route("/v1/action-proposals/list", post(approvals::list))
         .route(
@@ -404,27 +283,6 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
-        .route("/v1/playstation/link", post(playstation::link))
-        .route("/v1/playstation/{id}/status", post(playstation::status))
-        .route(
-            "/v1/playstation/{id}/capture",
-            post(playstation::set_capture),
-        )
-        .route("/v1/playstation/{id}/sync", post(playstation::sync))
-        .route("/v1/connections/list", post(connections::list))
-        .route(
-            "/v1/connections/{id}/disconnect",
-            post(connections::disconnect),
-        )
-        .route("/v1/capability-grants", post(capability_grants::create))
-        .route(
-            "/v1/capability-grants/revoke",
-            post(capability_grants::revoke),
-        )
-        .route(
-            "/v1/agents/{external_key}/effective-capability-grants",
-            post(capability_grants::effective),
-        )
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}/update", post(schedules::update))
@@ -473,23 +331,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agent-definitions/enabled",
             post(agent_registry::set_enabled),
-        )
-        .route("/v1/integrations", post(integration_registry::register))
-        .route(
-            "/v1/integrations/enabled",
-            post(integration_registry::set_enabled),
-        )
-        .route(
-            "/v1/deployments/{external_key}/capabilities",
-            post(integration_registry::discover),
-        )
-        .route(
-            "/v1/deployments/{external_key}/integrations/{integration_key}/versions",
-            post(integration_registry::versions),
-        )
-        .route(
-            "/v1/capabilities/discover",
-            post(integration_registry::discover_for_context),
         )
         .route(
             "/v1/deployments/{external_key}/agents",
@@ -550,7 +391,6 @@ pub fn router(state: AppState) -> Router {
             "/v1/host-app-credentials/{id}/revoke",
             post(host_apps::revoke_credential),
         )
-        .route("/v1/remote-extensions", post(remote_extensions::install))
         .route("/v1/skills/private", post(skills::publish_private))
         .route("/v1/skills/import", post(skills::import_private))
         .route("/v1/skills/curated", post(skills::publish_curated))
@@ -570,74 +410,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/{agent_key}/skills/{skill_id}/enable",
             post(skills::set_agent_enabled),
         )
-        .route("/v1/remote-extensions/list", post(remote_extensions::list))
-        .route(
-            "/v1/remote-extensions/{id}/authorize",
-            post(connected_apps::authorize),
-        )
-        .route(
-            "/v1/connected-apps/callback",
-            post(connected_apps::callback),
-        )
-        .route("/v1/connected-apps/status", post(connected_apps::status))
-        .route(
-            "/v1/remote-extensions/{id}/connect-public",
-            post(connected_apps::connect_public),
-        )
-        .route("/v1/connected-apps/read", post(connected_apps::read_tool))
-        .route(
-            "/v1/connected-apps/execute",
-            post(connected_apps::execute_tool),
-        )
-        .route("/v1/remote-extensions/{id}", post(remote_extensions::get))
-        .route(
-            "/v1/remote-extensions/{id}/update",
-            post(remote_extensions::update),
-        )
-        .route(
-            "/v1/remote-extensions/{id}/remove",
-            post(remote_extensions::remove),
-        )
-        .route(
-            "/v1/remote-extensions/{id}/enable",
-            post(remote_extensions::set_enabled),
-        )
-        .route(
-            "/v1/remote-extensions/{id}/conformance",
-            post(remote_extensions::record_conformance),
-        )
-        .route(
-            "/v1/remote-extensions/{id}/renew-consent",
-            post(remote_extensions::renew_consent),
-        )
-        .route(
-            "/v1/remote-extensions/{id}/quarantine",
-            post(remote_extensions::quarantine),
-        )
         .route(
             crate::host_trust::HOST_CONTEXT_PATH,
             post(host_apps::resolve_context),
         )
-        .route("/v1/connected-reads", post(connected_reads::read))
-        .route(
-            "/v1/consequential-writes/propose",
-            post(consequential_writes::propose),
-        )
-        .route(
-            "/v1/consequential-writes/execute",
-            post(consequential_writes::execute),
-        )
-        .route(
-            "/v1/consequential-writes/cancel",
-            post(consequential_writes::cancel),
-        )
-        .route(
-            "/v1/consequential-writes/reconcile",
-            post(consequential_writes::reconcile),
-        )
-        .route("/v1/handoffs/amazon", post(handoffs::amazon_handoff))
-        .route("/v1/handoffs/zomato", post(handoffs::zomato_handoff))
-        .route("/v1/handoffs/uber", post(handoffs::uber_handoff))
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
             rate_limit::rate_limit_middleware,

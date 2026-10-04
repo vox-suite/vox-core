@@ -6,11 +6,11 @@ use crate::{
     config::Config,
     db::Db,
     identity::{ResourceOwner, UserId},
+    realtime::UserEventHub,
 };
 use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tracing::Instrument;
 
 use futures_util::Stream;
@@ -53,9 +53,10 @@ pub struct ConversationPrompt {
 
 pub struct ConversationAgent {
     api_key: String,
-    connected_apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     db: Option<Db>,
+    connections: Option<crate::fresh_connections::FreshConnectionsService>,
     tts_provider: String,
+    user_events: Option<UserEventHub>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -75,20 +76,33 @@ impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
-            connected_apps: None,
             db: None,
+            connections: None,
             tts_provider: crate::config::TTS_PROVIDER.to_string(),
+            user_events: None,
         })
     }
 
     pub fn with_db(config: &Config, db: Db) -> Result<Self, AgentError> {
         let mut agent = Self::new(config)?;
-        agent.connected_apps = Some(Arc::new(crate::connected_apps::from_config(
-            db.clone(),
-            config,
-        )));
+        agent.connections = Some(
+            crate::fresh_connections::FreshConnectionsService::new(
+                db.pool().clone(),
+                config.credential_key.as_deref(),
+                None,
+                config.google_client_id.clone(),
+                config.google_client_secret.clone(),
+                config.core_api_url.clone(),
+            )
+            .map_err(|_| AgentError::Provider)?,
+        );
         agent.db = Some(db);
         Ok(agent)
+    }
+
+    pub fn with_user_events(mut self, hub: UserEventHub) -> Self {
+        self.user_events = Some(hub);
+        self
     }
 
     async fn build_agent_and_input(
@@ -130,7 +144,6 @@ impl ConversationAgent {
             .tool(
                 tools::library::AgentLibrary::new(
                     self.db.clone(),
-                    self.connected_apps.clone(),
                     prompt.context.clone(),
                     name.clone(),
                 )
@@ -146,11 +159,27 @@ impl ConversationAgent {
                 prompt.context.owner(),
                 name.clone(),
             ))
+            .tool(tools::connections::ReadConnectedApp {
+                service: self.connections.clone(),
+                user_id: prompt.user_id.0,
+            })
+            .tool(tools::map_scene::ShowOnMap::new(
+                self.user_events.clone(),
+                prompt.user_id.0,
+            ))
+            .tool(tools::map_scene::ClearMap::new(
+                self.user_events.clone(),
+                prompt.user_id.0,
+            ))
+            .tool(tools::visits::ListVisits::new(
+                self.db.clone(),
+                prompt.user_id,
+            ))
             .default_max_turns(10)
             .build();
 
         let mut history = String::new();
-        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse the library tool to discover enabled skills and granted integrations for this task. Load relevant skills on demand. Proposed external changes require an authenticated user decision; never report a proposal as execution.\n", prompt.selected_agent.definition.purpose));
+        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse library for enabled skills and owned specialists. Use read_connected_app for permitted Google Calendar and PlayStation reads. Explain freshness, completeness and uncertain gaming timing. Never report an external action as completed without authoritative evidence.\n", prompt.selected_agent.definition.purpose));
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
@@ -562,9 +591,10 @@ mod governed_tool_surface_tests {
     async fn every_channel_exposes_only_governed_library_and_scoped_memory() {
         let agent = ConversationAgent {
             api_key: "fixture-only".into(),
-            connected_apps: None,
             db: None,
+            connections: None,
             tts_provider: "fixture".into(),
+            user_events: None,
         };
         for (channel, text) in [
             ("web", "run a terminal command"),
@@ -585,8 +615,16 @@ mod governed_tool_surface_tests {
             names.sort();
             assert_eq!(
                 names,
-                ["get_agent_memory", "library", "update_agent_memory"],
-                "{channel} must not expose a direct legacy execution path"
+                [
+                    "clear_map",
+                    "get_agent_memory",
+                    "library",
+                    "list_visits",
+                    "read_connected_app",
+                    "show_on_map",
+                    "update_agent_memory"
+                ],
+                "{channel} must expose only governed tools and the map display tools"
             );
         }
     }
