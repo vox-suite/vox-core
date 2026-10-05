@@ -99,12 +99,26 @@ pub async fn refresh_connection(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RefreshResponse>, (StatusCode, String)> {
-    svc.refresh(actor.user_id, id).await.map(Json).map_err(|_| {
-        (
-            StatusCode::BAD_GATEWAY,
-            "Connection request failed".to_string(),
-        )
-    })
+    svc.refresh(actor.user_id, id)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            tracing::warn!(connection_id = %id, error = %error, "connection refresh failed");
+            match error {
+                vox_core::fresh_connections::FreshConnectionError::Invalid(message)
+                    if message.contains("already syncing") =>
+                {
+                    (
+                        StatusCode::CONFLICT,
+                        "A sync is already running for this account".to_string(),
+                    )
+                }
+                _ => (
+                    StatusCode::BAD_GATEWAY,
+                    "Connection request failed".to_string(),
+                ),
+            }
+        })
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/{id}/disconnect", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 204)))]
