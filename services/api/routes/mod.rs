@@ -2,6 +2,7 @@
 * Module definitions exporting API route handlers.
 */
 pub mod auth;
+pub mod callback_page;
 pub mod charts;
 pub mod client_logs;
 pub mod collections;

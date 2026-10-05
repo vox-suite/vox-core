@@ -2,7 +2,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::Response,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -135,12 +135,7 @@ pub async fn google_callback(
         svc.handle_google_callback(q.code.as_deref().unwrap_or_default(), &q.state)
             .await
     };
-    match result {
-        Ok(_) => Html("<!doctype html><html><head><meta charset=utf-8><title>Connected to Vox</title></head><body><h1>Connected to Vox</h1><p>Return to Vox to continue.</p></body></html>").into_response(),
-        Err(_) => {
-            (StatusCode::BAD_REQUEST,Html("<!doctype html><html><head><meta charset=utf-8><title>Connection failed</title></head><body><h1>Connection failed</h1><p>Authorization was cancelled, expired, or could not be verified. Return to Vox and try again.</p></body></html>")).into_response()
-        }
-    }
+    super::callback_page::page("google", result.is_ok())
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/setup/{id}/cancel", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 204)))]
@@ -172,10 +167,7 @@ pub async fn connector_callback(
         }
         _ => svc.handle_food_callback(&connector, code, &q.state).await,
     };
-    match result {
-        Ok(_) => Html("<!doctype html><html><head><meta charset=utf-8><title>Connected to Vox</title></head><body><h1>Connected to Vox</h1><p>Return to Vox to continue.</p></body></html>").into_response(),
-        Err(_) => (StatusCode::BAD_REQUEST, Html("<!doctype html><html><head><meta charset=utf-8><title>Connection failed</title></head><body><h1>Connection failed</h1><p>Return to Vox and reconnect your account.</p></body></html>")).into_response(),
-    }
+    super::callback_page::page(&connector, result.is_ok())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
