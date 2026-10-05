@@ -10,7 +10,6 @@ use vox_connections::providers::{
     google_calendar::GoogleCalendarEvent,
     observations::ObservedActivity,
     personal::PersonalActivity,
-    playstation::PlayStationGame,
 };
 
 struct CoreIngestor {
@@ -290,6 +289,12 @@ impl TimelineIngestor for CoreIngestor {
         connection_id: Uuid,
         activities: &[ObservedActivity],
     ) -> Result<usize, FreshConnectionError> {
+        sqlx::query(
+            "DELETE FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref LIKE 'history:%'",
+        )
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
         let mut spans_created = 0;
 
         {
@@ -385,89 +390,6 @@ impl TimelineIngestor for CoreIngestor {
 
         notify(tx, user_id).await?;
         Ok(spans_created)
-    }
-
-    async fn game_history(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        user_id: Uuid,
-        connection_id: Uuid,
-        games: &[PlayStationGame],
-    ) -> Result<usize, FreshConnectionError> {
-        let mut written = 0;
-        for game in games {
-            let (Some(first), Some(last)) = (game.first_played_at, game.last_played_at) else {
-                continue;
-            };
-            let last = last.max(first);
-            let hours = game.play_duration_seconds as f64 / 3600.0;
-            let totals = format!("{:.1}h in total across {} sessions", hours, game.play_count);
-            let mut markers = vec![(
-                format!("history:{}", game.title_id),
-                "last_played",
-                last,
-                format!("Last played on {} · {totals}", game.platform),
-            )];
-            if first < last {
-                markers.push((
-                    format!("history:{}:first", game.title_id),
-                    "first_played",
-                    first,
-                    format!("First played on {} · {totals}", game.platform),
-                ));
-            }
-            for (source_ref, marker, at, notes) in markers {
-                let data = json!({
-                    "game": game.name,
-                    "platform": game.platform,
-                    "title_id": game.title_id,
-                    "total_seconds": game.play_duration_seconds,
-                    "total_display": format!("{:.1}h", hours),
-                    "play_count": game.play_count,
-                    "image_url": game.image_url,
-                    "marker": marker,
-                    "timing": "first_or_last_played",
-                    "connection_id": connection_id,
-                });
-                let title = game.name.clone();
-                let existing = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2",
-                )
-                .bind(user_id)
-                .bind(&source_ref)
-                .fetch_optional(&mut **tx)
-                .await?;
-                if let Some(id) = existing {
-                    sqlx::query(
-                        "UPDATE spans SET title = $2, notes = $3, start_at = $4, end_at = NULL, data = $5, version = version + 1, updated_at = now() \
-                         WHERE id = $1 AND (start_at IS DISTINCT FROM $4 OR end_at IS NOT NULL OR data IS DISTINCT FROM $5)",
-                    )
-                    .bind(id)
-                    .bind(&title)
-                    .bind(&notes)
-                    .bind(at)
-                    .bind(&data)
-                    .execute(&mut **tx)
-                    .await?;
-                } else {
-                    sqlx::query(
-                        "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, version, created_at, updated_at) \
-                         VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, NULL, 'manual_human', $6, 1, now(), now())",
-                    )
-                    .bind(user_id)
-                    .bind(&title)
-                    .bind(&notes)
-                    .bind(&source_ref)
-                    .bind(at)
-                    .bind(&data)
-                    .execute(&mut **tx)
-                    .await?;
-                    written += 1;
-                }
-            }
-        }
-        notify(tx, user_id).await?;
-        Ok(written)
     }
 
     async fn food_order(
