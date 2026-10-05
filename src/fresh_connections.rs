@@ -264,7 +264,7 @@ impl TimelineIngestor for CoreIngestor {
                 .fetch_one(&mut **tx)
                 .await?;
 
-                let title = format!("PlayStation: {}", act.game.name);
+                let title = act.game.name.clone();
                 let notes = format!("Played on {}", act.game.platform);
                 let hours = (act.duration_seconds as f64) / 3600.0;
                 let minutes = ((act.duration_seconds % 3600) as f64) / 60.0;
@@ -341,10 +341,11 @@ impl TimelineIngestor for CoreIngestor {
                 "total_seconds": game.play_duration_seconds,
                 "total_display": format!("{:.1}h", hours),
                 "play_count": game.play_count,
+                "image_url": game.image_url,
                 "timing": "first_to_last_played",
                 "connection_id": connection_id,
             });
-            let title = format!("PlayStation: {}", game.name);
+            let title = game.name.clone();
             let notes = format!(
                 "Played on {} · {:.1}h in total across {} sessions",
                 game.platform, hours, game.play_count
