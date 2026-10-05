@@ -74,47 +74,56 @@ pub async fn extract_actor(
             .as_deref()
             .or(claims.email.as_deref())
             .unwrap_or("Vox User");
-        let mut tx = pool
-            .begin()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query(
-            "INSERT INTO users (id, status, display_name) \
-             VALUES ($1, 'active', $2) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(user_id)
-        .bind(display_name)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query(
-            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
-             SELECT d.id, h.id, $1::text, $2::uuid \
-             FROM platform_deployments d \
-             JOIN host_apps h ON h.deployment_id = d.id \
-             WHERE d.external_key = 'vox.standalone.deployment' \
-               AND h.external_key = 'vox.standalone.web' \
-             ON CONFLICT (user_id) DO NOTHING",
-        )
-        .bind(user_id.to_string())
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let has_context = sqlx::query_scalar::<_, bool>(
+        let known = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
         )
         .bind(user_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if !has_context {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        tx.commit()
+        if !known {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query(
+                "INSERT INTO users (id, status, display_name) \
+                 VALUES ($1, 'active', $2) \
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(display_name)
+            .execute(&mut *tx)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query(
+                "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+                 SELECT d.id, h.id, $1::text, $2::uuid \
+                 FROM platform_deployments d \
+                 JOIN host_apps h ON h.deployment_id = d.id \
+                 WHERE d.external_key = 'vox.standalone.deployment' \
+                   AND h.external_key = 'vox.standalone.web' \
+                 ON CONFLICT (user_id) DO NOTHING",
+            )
+            .bind(user_id.to_string())
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let has_context = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if !has_context {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            tx.commit()
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
 
         let actor = Actor::user(user_id);
         req.extensions_mut().insert(actor);

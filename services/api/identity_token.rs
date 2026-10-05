@@ -76,6 +76,11 @@ fn jwks_cache() -> &'static Mutex<Option<CachedJwks>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
+fn google_jwks_cache() -> &'static Mutex<Option<CachedJwks>> {
+    static CACHE: OnceLock<Mutex<Option<CachedJwks>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
 pub fn verify_hs256_jwt(token: &str, secret: Option<&str>) -> Result<VerifiedIdentity, StatusCode> {
     let secret = secret
         .map(str::trim)
@@ -375,27 +380,48 @@ struct GoogleKey {
 }
 
 async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
-    let response = reqwest::Client::new()
-        .get("https://www.googleapis.com/oauth2/v3/certs")
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if !response.status().is_success() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let keys = body
-        .get("keys")
-        .and_then(|value| value.as_array())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    let key = keys
-        .iter()
-        .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let find = |keys: &[serde_json::Value]| {
+        keys.iter()
+            .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
+            .cloned()
+    };
+    let cached = google_jwks_cache()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .filter(|c| c.fetched_at.elapsed() < Duration::from_secs(300))
+        .and_then(|c| find(&c.keys));
+    let key = match cached {
+        Some(key) => key,
+        None => {
+            let response = reqwest::Client::new()
+                .get("https://www.googleapis.com/oauth2/v3/certs")
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+                .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            if !response.status().is_success() {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            let keys = body
+                .get("keys")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let key = find(&keys).ok_or(StatusCode::UNAUTHORIZED)?;
+            if let Ok(mut guard) = google_jwks_cache().lock() {
+                *guard = Some(CachedJwks {
+                    fetched_at: Instant::now(),
+                    keys,
+                });
+            }
+            key
+        }
+    };
     Ok(GoogleKey {
         n: key
             .get("n")
