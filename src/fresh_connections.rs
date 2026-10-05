@@ -338,7 +338,10 @@ impl TimelineIngestor for CoreIngestor {
                 .await?;
 
                 let title = act.game.name.clone();
-                let notes = format!("Played on {}", act.game.platform);
+                let notes = format!(
+                    "Observed cumulative playtime increase on {}; any timeline placement is estimated",
+                    act.game.platform
+                );
                 let hours = (act.duration_seconds as f64) / 3600.0;
                 let minutes = ((act.duration_seconds % 3600) as f64) / 60.0;
                 let desc = if hours >= 1.0 {
@@ -347,8 +350,9 @@ impl TimelineIngestor for CoreIngestor {
                     format!("{:.0}m", minutes)
                 };
 
-                // PlayStation reports when the last session ended; if that falls inside
-                // the sync window, the new play time ended then.
+                // Place the cumulative delta near the provider last-played timestamp only
+                // when it falls inside the observation window. This is an estimate,
+                // not evidence of a single continuous gaming session.
                 let session_end = act.game.last_played_at.filter(|last| {
                     *last >= act.observation_start - chrono::Duration::minutes(30)
                         && *last <= act.observation_end + chrono::Duration::minutes(5)
