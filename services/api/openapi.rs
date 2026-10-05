@@ -13,6 +13,7 @@ use utoipa::OpenApi;
     crate::routes::connections::update_preferences,
     crate::routes::connections::refresh_connection,
     crate::routes::connections::disconnect_connection,
+    crate::routes::connections::reassociate_connection,
     crate::routes::connections::cancel_setup,
     crate::routes::auth::mint_web_token,
     crate::routes::spans::list_spans,

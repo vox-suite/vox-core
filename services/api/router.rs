@@ -294,6 +294,10 @@ pub fn build_api_router(state: ApiState) -> Router {
             "/v1/me/connections/{id}/disconnect",
             post(crate::routes::connections::disconnect_connection),
         )
+        .route(
+            "/v1/me/connections/{id}/reassociate",
+            post(crate::routes::connections::reassociate_connection),
+        )
         .with_state(state.connections.clone());
 
     let google_callback_route = Router::new()
@@ -304,6 +308,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/connectors/{connector}/callback",
             get(crate::routes::connections::connector_callback),
+        )
+        .route(
+            "/v1/me/connections/{id}/reassociate",
+            post(crate::routes::connections::reassociate_connection),
         )
         .with_state(state.connections.clone());
 

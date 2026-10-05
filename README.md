@@ -48,7 +48,7 @@ production provider:
 cargo test --locked
 ```
 
-This release supports Google Calendar and PlayStation connections. Steam, Valorant, Amazon shopper data and Zomato tracking remain outside this release. The older [provider research](docs/provider-feasibility.md) is historical and does not describe shipped functionality.
+The extensible integration platform and reviewed MCP packages operate alongside curated Calendar, PlayStation, food and personal-history accounts. Amazon catalog handoff, Uber, Expedia and Zomato search/handoff APIs remain available; their presence does not verify production provider access. The older [provider research](docs/provider-feasibility.md) is historical and does not describe shipped functionality.
 
 The canonical deployment, host-app, optional organization, and host-user
 isolation contract is documented in
@@ -75,7 +75,7 @@ Database integration tests require an isolated PostgreSQL database and `TEST_DAT
 
 ## Connected Apps
 
-Google Calendar and PlayStation linking use the authenticated `/v1/me/connectors` and `/v1/me/connections` API shared by desktop and Android. Connections owns encrypted tokens, provider reads and checkpoints; Core owns scheduling and transactional timeline ingestion. See [the connection contract](docs/connections.md).
+Curated provider linking uses the authenticated `/v1/me/connectors` and `/v1/me/connections` API shared by desktop and Android. Connections owns encrypted tokens, provider reads and checkpoints; Core owns scheduling and transactional timeline ingestion. See [the connection contract](docs/connections.md).
 
 ## Deploy on Railway
 
@@ -106,3 +106,13 @@ Model memory and `get_agent_memory` / `update_agent_memory` are scoped to the au
 Signed hosts can inspect projected memory, clear it, or toggle retention through `/v1/agents/{agent_key}/memory`. Clear removes facts and starts a new summary retention window; conversation and action history remain intact. Disabled retention blocks fact writes and omits retained summaries; re-enabling never resurfaces summaries from the disabled period. Identical retention-setting retries preserve new facts.
 
 This implements memory isolation and controls, not complete W7: explicit saved-preference sharing, scoped delegation and the remaining native-tool consolidation still require delivery. Identity name/channel routing remains separate from model memory.
+
+## Platform recovery and upgrades
+
+Connections owns reusable integration declarations, account storage, grants, adapters, packages and skills. Core resolves authenticated contexts and owns policy, approvals, scheduling and transactional timeline ingestion. Compatibility module paths delegate to Connections; native routes derive ownership from authentication. Agent account reads require an explicit grant as well as the account’s read preference. Linking grants no agent access.
+
+Recovery migrations preserve IDs, native encrypted credentials and imported history. Deployments which have not run retirement first apply the additive `20261003235959` safeguard, preserving credentials and existing authorized states across the historical retirement migration. Already-retired deployments cannot recover deleted credentials or revive revoked grants. Recovery never replays approvals. Run migrations with connector writers stopped, verify a backup and use a migration ledger; do not run historical schema files manually on production.
+
+Ambiguous user-only accounts retain encrypted bytes and require explicit context reassociation. PlayStation first/last markers label an observed range; cumulative counter deltas and estimated session placement remain separate. New history identifiers include connection identity without changing imported row IDs or notes.
+
+Release is blocked by the host grant journey at https://github.com/vox-suite/vox-web/issues/27 and real provider linking/allowlisting validation. Tracking: https://github.com/vox-suite/vox-connections/issues/29 and https://github.com/vox-suite/vox-core/issues/121.

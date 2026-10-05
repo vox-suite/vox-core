@@ -757,13 +757,16 @@ impl FreshConnectionsService {
         &self,
         user: Uuid,
     ) -> Result<vox_connections::identity::RequestContext, FreshConnectionError> {
-        let (id,deployment) = sqlx::query_as::<_,(Uuid,Uuid)>("SELECT u.id,u.deployment_id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web'")
-            .bind(user).fetch_optional(&self.1).await?.ok_or(FreshConnectionError::Unauthorized)?;
+        let scopes = sqlx::query_as::<_,(Uuid,Uuid)>("SELECT u.id,u.deployment_id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.host_user_id IN ($1::text,'vox-account:' || $1::text) AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web'")
+            .bind(user).fetch_all(&self.1).await?;
+        let [(id, deployment)] = scopes.as_slice() else {
+            return Err(FreshConnectionError::Unauthorized);
+        };
         Ok(vox_connections::identity::RequestContext {
-            id: vox_connections::identity::UserContextId(id),
+            id: vox_connections::identity::UserContextId(*id),
             user_id: vox_connections::identity::UserId(user),
             subject: vox_connections::identity::RequestSubject {
-                deployment_id: vox_connections::identity::DeploymentId(deployment),
+                deployment_id: vox_connections::identity::DeploymentId(*deployment),
             },
         })
     }

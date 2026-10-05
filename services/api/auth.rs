@@ -95,6 +95,7 @@ pub async fn extract_actor(
              JOIN host_apps h ON h.deployment_id = d.id \
              WHERE d.external_key = 'vox.standalone.deployment' \
                AND h.external_key = 'vox.standalone.web' \
+               AND NOT EXISTS (SELECT 1 FROM user_contexts u WHERE u.user_id=$2 AND u.deployment_id=d.id AND u.host_app_id=h.id AND u.organization_id IS NULL AND u.host_user_id IN ($1::text,'vox-account:' || $1::text)) \
              ON CONFLICT (deployment_id,host_app_id,host_user_id) WHERE organization_id IS NULL DO NOTHING",
         )
         .bind(user_id.to_string())
@@ -103,7 +104,7 @@ pub async fn extract_actor(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let has_context = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id WHERE u.user_id=$1 AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web' AND u.organization_id IS NULL)",
+            "SELECT count(*)=1 FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id WHERE u.user_id=$1 AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web' AND u.organization_id IS NULL AND u.host_user_id IN ($1::text,'vox-account:' || $1::text)",
         )
         .bind(user_id)
         .fetch_one(&mut *tx)

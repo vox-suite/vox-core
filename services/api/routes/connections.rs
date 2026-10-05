@@ -248,3 +248,23 @@ fn scope_error(_: vox_core::fresh_connections::FreshConnectionError) -> (StatusC
         "Connection context unavailable".into(),
     )
 }
+
+#[utoipa::path(post, path = "/v1/me/connections/{id}/reassociate", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 204)))]
+pub async fn reassociate_connection(
+    State(svc): State<FreshConnectionsService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    svc.reassociate(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(|_| StatusCode::NO_CONTENT)
+    .map_err(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            "Unable to reassociate account".into(),
+        )
+    })
+}
