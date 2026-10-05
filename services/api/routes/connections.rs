@@ -99,8 +99,14 @@ pub async fn refresh_connection(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RefreshResponse>, (StatusCode, String)> {
-    svc.refresh(actor.user_id, id)
+    let user_id = actor.user_id;
+    tokio::spawn(async move { svc.refresh(user_id, id).await })
         .await
+        .unwrap_or_else(|_| {
+            Err(vox_core::fresh_connections::FreshConnectionError::Provider(
+                "refresh task aborted".into(),
+            ))
+        })
         .map(Json)
         .map_err(|error| {
             tracing::warn!(connection_id = %id, error = %error, "connection refresh failed");
