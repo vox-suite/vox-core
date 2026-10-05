@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 pub use vox_connections::accounts::*;
 use vox_connections::providers::{
@@ -39,7 +39,20 @@ impl TimelineIngestor for CoreIngestor {
                 ));
             }
         };
-        let mut created = 0;
+        struct Row {
+            source_id: String,
+            hash: String,
+            event_type: &'static str,
+            occurred_at: DateTime<Utc>,
+            event_payload: serde_json::Value,
+            title: String,
+            source_ref: String,
+            ended_at: Option<DateTime<Utc>>,
+            payload: serde_json::Value,
+        }
+        // Later duplicates of the same record win, as with row-by-row upserts.
+        let mut rows: Vec<Row> = Vec::with_capacity(items.len());
+        let mut position: HashMap<String, usize> = HashMap::new();
         for item in items {
             let (event_type, title) = match (connector, item.provider_data["action"].as_str()) {
                 ("spotify", _) => ("music.listened", item.title.clone()),
@@ -67,7 +80,6 @@ impl TimelineIngestor for CoreIngestor {
                     "Invalid personal activity".into(),
                 ));
             }
-            let source_ref = format!("{connector}:{}", item.source_id);
             let payload = json!({
                 "connection_id": connection_id,
                 "source_id": item.source_id,
@@ -79,27 +91,71 @@ impl TimelineIngestor for CoreIngestor {
                 "title": item.title, "occurred_at": item.occurred_at,
                 "ended_at": item.ended_at, "activity": payload,
             });
-            let event_id: Uuid = sqlx::query_scalar(
+            let row = Row {
+                source_id: item.source_id.clone(),
+                hash: format!(
+                    "{:x}",
+                    Sha256::digest(serde_json::to_vec(&event_payload).map_err(|_| {
+                        FreshConnectionError::Invalid("Invalid activity payload".into())
+                    })?)
+                ),
+                event_type,
+                occurred_at: item.occurred_at,
+                event_payload,
+                title,
+                source_ref: format!("{connector}:{}", item.source_id),
+                ended_at: item.ended_at,
+                payload,
+            };
+            match position.get(&row.source_id) {
+                Some(&index) => rows[index] = row,
+                None => {
+                    position.insert(row.source_id.clone(), rows.len());
+                    rows.push(row);
+                }
+            }
+        }
+        let mut created = 0;
+        // Batched upserts: a large import is a few statements, not two per record.
+        for chunk in rows.chunks(500) {
+            let events: Vec<(String, Uuid)> = sqlx::query_as(
                 "INSERT INTO inbound_events (user_id,source_kind,source_id,external_event_id,payload_hash,event_type,occurred_at,payload,processed_at) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()) \
-                 ON CONFLICT (source_kind,source_id,external_event_id) DO UPDATE SET payload=EXCLUDED.payload,payload_hash=EXCLUDED.payload_hash,occurred_at=EXCLUDED.occurred_at RETURNING id"
+                 SELECT $1,$2,$3,u.ext,u.hash,u.etype,u.occ,u.payload,now() \
+                 FROM UNNEST($4::text[],$5::text[],$6::text[],$7::timestamptz[],$8::jsonb[]) AS u(ext,hash,etype,occ,payload) \
+                 ON CONFLICT (source_kind,source_id,external_event_id) DO UPDATE SET payload=EXCLUDED.payload,payload_hash=EXCLUDED.payload_hash,occurred_at=EXCLUDED.occurred_at \
+                 RETURNING external_event_id,id"
             ).bind(user_id).bind(connector).bind(format!("{user_id}:{connector}"))
-                .bind(&item.source_id)
-                .bind(format!("{:x}", Sha256::digest(serde_json::to_vec(&event_payload).map_err(|_| FreshConnectionError::Invalid("Invalid activity payload".into()))?)))
-                .bind(event_type).bind(item.occurred_at).bind(event_payload)
-                .fetch_one(&mut **tx).await?;
-            let inserted: bool = sqlx::query_scalar(
+                .bind(chunk.iter().map(|r| r.source_id.clone()).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.hash.clone()).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.event_type.to_string()).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.occurred_at).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.event_payload.clone()).collect::<Vec<_>>())
+                .fetch_all(&mut **tx).await?;
+            let event_ids: HashMap<String, Uuid> = events.into_iter().collect();
+            let mut event_for_row = Vec::with_capacity(chunk.len());
+            for row in chunk {
+                event_for_row.push(*event_ids.get(&row.source_id).ok_or_else(|| {
+                    FreshConnectionError::Invalid("Invalid activity payload".into())
+                })?);
+            }
+            let inserted: Vec<bool> = sqlx::query_scalar(
                 "INSERT INTO spans (user_id,title,category,source,source_ref,status,start_at,end_at,execution_type,data,source_event_id) \
-                 VALUES ($1,$2,$3,$4,$5,'done',$6,$7,'manual_human',$8,$9) \
+                 SELECT $1,u.title,$2,$3,u.source_ref,'done',u.start_at,u.end_at,'manual_human',u.data,u.event_id \
+                 FROM UNNEST($4::text[],$5::text[],$6::timestamptz[],$7::timestamptz[],$8::jsonb[],$9::uuid[]) AS u(title,source_ref,start_at,end_at,data,event_id) \
                  ON CONFLICT (user_id,source,source_ref) DO UPDATE SET \
                  title=EXCLUDED.title,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at, \
                  data=spans.data || EXCLUDED.data,source_event_id=EXCLUDED.source_event_id,version=spans.version+1,updated_at=now() \
                  WHERE (spans.title,spans.start_at,spans.end_at,spans.data || EXCLUDED.data,spans.source_event_id) \
                  IS DISTINCT FROM (EXCLUDED.title,EXCLUDED.start_at,EXCLUDED.end_at,spans.data,EXCLUDED.source_event_id) RETURNING (xmax=0)"
-            ).bind(user_id).bind(&title).bind(category).bind(connector).bind(source_ref)
-                .bind(item.occurred_at).bind(item.ended_at).bind(payload).bind(event_id)
-                .fetch_optional(&mut **tx).await?.unwrap_or(false);
-            created += usize::from(inserted);
+            ).bind(user_id).bind(category).bind(connector)
+                .bind(chunk.iter().map(|r| r.title.clone()).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.source_ref.clone()).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.occurred_at).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.ended_at).collect::<Vec<_>>())
+                .bind(chunk.iter().map(|r| r.payload.clone()).collect::<Vec<_>>())
+                .bind(event_for_row)
+                .fetch_all(&mut **tx).await?;
+            created += inserted.into_iter().filter(|new| *new).count();
         }
         notify(tx, user_id).await?;
         Ok(created)
