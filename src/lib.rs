@@ -4,6 +4,7 @@
 // Moved to the vox-connections crate (shared with vox-bridge and reusable
 // elsewhere); re-exported here so existing `crate::connections::X` etc.
 // call sites throughout vox-core don't need to change.
+pub mod account_linking;
 pub mod capability_grants;
 pub mod defaults;
 pub mod identity_contract;

@@ -123,6 +123,18 @@ pub async fn exchange_token(
         }
     };
 
+    let user_id = match identity
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| identity.email_verified && !value.is_empty())
+    {
+        Some(email) => vox_core::account_linking::unify_by_verified_email(&mut tx, user_id, email)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        None => user_id,
+    };
+
     if let Some(email) = identity
         .email
         .as_deref()
