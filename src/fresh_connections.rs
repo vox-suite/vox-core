@@ -330,7 +330,19 @@ impl TimelineIngestor for CoreIngestor {
                     format!("{:.0}m", minutes)
                 };
 
+                // PlayStation reports when the last session ended; if that falls inside
+                // the sync window, the new play time ended then.
+                let session_end = act.game.last_played_at.filter(|last| {
+                    *last >= act.observation_start - chrono::Duration::minutes(30)
+                        && *last <= act.observation_end + chrono::Duration::minutes(5)
+                });
+                let session_start = session_end.map(|end| {
+                    (end - chrono::Duration::seconds(act.duration_seconds as i64))
+                        .max(act.observation_start - chrono::Duration::minutes(30))
+                });
                 let span_data = json!({
+                    "image_url": act.game.image_url,
+                    "session_estimated": session_end.is_some(),
                     "game": act.game.name,
                     "platform": act.game.platform,
                     "duration_seconds": act.duration_seconds,
@@ -360,8 +372,8 @@ impl TimelineIngestor for CoreIngestor {
                     .bind(title)
                     .bind(notes)
                     .bind(&act.source_ref)
-                    .bind(Option::<DateTime<Utc>>::None)
-                    .bind(Option::<DateTime<Utc>>::None)
+                    .bind(session_start)
+                    .bind(session_end)
                     .bind(span_data)
                     .bind(event_id)
                     .execute(&mut **tx)
@@ -387,60 +399,71 @@ impl TimelineIngestor for CoreIngestor {
             let (Some(first), Some(last)) = (game.first_played_at, game.last_played_at) else {
                 continue;
             };
-            let end = last.max(first);
-            let source_ref = format!("history:{}", game.title_id);
+            let last = last.max(first);
             let hours = game.play_duration_seconds as f64 / 3600.0;
-            let data = json!({
-                "game": game.name,
-                "platform": game.platform,
-                "title_id": game.title_id,
-                "total_seconds": game.play_duration_seconds,
-                "total_display": format!("{:.1}h", hours),
-                "play_count": game.play_count,
-                "image_url": game.image_url,
-                "timing": "first_to_last_played",
-                "connection_id": connection_id,
-            });
-            let title = game.name.clone();
-            let notes = format!(
-                "Played on {} · {:.1}h in total across {} sessions",
-                game.platform, hours, game.play_count
-            );
-            let existing = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2",
-            )
-            .bind(user_id)
-            .bind(&source_ref)
-            .fetch_optional(&mut **tx)
-            .await?;
-            if let Some(id) = existing {
-                sqlx::query(
-                    "UPDATE spans SET title = $2, notes = $3, start_at = $4, end_at = $5, data = $6, version = version + 1, updated_at = now() \
-                     WHERE id = $1 AND (start_at IS DISTINCT FROM $4 OR end_at IS DISTINCT FROM $5 OR data IS DISTINCT FROM $6)",
-                )
-                .bind(id)
-                .bind(&title)
-                .bind(&notes)
-                .bind(first)
-                .bind(end)
-                .bind(&data)
-                .execute(&mut **tx)
-                .await?;
-            } else {
-                sqlx::query(
-                    "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, version, created_at, updated_at) \
-                     VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, $6, 'manual_human', $7, 1, now(), now())",
+            let totals = format!("{:.1}h in total across {} sessions", hours, game.play_count);
+            let mut markers = vec![(
+                format!("history:{}", game.title_id),
+                "last_played",
+                last,
+                format!("Last played on {} · {totals}", game.platform),
+            )];
+            if first < last {
+                markers.push((
+                    format!("history:{}:first", game.title_id),
+                    "first_played",
+                    first,
+                    format!("First played on {} · {totals}", game.platform),
+                ));
+            }
+            for (source_ref, marker, at, notes) in markers {
+                let data = json!({
+                    "game": game.name,
+                    "platform": game.platform,
+                    "title_id": game.title_id,
+                    "total_seconds": game.play_duration_seconds,
+                    "total_display": format!("{:.1}h", hours),
+                    "play_count": game.play_count,
+                    "image_url": game.image_url,
+                    "marker": marker,
+                    "timing": "first_or_last_played",
+                    "connection_id": connection_id,
+                });
+                let title = game.name.clone();
+                let existing = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2",
                 )
                 .bind(user_id)
-                .bind(&title)
-                .bind(&notes)
                 .bind(&source_ref)
-                .bind(first)
-                .bind(end)
-                .bind(&data)
-                .execute(&mut **tx)
+                .fetch_optional(&mut **tx)
                 .await?;
-                written += 1;
+                if let Some(id) = existing {
+                    sqlx::query(
+                        "UPDATE spans SET title = $2, notes = $3, start_at = $4, end_at = NULL, data = $5, version = version + 1, updated_at = now() \
+                         WHERE id = $1 AND (start_at IS DISTINCT FROM $4 OR end_at IS NOT NULL OR data IS DISTINCT FROM $5)",
+                    )
+                    .bind(id)
+                    .bind(&title)
+                    .bind(&notes)
+                    .bind(at)
+                    .bind(&data)
+                    .execute(&mut **tx)
+                    .await?;
+                } else {
+                    sqlx::query(
+                        "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, version, created_at, updated_at) \
+                         VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, NULL, 'manual_human', $6, 1, now(), now())",
+                    )
+                    .bind(user_id)
+                    .bind(&title)
+                    .bind(&notes)
+                    .bind(&source_ref)
+                    .bind(at)
+                    .bind(&data)
+                    .execute(&mut **tx)
+                    .await?;
+                    written += 1;
+                }
             }
         }
         notify(tx, user_id).await?;
