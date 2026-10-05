@@ -5,6 +5,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(paths(
     crate::routes::connections::list_connectors,
+    crate::routes::connections::read_personal,
+    crate::routes::connections::import_youtube_history,
     crate::routes::connections::list_connections,
     crate::routes::connections::start_connection,
     crate::routes::connections::setup_status,

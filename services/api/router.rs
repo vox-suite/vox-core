@@ -254,6 +254,15 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let connection_routes = Router::new()
         .route(
+            "/v1/me/connections/{id}/read",
+            post(crate::routes::connections::read_personal),
+        )
+        .route(
+            "/v1/me/connections/youtube/history/import",
+            post(crate::routes::connections::import_youtube_history)
+                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
             "/v1/me/connections/setup/{id}/cancel",
             post(crate::routes::connections::cancel_setup),
         )
@@ -291,6 +300,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/connectors/google/callback",
             get(crate::routes::connections::google_callback),
+        )
+        .route(
+            "/v1/connectors/{connector}/callback",
+            get(crate::routes::connections::connector_callback),
         )
         .with_state(state.connections.clone());
 

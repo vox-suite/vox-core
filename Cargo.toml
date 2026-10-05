@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 yaml_serde = "0.10.7"
-vox-connections = { git = "https://github.com/vox-suite/vox-connections.git", rev = "61073aa1007870f573d35ebb5285dfe9ee5d98c1" }
+vox-connections = { git = "https://github.com/vox-suite/vox-connections.git", rev = "e759fbe7ba4be9127d8a533b4c5a9f69d342cef1" }
 vox-shared = { git = "https://github.com/vox-suite/vox-shared.git", branch = "main" }
 axum = { version = "0.8.9", features = ["ws"] }
 async-trait = "0.1"

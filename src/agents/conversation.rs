@@ -6,7 +6,7 @@ use crate::{
     config::Config,
     db::Db,
     identity::{ResourceOwner, UserId},
-    realtime::UserEventHub,
+    realtime::{DeviceHub, UserEventHub},
 };
 use async_trait::async_trait;
 use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
@@ -57,6 +57,7 @@ pub struct ConversationAgent {
     connections: Option<crate::fresh_connections::FreshConnectionsService>,
     tts_provider: String,
     user_events: Option<UserEventHub>,
+    device_hub: Option<DeviceHub>,
 }
 
 pub type AgentStream = Pin<Box<dyn Stream<Item = Result<String, AgentError>> + Send>>;
@@ -80,6 +81,7 @@ impl ConversationAgent {
             connections: None,
             tts_provider: crate::config::TTS_PROVIDER.to_string(),
             user_events: None,
+            device_hub: None,
         })
     }
 
@@ -102,6 +104,11 @@ impl ConversationAgent {
 
     pub fn with_user_events(mut self, hub: UserEventHub) -> Self {
         self.user_events = Some(hub);
+        self
+    }
+
+    pub fn with_device_hub(mut self, hub: DeviceHub) -> Self {
+        self.device_hub = Some(hub);
         self
     }
 
@@ -161,6 +168,11 @@ impl ConversationAgent {
             ))
             .tool(tools::connections::ReadConnectedApp {
                 service: self.connections.clone(),
+                user_id: prompt.user_id.0,
+            })
+            .tool(tools::wiz::ControlWizLights {
+                db: self.db.clone(),
+                hub: self.device_hub.clone(),
                 user_id: prompt.user_id.0,
             })
             .tool(tools::map_scene::ShowOnMap::new(

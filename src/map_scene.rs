@@ -149,12 +149,4 @@ impl MapScene {
         }
         Ok(())
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.camera.is_none()
-            && self.pins.is_empty()
-            && self.arcs.is_empty()
-            && self.columns.is_empty()
-            && self.highlights.is_empty()
-    }
 }

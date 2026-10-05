@@ -5,23 +5,17 @@ use axum::http::{
 use std::{sync::OnceLock, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-const DEFAULT_ORIGINS: [&str; 1] = ["https://appassets.androidplatform.net"];
 const MAX_AGE: Duration = Duration::from_secs(600);
 
 fn allowed_origins() -> &'static [String] {
     static ORIGINS: OnceLock<Vec<String>> = OnceLock::new();
     ORIGINS.get_or_init(|| {
         let extra = std::env::var("VOX_CORS_ALLOWED_ORIGINS").unwrap_or_default();
-        DEFAULT_ORIGINS
-            .iter()
-            .map(|origin| origin.to_string())
-            .chain(
-                extra
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|origin| !origin.is_empty() && *origin != "*")
-                    .map(str::to_string),
-            )
+        extra
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty() && *origin != "*")
+            .map(str::to_string)
             .collect()
     })
 }

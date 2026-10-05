@@ -69,14 +69,17 @@ impl SpanService {
         patch: SpanPatch,
     ) -> Result<Span, SpanServiceError> {
         if let Some(span) = self.repo.get_by_id(actor.user_id, id).await?
-            && span.source == "google_calendar"
+            && matches!(
+                span.source.as_str(),
+                "google_calendar" | "spotify" | "youtube"
+            )
             && (patch.title.is_some()
                 || patch.start_at.is_some()
                 || patch.end_at.is_some()
                 || patch.status.is_some())
         {
             return Err(SpanServiceError::Invalid(
-                "calendar title, time and status are managed by the provider",
+                "title, time and status are managed by the provider",
             ));
         }
         match self.repo.update(actor.user_id, id, patch).await? {

@@ -14,3 +14,4 @@ pub mod space_graph;
 pub mod spans;
 pub mod visits;
 pub mod web_search;
+pub mod wiz;

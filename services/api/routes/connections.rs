@@ -154,3 +154,66 @@ pub async fn cancel_setup(
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Unable to cancel setup".into()))
 }
+
+pub async fn connector_callback(
+    State(svc): State<FreshConnectionsService>,
+    Path(connector): Path<String>,
+    Query(q): Query<GoogleCallbackQuery>,
+) -> Response {
+    let code = if q.error.is_some() {
+        None
+    } else {
+        q.code.as_deref()
+    };
+    let result = match connector.as_str() {
+        "spotify" | "youtube" => {
+            svc.handle_personal_callback(&connector, code, &q.state)
+                .await
+        }
+        _ => svc.handle_food_callback(&connector, code, &q.state).await,
+    };
+    match result {
+        Ok(_) => Html("<!doctype html><html><head><meta charset=utf-8><title>Connected to Vox</title></head><body><h1>Connected to Vox</h1><p>Return to Vox to continue.</p></body></html>").into_response(),
+        Err(_) => (StatusCode::BAD_REQUEST, Html("<!doctype html><html><head><meta charset=utf-8><title>Connection failed</title></head><body><h1>Connection failed</h1><p>Return to Vox and reconnect your account.</p></body></html>")).into_response(),
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct YouTubeHistoryImportRequest {
+    pub consent: bool,
+    pub history: serde_json::Value,
+}
+
+#[utoipa::path(post, path = "/v1/me/connections/youtube/history/import", tag = "connections", security(("bearer_auth" = [])), request_body = YouTubeHistoryImportRequest, responses((status = 200, body = serde_json::Value)))]
+pub async fn import_youtube_history(
+    State(svc): State<FreshConnectionsService>,
+    Extension(actor): Extension<Actor>,
+    Json(req): Json<YouTubeHistoryImportRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    svc.import_youtube_history(actor.user_id, req.history, req.consent)
+        .await
+        .map(Json)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Unable to import YouTube history".into(),
+            )
+        })
+}
+
+#[utoipa::path(post, path = "/v1/me/connections/{id}/read", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 200, body = serde_json::Value)))]
+pub async fn read_personal(
+    State(svc): State<FreshConnectionsService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    svc.read_personal(actor.user_id, id)
+        .await
+        .map(Json)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Unable to read connected account".into(),
+            )
+        })
+}
