@@ -3,6 +3,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
+
+const MAX_ESTIMATED_SESSIONS: i64 = 60;
 use uuid::Uuid;
 pub use vox_connections::accounts::*;
 use vox_connections::providers::{
@@ -10,6 +12,7 @@ use vox_connections::providers::{
     google_calendar::GoogleCalendarEvent,
     observations::ObservedActivity,
     personal::PersonalActivity,
+    playstation::PlayStationGame,
 };
 
 struct CoreIngestor {
@@ -289,12 +292,6 @@ impl TimelineIngestor for CoreIngestor {
         connection_id: Uuid,
         activities: &[ObservedActivity],
     ) -> Result<usize, FreshConnectionError> {
-        sqlx::query(
-            "DELETE FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref LIKE 'history:%'",
-        )
-        .bind(user_id)
-        .execute(&mut **tx)
-        .await?;
         let mut spans_created = 0;
 
         {
@@ -390,6 +387,113 @@ impl TimelineIngestor for CoreIngestor {
 
         notify(tx, user_id).await?;
         Ok(spans_created)
+    }
+
+    async fn game_history(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user_id: Uuid,
+        connection_id: Uuid,
+        games: &[PlayStationGame],
+    ) -> Result<usize, FreshConnectionError> {
+        sqlx::query(
+            "DELETE FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref LIKE 'history:%'",
+        )
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+        let done: HashSet<String> = sqlx::query_scalar(
+            "SELECT DISTINCT split_part(source_ref, ':', 2) FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref LIKE 'est:%'",
+        )
+        .bind(user_id)
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .collect();
+        let mut written = 0;
+        for game in games {
+            let (Some(first), Some(last)) = (game.first_played_at, game.last_played_at) else {
+                continue;
+            };
+            if done.contains(&game.title_id) {
+                continue;
+            }
+            // Sessions observed live are already on the timeline; estimate only the rest.
+            let (observed_count, observed_seconds, observed_from): (i64, i64, Option<DateTime<Utc>>) =
+                sqlx::query_as(
+                    "SELECT count(*), COALESCE(sum((data->>'duration_seconds')::bigint), 0)::bigint, min(start_at) \
+                     FROM spans WHERE user_id = $1 AND source = 'playstation' AND data->>'title_id' = $2 AND source_ref NOT LIKE 'est:%'",
+                )
+                .bind(user_id)
+                .bind(&game.title_id)
+                .fetch_one(&mut **tx)
+                .await?;
+            let total = (game.play_duration_seconds as i64 - observed_seconds).max(0);
+            if total == 0 {
+                continue;
+            }
+            let count =
+                (i64::from(game.play_count) - observed_count).clamp(1, MAX_ESTIMATED_SESSIONS);
+            let end = observed_from.map_or(last, |from| from.min(last));
+            let begin = first.min(end);
+            let window = (end - begin).num_seconds();
+            let each = if window > 0 {
+                (total / count).min(window / count).max(1)
+            } else {
+                (total / count).max(1)
+            };
+            let hours = game.play_duration_seconds as f64 / 3600.0;
+            for index in 0..count {
+                let (start, finish) = if window > 0 && count == 1 {
+                    (end - chrono::Duration::seconds(each), end)
+                } else if window > 0 {
+                    let step = (window - each) / (count - 1);
+                    let start = if index == count - 1 {
+                        end - chrono::Duration::seconds(each)
+                    } else {
+                        begin + chrono::Duration::seconds(index * step)
+                    };
+                    (start, start + chrono::Duration::seconds(each))
+                } else {
+                    let start = end - chrono::Duration::seconds((count - index) * each);
+                    (start, start + chrono::Duration::seconds(each))
+                };
+                let data = json!({
+                    "game": game.name,
+                    "platform": game.platform,
+                    "title_id": game.title_id,
+                    "image_url": game.image_url,
+                    "estimated": true,
+                    "timing": "estimated_from_totals",
+                    "estimated_session": index + 1,
+                    "estimated_sessions": count,
+                    "total_seconds": game.play_duration_seconds,
+                    "connection_id": connection_id,
+                });
+                let notes = format!(
+                    "Estimated session {} of {count} · {} · {hours:.1}h in total. PlayStation does not report exact session times.",
+                    index + 1,
+                    game.platform
+                );
+                let inserted = sqlx::query(
+                    "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, version, created_at, updated_at) \
+                     VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, $6, 'manual_human', $7, 1, now(), now()) \
+                     ON CONFLICT (user_id, source, source_ref) DO NOTHING",
+                )
+                .bind(user_id)
+                .bind(&game.name)
+                .bind(&notes)
+                .bind(format!("est:{}:{index}", game.title_id))
+                .bind(start)
+                .bind(finish)
+                .bind(&data)
+                .execute(&mut **tx)
+                .await?;
+                written += inserted.rows_affected() as usize;
+            }
+        }
+        notify(tx, user_id).await?;
+        Ok(written)
     }
 
     async fn food_order(
