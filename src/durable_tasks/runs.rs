@@ -63,7 +63,7 @@ pub async fn current_capability(
     connection_id: Uuid,
     key: &str,
 ) -> Result<RunCapability, DurableTaskError> {
-    let row=sqlx::query("SELECT e.current_version, jsonb_build_object('endpoint_url',e.endpoint_url,'protocol',e.protocol,'operator_id',e.operator_id,'capability',cap) AS declaration FROM retired_external_connections x JOIN retired_remote_extensions e ON e.id=x.remote_extension_id AND e.user_context_id=x.user_context_id JOIN retired_remote_extension_versions v ON v.extension_id=e.id AND v.version=e.current_version CROSS JOIN LATERAL jsonb_array_elements(v.capabilities) cap WHERE x.id=$1 AND x.user_context_id=$2 AND cap->>'external_key'=$3 AND x.authorization_state='authorized' AND e.lifecycle_state='active' AND e.consent_status='consented' AND e.conformance_status='passed' AND v.conformance_status='passed' AND e.operator_enabled")
+    let row=sqlx::query("SELECT e.current_version, jsonb_build_object('endpoint_url',e.endpoint_url,'protocol',e.protocol,'operator_id',e.operator_id,'capability',cap) AS declaration FROM external_connections x JOIN remote_extensions e ON e.id=x.remote_extension_id AND e.user_context_id=x.user_context_id JOIN remote_extension_versions v ON v.extension_id=e.id AND v.version=e.current_version CROSS JOIN LATERAL jsonb_array_elements(v.capabilities) cap WHERE x.id=$1 AND x.user_context_id=$2 AND cap->>'external_key'=$3 AND x.authorization_state='authorized' AND e.lifecycle_state='active' AND e.consent_status='consented' AND e.conformance_status='passed' AND v.conformance_status='passed' AND e.operator_enabled")
         .bind(connection_id).bind(context.id.0).bind(key).fetch_optional(db.pool()).await?.ok_or(DurableTaskError::NotFound)?;
     Ok(RunCapability {
         connection_id,
@@ -489,26 +489,64 @@ mod assigned_tests {
         claim.deadline_at = Utc::now() - Duration::seconds(1);
         assert!(service.verify_run(&claim).await.is_ok());
         service.cancel(&context, expired.id).await.unwrap();
-        let waiting_task = service.start(&context, request()).await.unwrap();
+        let extension:Uuid=sqlx::query_scalar("INSERT INTO remote_extensions(user_context_id,external_key,display_name,protocol,endpoint_url,operator_id,operator_name,conformance_status,operator_enabled,lifecycle_state) VALUES($1,'assigned-write-fixture','Assigned write fixture','mcp','https://example.com/mcp','fixture','Fixture','passed',true,'active') RETURNING id").bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+        let capability = serde_json::json!({"external_key":"fixture.write","display_name":"Controlled write","effect":"write","consequential":true,"input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"data_recipients":["Fixture"],"access_needs":[],"supported_regions":[],"optional_guarantees":{}});
+        sqlx::query("INSERT INTO remote_extension_versions(extension_id,version,endpoint_url,operator_id,operator_name,capabilities,conformance_status) VALUES($1,1,'https://example.com/mcp','fixture','Fixture',$2,'passed')").bind(extension).bind(serde_json::json!([capability.clone()])).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO remote_extension_credentials(extension_id,issuer,token_endpoint,client_id,resource,access_token_ciphertext,tools) VALUES($1,'https://example.com','https://example.com/token','fixture','https://example.com/mcp',$2,$3)")
+            .bind(extension).bind(vec![1u8,2,3]).bind(serde_json::json!([{"name":"fixture.write","inputSchema":capability["input_schema"]}])).execute(db.pool()).await.unwrap();
+        let connection:Uuid=sqlx::query_scalar("INSERT INTO external_connections(user_context_id,remote_extension_id,external_account_hash,credential_custody,authorization_state,authorized_capabilities) VALUES($1,$2,$3,'platform_held','authorized',ARRAY['fixture.write']) RETURNING id").bind(context.id.0).bind(extension).bind(vec![4u8;32]).fetch_one(db.pool()).await.unwrap();
+        let selected = capture_actor(&db, &context, None).await.unwrap().agent;
+        sqlx::query("INSERT INTO agent_capability_grants(user_context_id,agent_definition_id,connection_id,capability_external_key) VALUES($1,$2,$3,'fixture.write')").bind(context.id.0).bind(selected.definition.id).bind(connection).execute(db.pool()).await.unwrap();
+        let proposed_task = service.start(&context, request()).await.unwrap();
         let claim = service
-            .claim_assigned("waiting-worker", Utc::now(), Duration::seconds(30))
+            .claim_assigned("proposal-worker", Utc::now(), Duration::seconds(30))
             .await
             .unwrap()
             .unwrap();
-        service
-            .finish_assigned(
-                &claim,
-                RunOutcome::Waiting {
-                    reason: WaitReason::Clarification,
-                    checkpoint: serde_json::json!({"question":"Choose report period"}),
-                },
+        let proposal_request = || crate::approvals::CreateProposalRequest {
+            span_id: proposed_task.id,
+            task_run_id: proposed_task.run_id,
+            agent_external_key: selected.definition.external_key.clone(),
+            capability_external_key: "fixture.write".into(),
+            details: serde_json::json!({"execution":{"connection_id":connection},"invocation":{"tool_name":"fixture.write","arguments":{"text":"exact approved content"}}}),
+            expires_at: Utc::now() + Duration::minutes(10),
+            replaces_proposal_id: None,
+        };
+        let approvals = crate::approvals::ApprovalService::new(db.clone());
+        let proposal = approvals
+            .propose_for_run(
+                &context,
+                proposal_request(),
+                Utc::now(),
+                &claim.lease_owner,
+                claim.lease_generation,
             )
             .await
             .unwrap();
+        let waiting = service.get(&context, proposed_task.id).await.unwrap();
+        assert_eq!(waiting.state, RunState::Waiting);
+        assert_eq!(waiting.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(waiting.result["reason"], "approval");
         assert_eq!(
-            service.get(&context, waiting_task.id).await.unwrap().state,
-            RunState::Waiting
+            waiting.result["checkpoint"]["proposal_id"],
+            proposal.id.to_string()
         );
+        assert!(
+            approvals
+                .propose_for_run(
+                    &context,
+                    proposal_request(),
+                    Utc::now(),
+                    &claim.lease_owner,
+                    claim.lease_generation
+                )
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            service.resume(&context, proposed_task.id, None).await,
+            Err(DurableTaskError::Conflict)
+        ));
         assert!(
             service
                 .claim_assigned("another-worker", Utc::now(), Duration::seconds(30))
@@ -516,7 +554,15 @@ mod assigned_tests {
                 .unwrap()
                 .is_none()
         );
-        service.cancel(&context, waiting_task.id).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM executions WHERE proposal_id=$1")
+                .bind(proposal.id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        service.cancel(&context, proposed_task.id).await.unwrap();
         let clarification = service.start(&context, request()).await.unwrap();
         let claim = service
             .claim_assigned("clarification-worker", Utc::now(), Duration::seconds(30))

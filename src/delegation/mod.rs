@@ -134,8 +134,12 @@ impl DelegationService {
             .selected_for_context(context, requester)
             .await
             .map_err(|_| DurableTaskError::NotFound)?;
-        let _actor = capture_actor(&self.db, context, Some(specialist)).await?;
-        let capabilities: Vec<Value> = Vec::new();
+        let actor = capture_actor(&self.db, context, Some(specialist)).await?;
+        let mut capabilities = Vec::new();
+        for cap in actor.authority.capabilities {
+            let metadata:Value=sqlx::query_scalar("SELECT jsonb_build_object('connection_id',x.id,'capability_external_key',$3::text,'account_display_id',x.account_display_id,'integration_name',e.display_name,'tool_name',m.display_name) FROM external_connections x JOIN remote_extensions e ON e.id=x.remote_extension_id JOIN connector_tool_metadata m ON m.extension_id=e.id AND m.version=e.current_version AND m.external_key=$3 WHERE x.id=$1 AND x.user_context_id=$2").bind(cap.connection_id).bind(context.id.0).bind(cap.capability_external_key).fetch_one(self.db.pool()).await?;
+            capabilities.push(metadata);
+        }
         let preferences:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('key',preference_key) FROM user_preferences WHERE user_context_id=$1 AND NOT is_sensitive ORDER BY preference_key LIMIT 64").bind(context.id.0).fetch_all(self.db.pool()).await?;
         Ok(json!({"capabilities":capabilities,"preferences":preferences}))
     }
@@ -236,11 +240,41 @@ impl DelegationService {
         if current_actors != 2 {
             return Err(DurableTaskError::NotFound);
         }
-        if !authority.capabilities.is_empty() {
-            return Err(DurableTaskError::NotFound);
-        }
+        let connections: Vec<Uuid> = authority
+            .capabilities
+            .iter()
+            .map(|c| c.connection_id)
+            .collect();
+        sqlx::query("SELECT id FROM remote_extensions WHERE id IN (SELECT remote_extension_id FROM external_connections WHERE id=ANY($1)) ORDER BY id FOR SHARE").bind(&connections).fetch_all(&mut **tx).await?;
+        sqlx::query("SELECT v.extension_id FROM remote_extension_versions v JOIN remote_extensions e ON e.id=v.extension_id WHERE e.id IN (SELECT remote_extension_id FROM external_connections WHERE id=ANY($1)) AND v.version=e.current_version ORDER BY v.extension_id FOR SHARE OF v").bind(&connections).fetch_all(&mut **tx).await?;
+        sqlx::query("SELECT id FROM external_connections WHERE id=ANY($1) ORDER BY id FOR SHARE")
+            .bind(&connections)
+            .fetch_all(&mut **tx)
+            .await?;
+        sqlx::query("SELECT id FROM agent_capability_grants WHERE user_context_id=$1 AND agent_definition_id=ANY($2) AND connection_id=ANY($3) ORDER BY id FOR SHARE").bind(context.id.0).bind(&ids).bind(&connections).fetch_all(&mut **tx).await?;
         if let Some(permission) = permission {
             sqlx::query("SELECT p.id FROM user_preferences p WHERE p.user_context_id=$1 AND p.preference_key IN (SELECT pin->>'key' FROM agent_delegation_permissions d CROSS JOIN LATERAL jsonb_array_elements(d.shared_preferences) pin WHERE d.id=$2) ORDER BY p.id FOR SHARE OF p").bind(context.id.0).bind(permission).fetch_all(&mut **tx).await?;
+        }
+        for cap in &authority.capabilities {
+            for agent in if permission.is_some() {
+                vec![child_agent]
+            } else {
+                vec![child_agent, parent_agent]
+            } {
+                let granted:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_capability_grants g JOIN agent_definitions a ON a.id=g.agent_definition_id JOIN deployment_agent_selections s ON s.agent_definition_id=a.id JOIN external_connections x ON x.id=g.connection_id WHERE g.user_context_id=$1 AND a.owner_user_context_id=$1 AND a.deployment_id=$2 AND a.id=$3 AND g.connection_id=$4 AND g.capability_external_key=$5 AND a.state='enabled' AND g.state='enabled' AND x.user_context_id=$1 AND x.authorization_state='authorized' AND (x.expires_at IS NULL OR x.expires_at>now()) AND (g.capability_external_key=ANY(a.requested_capability_categories) OR '*'=ANY(a.requested_capability_categories)) AND g.capability_external_key=ANY(x.authorized_capabilities) AND (a.template_id IS NULL OR EXISTS(SELECT 1 FROM agent_definitions t WHERE t.id=a.template_id AND t.state='enabled' AND (g.capability_external_key=ANY(t.requested_capability_categories) OR '*'=ANY(t.requested_capability_categories)))))").bind(context.id.0).bind(context.subject.deployment_id.0).bind(agent).bind(cap.connection_id).bind(&cap.capability_external_key).fetch_one(&mut **tx).await?;
+                if !granted {
+                    return Err(DurableTaskError::NotFound);
+                }
+            }
+            let current=sqlx::query("SELECT e.current_version,jsonb_build_object('endpoint_url',e.endpoint_url,'protocol',e.protocol,'operator_id',e.operator_id,'capability',cap) AS declaration FROM external_connections x JOIN remote_extensions e ON e.id=x.remote_extension_id AND e.user_context_id=x.user_context_id JOIN remote_extension_versions v ON v.extension_id=e.id AND v.version=e.current_version CROSS JOIN LATERAL jsonb_array_elements(v.capabilities) cap WHERE x.id=$1 AND x.user_context_id=$2 AND cap->>'external_key'=$3 AND x.authorization_state='authorized' AND e.lifecycle_state='active' AND e.consent_status='consented' AND e.conformance_status='passed' AND v.conformance_status='passed' AND e.operator_enabled").bind(cap.connection_id).bind(context.id.0).bind(&cap.capability_external_key).fetch_optional(&mut **tx).await?.ok_or(DurableTaskError::NotFound)?;
+            if current.get::<i32, _>("current_version") != cap.extension_version
+                || hex::encode(Sha256::digest(
+                    serde_json::to_vec(&current.get::<Value, _>("declaration"))
+                        .map_err(|_| DurableTaskError::Invalid)?,
+                )) != cap.declaration_digest
+            {
+                return Err(DurableTaskError::NotFound);
+            }
         }
         if let Some(permission) = permission {
             let consent=sqlx::query("SELECT scope,requester_agent_id,specialist_agent_id,parent_run_id FROM agent_delegation_permissions WHERE id=$1 AND user_context_id=$2 AND state='enabled'").bind(permission).bind(context.id.0).fetch_optional(&mut **tx).await?.ok_or(DurableTaskError::NotFound)?;
@@ -634,7 +668,7 @@ fn select_authority(
     selection: &CapabilitySelection,
     available: &RunAuthority,
 ) -> Result<RunAuthority, DurableTaskError> {
-    if selection.capabilities.len() > 32 {
+    if selection.capabilities.is_empty() || selection.capabilities.len() > 32 {
         return Err(DurableTaskError::Invalid);
     }
     let mut scope = RunAuthority::default();
@@ -698,6 +732,37 @@ mod tests {
             })
         }
     }
+    struct ConsentResponder {
+        db: Db,
+        specialist: String,
+        scope: CapabilitySelection,
+    }
+    #[async_trait]
+    impl crate::agents::conversation::ConversationResponder for ConsentResponder {
+        async fn respond(
+            &self,
+            prompt: crate::agents::conversation::ConversationPrompt,
+        ) -> Result<String, crate::agents::AgentError> {
+            let library = crate::agents::tools::library::AgentLibrary::new(
+                Some(self.db.clone()),
+                None,
+                prompt.context,
+                prompt.selected_agent.definition.external_key,
+            )
+            .with_task_capture(prompt.task_capture);
+            let result = library
+                .invoke(crate::agents::tools::library::LibraryRequest::Delegate {
+                    specialist_agent_key: self.specialist.clone(),
+                    brief: "Only report the selected repository count".into(),
+                    scope: self.scope.clone(),
+                    permission_id: None,
+                })
+                .await
+                .map_err(|_| crate::agents::AgentError::Provider)?;
+            assert_eq!(result["state"], "requires_delegation_consent");
+            Ok("Please approve the named specialist tools.".into())
+        }
+    }
     #[tokio::test]
     #[ignore = "requires isolated TEST_DATABASE_URL"]
     async fn delegation_is_scoped_revocable_and_returns_only_bounded_work() {
@@ -732,6 +797,11 @@ mod tests {
             .into_iter()
             .find(|a| !a.definition.is_default)
             .unwrap();
+        let extension:Uuid=sqlx::query_scalar("INSERT INTO remote_extensions(user_context_id,external_key,display_name,protocol,endpoint_url,operator_id,operator_name,conformance_status,operator_enabled,lifecycle_state) VALUES($1,'delegation-fixture','Delegation fixture','mcp','https://example.com/mcp','fixture','Fixture','passed',true,'active') RETURNING id").bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+        let cap = json!({"external_key":"repository.read","display_name":"Repository read","effect":"read","consequential":false,"input_schema":{"type":"object"},"data_recipients":[],"access_needs":[],"supported_regions":[],"optional_guarantees":{}});
+        sqlx::query("INSERT INTO remote_extension_versions(extension_id,version,endpoint_url,operator_id,operator_name,capabilities,conformance_status) VALUES($1,1,'https://example.com/mcp','fixture','Fixture',$2,'passed')").bind(extension).bind(json!([cap])).execute(db.pool()).await.unwrap();
+        let connection:Uuid=sqlx::query_scalar("INSERT INTO external_connections(user_context_id,remote_extension_id,external_account_hash,credential_custody,authorization_state,authorized_capabilities) VALUES($1,$2,$3,'platform_held','authorized',ARRAY['repository.read']) RETURNING id").bind(context.id.0).bind(extension).bind(vec![5u8;32]).fetch_one(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO agent_capability_grants(user_context_id,agent_definition_id,connection_id,capability_external_key) VALUES($1,$2,$3,'repository.read')").bind(context.id.0).bind(child.definition.id).bind(connection).execute(db.pool()).await.unwrap();
         let scope = capture_actor(&db, &context, Some(&child.definition.external_key))
             .await
             .unwrap()
@@ -755,6 +825,10 @@ mod tests {
             scope: CapabilitySelection::from_authority(&scope),
             permission_id,
         };
+        assert!(
+            delegation.delegate(&parent, delegate(None)).await.is_err(),
+            "specialist grant does not imply parent access"
+        );
         sqlx::query("INSERT INTO user_preferences(user_context_id,category,preference_key,value) VALUES($1,'work','report_style','\"brief\"'),($1,'work','unselected','\"private\"')").bind(context.id.0).execute(db.pool()).await.unwrap();
         let metadata = delegation
             .scopes(
@@ -764,7 +838,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(metadata["capabilities"], json!([]));
+        assert_eq!(
+            metadata["capabilities"][0]["connection_id"],
+            json!(connection)
+        );
         assert!(
             metadata["preferences"]
                 .as_array()
@@ -940,6 +1017,243 @@ mod tests {
             )
             .await
             .unwrap();
+        let library = crate::agents::tools::library::AgentLibrary::new(
+            Some(db.clone()),
+            None,
+            context.clone(),
+            default.definition.external_key.clone(),
+        );
+        let discovery = library
+            .invoke(crate::agents::tools::library::LibraryRequest::Specialists)
+            .await
+            .unwrap();
+        assert!(
+            discovery["specialists"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["agent_external_key"] == child.definition.external_key)
+        );
+        let response = library
+            .invoke(crate::agents::tools::library::LibraryRequest::Delegate {
+                specialist_agent_key: child.definition.external_key.clone(),
+                brief: "Only report the selected repository count".into(),
+                scope: CapabilitySelection::from_authority(&scope),
+                permission_id: Some(remembered),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response["state"], "awaiting_specialist");
+        let repeat = library
+            .clone()
+            .invoke(crate::agents::tools::library::LibraryRequest::Delegate {
+                specialist_agent_key: child.definition.external_key.clone(),
+                brief: "Only report the selected repository count".into(),
+                scope: CapabilitySelection::from_authority(&scope),
+                permission_id: Some(remembered),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            repeat, response,
+            "same turn cloned library reuses the exact durable task"
+        );
+        assert!(matches!(
+            library
+                .invoke(crate::agents::tools::library::LibraryRequest::Delegate {
+                    specialist_agent_key: child.definition.external_key.clone(),
+                    brief: "different work".into(),
+                    scope: CapabilitySelection::from_authority(&scope),
+                    permission_id: Some(remembered)
+                })
+                .await,
+            Err(crate::agents::tools::library::LibraryError::BudgetExhausted)
+        ));
+
+        let child_id = Uuid::parse_str(response["task"]["id"].as_str().unwrap()).unwrap();
+        assert!(
+            service
+                .get(&context, child_id)
+                .await
+                .unwrap()
+                .parent_task_id
+                .is_some()
+        );
+        let parent_id = service
+            .get(&context, child_id)
+            .await
+            .unwrap()
+            .parent_task_id
+            .unwrap();
+        sqlx::query("UPDATE jobs SET wait_reason='budget' WHERE span_id=$1")
+            .bind(child_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        delegation.reconcile_children().await.unwrap();
+        assert_eq!(
+            service.get(&context, parent_id).await.unwrap().wait_reason,
+            Some(crate::durable_tasks::WaitReason::Budget)
+        );
+        assert!(
+            service.resume(&context, parent_id, None).await.is_err(),
+            "shared budget cannot be reset by resume"
+        );
+        assert!(service.stop_all(&context).await.unwrap() > 0);
+        let conversations = crate::conversations::service::ConversationService::new(
+            db.clone(),
+            Arc::new(ConsentResponder {
+                db: db.clone(),
+                specialist: child.definition.external_key.clone(),
+                scope: CapabilitySelection::from_authority(&scope),
+            }),
+        );
+        let response = conversations
+            .respond(
+                context.clone(),
+                crate::conversations::RespondRequest {
+                    agent_external_key: default.definition.external_key.clone(),
+                    identity: crate::identity::ChannelIdentity {
+                        channel: "web".into(),
+                        external_id: context.subject.host_user_id.clone(),
+                    },
+                    external_conversation_id: "consent-envelope-proof".into(),
+                    text: "Have the specialist report the repository count".into(),
+                    initiation_context: None,
+                    turn_id: None,
+                    revision: None,
+                    tts_provider: None,
+                    filler: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.text, "Please approve the named specialist tools.");
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json.get("text").is_some());
+        assert!(json["task"]["run_id"].is_string());
+        let consent = response.task.unwrap();
+        assert_eq!(
+            consent.result["checkpoint"]["code"],
+            "delegation_consent_required"
+        );
+        assert_eq!(
+            consent.wait_reason,
+            Some(crate::durable_tasks::WaitReason::Clarification)
+        );
+        let once = delegation
+            .create_permission(
+                &context,
+                PermissionRequest {
+                    requester_agent_key: default.definition.external_key.clone(),
+                    specialist_agent_key: child.definition.external_key.clone(),
+                    scope: CapabilitySelection::from_authority(&scope),
+                    parent_run_id: Some(consent.run_id),
+                    preference_keys: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        service
+            .resume(
+                &context,
+                consent.id,
+                Some("Approved the exact selected specialist scope.".into()),
+            )
+            .await
+            .unwrap();
+        let resumed = service
+            .claim_assigned("consent-continuation", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.task.id, consent.id);
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(resumed, CancellationToken::new())
+            .await
+            .unwrap();
+        let authorized_id:Uuid=sqlx::query_scalar("SELECT span_id FROM jobs j JOIN assigned_task_runs r ON r.job_id=j.id WHERE r.parent_run_id=$1").bind(consent.run_id).fetch_one(db.pool()).await.unwrap();
+        let authorized = service.get(&context, authorized_id).await.unwrap();
+        assert_eq!(
+            authorized.parent_task_id,
+            Some(consent.id),
+            "ordinary-chat once approval reuses its waiting root"
+        );
+        let specialist_run = service
+            .claim_assigned("once-specialist", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(specialist_run.task.id, authorized.id);
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(specialist_run, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(delegation.reconcile_children().await.unwrap(), 1);
+        let parent_completion = service
+            .claim_assigned("once-parent-complete", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(parent_completion.task.id, consent.id);
+        assert!(
+            !delegation
+                .continue_consent(&parent_completion)
+                .await
+                .unwrap(),
+            "returned child result must not repeat consumed delegation"
+        );
+        service
+            .finish_assigned(
+                &parent_completion,
+                RunOutcome::Completed {
+                    summary: "Selected repository count: 3".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            delegation
+                .delegate_conversation(
+                    &context,
+                    &default.definition.external_key,
+                    delegate(Some(once))
+                )
+                .await
+                .is_err(),
+            "once cannot attach a fresh unrelated root"
+        );
+        service.stop_all(&context).await.unwrap();
+        let remember_wait = delegation
+            .delegate_conversation(&context, &default.definition.external_key, delegate(None))
+            .await
+            .unwrap();
+        service
+            .resume(
+                &context,
+                remember_wait.id,
+                Some("Use the remembered exact specialist scope.".into()),
+            )
+            .await
+            .unwrap();
+        let remember_run = service
+            .claim_assigned("remember-worker", Utc::now(), Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        TaskExecutorHandler::with_runner(db.clone(), Arc::new(Specialist))
+            .execute_claim(remember_run, CancellationToken::new())
+            .await
+            .unwrap();
+        let remember_children:i64=sqlx::query_scalar("SELECT count(*) FROM assigned_task_runs WHERE parent_run_id=$1 AND delegation_permission_id=$2").bind(remember_wait.run_id).bind(remembered).fetch_one(db.pool()).await.unwrap();
+        assert_eq!(
+            remember_children, 1,
+            "worker continuation resolves remembered permission without a bound once id"
+        );
+        service.stop_all(&context).await.unwrap();
+
+        sqlx::query("INSERT INTO agent_capability_grants(user_context_id,agent_definition_id,connection_id,capability_external_key) VALUES($1,$2,$3,'repository.read')").bind(context.id.0).bind(default.definition.id).bind(connection).execute(db.pool()).await.unwrap();
         let root = service.start(&context, request()).await.unwrap();
         let parent = service
             .claim_assigned("grant-race-parent", Utc::now(), Duration::seconds(30))
@@ -947,10 +1261,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(parent.task.id, root.id);
-        let child_task = delegation
-            .delegate(&parent, delegate(Some(remembered)))
-            .await
-            .unwrap();
+        let child_task = delegation.delegate(&parent, delegate(None)).await.unwrap();
         let proposal:Uuid=sqlx::query_scalar("INSERT INTO action_proposals(user_id,user_context_id,span_id,job_id,actor_key,capability,details,details_hash,expires_at,state) VALUES($1,$2,$3,$4,$5,'repository.read','{}','race-proof',now()+interval '1 hour','approved') RETURNING id").bind(user).bind(context.id.0).bind(child_task.id).bind(child_task.run_id).bind(&child.definition.external_key).fetch_one(db.pool()).await.unwrap();
         let approval:Uuid=sqlx::query_scalar("INSERT INTO action_approvals(user_id,user_context_id,proposal_id,approved_details_hash) VALUES($1,$2,$3,'race-proof') RETURNING id").bind(user).bind(context.id.0).bind(proposal).fetch_one(db.pool()).await.unwrap();
         let execution:Uuid=sqlx::query_scalar("INSERT INTO executions(user_id,user_context_id,proposal_id,approval_id,idempotency_key) VALUES($1,$2,$3,$4,'parent-grant-race') RETURNING id").bind(user).bind(context.id.0).bind(proposal).bind(approval).fetch_one(db.pool()).await.unwrap();
@@ -1018,7 +1329,7 @@ mod tests {
         second.await.unwrap().unwrap();
 
         let mut revoke = db.pool().begin().await.unwrap();
-        sqlx::query("UPDATE agent_delegation_permissions SET state='revoked',revoked_at=now() WHERE user_context_id=$1 AND id=$2").bind(context.id.0).bind(remembered).execute(&mut *revoke).await.unwrap();
+        sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE user_context_id=$1 AND agent_definition_id=$2 AND connection_id=$3").bind(context.id.0).bind(default.definition.id).bind(connection).execute(&mut *revoke).await.unwrap();
         let coordinator = crate::execution::ExecutionCoordinator::new(db.clone());
         let race_context = context.clone();
         let mut dispatch = tokio::spawn(async move {
@@ -1030,7 +1341,7 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_millis(50), &mut dispatch)
                 .await
                 .is_err(),
-            "dispatch must wait for the in-flight delegation permission revoke"
+            "dispatch must wait for the in-flight parent grant revoke"
         );
         revoke.commit().await.unwrap();
         assert!(

@@ -10,7 +10,7 @@ use crate::{
     db::Db,
     durable_tasks::{
         DurableTaskError, DurableTaskService, WaitReason,
-        runs::{AssignedRun, RunOutcome},
+        runs::{AssignedRun, RunOutcome, current_capability},
     },
 };
 use async_trait::async_trait;
@@ -106,6 +106,30 @@ impl RunTools {
             return Ok(json!({"state":"awaiting_specialist","child_task":task}));
         }
         match &request {
+            LibraryRequest::LoadTool {
+                connection_id,
+                tool_name,
+            }
+            | LibraryRequest::Read {
+                connection_id,
+                tool_name,
+                ..
+            }
+            | LibraryRequest::Propose {
+                connection_id,
+                tool_name,
+                ..
+            } => {
+                let pinned = self.run.actor.authority.capabilities.iter().find(|cap| {
+                    cap.connection_id == *connection_id && cap.capability_external_key == *tool_name
+                });
+                let live =
+                    current_capability(&self.db, &self.run.context, *connection_id, tool_name)
+                        .await;
+                if !matches!((pinned,live),(Some(pinned),Ok(live)) if pinned==&live) {
+                    return Err(self.unavailable().await);
+                }
+            }
             LibraryRequest::LoadSkill { skill_id } => {
                 let Some(pinned) = self
                     .run
@@ -312,13 +336,19 @@ impl AssignedTaskRunner for GeminiAssignedRunner {
 pub struct TaskExecutorHandler {
     db: Db,
     service: DurableTaskService,
+    apps: Option<Arc<crate::connected_apps::ConnectedAppsService>>,
     runner: Arc<dyn AssignedTaskRunner>,
 }
 impl TaskExecutorHandler {
     pub fn new(db: Db, config: &Config) -> Self {
+        let apps = Some(Arc::new(crate::connected_apps::from_config(
+            db.clone(),
+            config,
+        )));
         Self {
             service: DurableTaskService::new(db.clone()),
             db,
+            apps,
             runner: Arc::new(GeminiAssignedRunner {
                 api_key: config.gemini_api_key.clone(),
             }),
@@ -328,6 +358,7 @@ impl TaskExecutorHandler {
         Self {
             service: DurableTaskService::new(db.clone()),
             db,
+            apps: None,
             runner,
         }
     }
@@ -394,6 +425,7 @@ impl TaskExecutorHandler {
             run: Arc::new(run.clone()),
             library: AgentLibrary::new(
                 Some(self.db.clone()),
+                self.apps.clone(),
                 run.context.clone(),
                 run.actor.agent.definition.external_key.clone(),
             )

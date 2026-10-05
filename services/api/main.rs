@@ -96,6 +96,10 @@ async fn main() {
         memory.clone(),
         config.service_token.clone(),
     );
+    app_state = app_state.with_connected_apps(Arc::new(vox_core::connected_apps::from_config(
+        db.clone(),
+        &config,
+    )));
     if let Ok(token) = std::env::var("VOX_ADMIN_TOKEN") {
         app_state = app_state.with_admin_token(token);
     }

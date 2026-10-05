@@ -54,6 +54,7 @@ pub struct ConversationPrompt {
 pub struct ConversationAgent {
     api_key: String,
     db: Option<Db>,
+    connected_apps: Option<std::sync::Arc<crate::connected_apps::ConnectedAppsService>>,
     connections: Option<crate::fresh_connections::FreshConnectionsService>,
     tts_provider: String,
     user_events: Option<UserEventHub>,
@@ -78,6 +79,7 @@ impl ConversationAgent {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             db: None,
+            connected_apps: None,
             connections: None,
             tts_provider: crate::config::TTS_PROVIDER.to_string(),
             user_events: None,
@@ -87,6 +89,10 @@ impl ConversationAgent {
 
     pub fn with_db(config: &Config, db: Db) -> Result<Self, AgentError> {
         let mut agent = Self::new(config)?;
+        agent.connected_apps = Some(std::sync::Arc::new(crate::connected_apps::from_config(
+            db.clone(),
+            config,
+        )));
         agent.connections = Some(
             crate::fresh_connections::FreshConnectionsService::new(
                 db.pool().clone(),
@@ -151,6 +157,7 @@ impl ConversationAgent {
             .tool(
                 tools::library::AgentLibrary::new(
                     self.db.clone(),
+                    self.connected_apps.clone(),
                     prompt.context.clone(),
                     name.clone(),
                 )
@@ -168,7 +175,8 @@ impl ConversationAgent {
             ))
             .tool(tools::connections::ReadConnectedApp {
                 service: self.connections.clone(),
-                user_id: prompt.user_id.0,
+                context: prompt.context.clone(),
+                agent: name.clone(),
             })
             .tool(tools::wiz::ControlWizLights {
                 db: self.db.clone(),
@@ -603,6 +611,7 @@ mod governed_tool_surface_tests {
     async fn every_channel_exposes_only_governed_library_and_scoped_memory() {
         let agent = ConversationAgent {
             api_key: "fixture-only".into(),
+            connected_apps: None,
             db: None,
             connections: None,
             tts_provider: "fixture".into(),

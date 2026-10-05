@@ -60,3 +60,15 @@ pub mod telemetry;
 pub mod tts;
 pub mod user_notifications;
 pub mod workers;
+
+pub mod conformance;
+
+pub mod connected_apps;
+
+pub mod providers;
+
+pub mod remote_extensions;
+
+pub mod playstation;
+
+pub use vox_connections::{connections, integration_registry};

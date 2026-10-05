@@ -116,9 +116,9 @@ impl ExecutionPolicyService {
             return Err(ExecutionPolicyError::Invalid);
         }
         let owns_connection = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM retired_external_connections x
-             LEFT JOIN retired_integration_definitions i ON i.id=x.integration_id
-             LEFT JOIN retired_remote_extensions e ON e.id=x.remote_extension_id
+            "SELECT EXISTS(SELECT 1 FROM external_connections x
+             LEFT JOIN integration_definitions i ON i.id=x.integration_id
+             LEFT JOIN remote_extensions e ON e.id=x.remote_extension_id
              WHERE x.id=$1 AND x.user_context_id=$2
              AND COALESCE(i.external_key,e.external_key)=$3 AND x.external_account_hash=$4)",
         )

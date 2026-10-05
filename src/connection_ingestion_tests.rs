@@ -727,7 +727,11 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
     let history = json!([{"title":"Watched Actual video","products":["YouTube"],"titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","time":"2026-10-01T08:00:00Z"},{"title":"No time","titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}]);
     assert!(
         service
-            .import_youtube_history(user, history.clone(), false)
+            .import_youtube_history(
+                &service.native_scope(user).await.unwrap(),
+                history.clone(),
+                false
+            )
             .await
             .is_err()
     );
@@ -740,13 +744,17 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
         0
     );
     let first = service
-        .import_youtube_history(user, history.clone(), true)
+        .import_youtube_history(
+            &service.native_scope(user).await.unwrap(),
+            history.clone(),
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(first["imported"], 1);
     assert_eq!(first["skipped"], 1);
     let second = service
-        .import_youtube_history(user, history, true)
+        .import_youtube_history(&service.native_scope(user).await.unwrap(), history, true)
         .await
         .unwrap();
     assert_eq!(second["imported"], 0);

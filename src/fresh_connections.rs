@@ -16,6 +16,19 @@ use vox_connections::providers::{
 struct CoreIngestor {
     hub: Option<crate::realtime::UserEventHub>,
 }
+impl CoreIngestor {
+    async fn scope_transaction(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user: Uuid,
+        connection: Uuid,
+    ) -> Result<(), FreshConnectionError> {
+        if let Some(context) = sqlx::query_scalar::<_,Uuid>("SELECT user_context_id FROM vox_connections WHERE id=$1 AND user_id=$2 AND user_context_id IS NOT NULL")
+            .bind(connection).bind(user).fetch_optional(&mut **tx).await? {
+            sqlx::query("SELECT set_config('vox.connection_context',$1,true)").bind(context.to_string()).execute(&mut **tx).await?;
+        }
+        Ok(())
+    }
+}
 #[async_trait::async_trait]
 impl TimelineIngestor for CoreIngestor {
     async fn personal_activity(
@@ -26,6 +39,7 @@ impl TimelineIngestor for CoreIngestor {
         connector: &str,
         items: &[PersonalActivity],
     ) -> Result<usize, FreshConnectionError> {
+        Self::scope_transaction(tx, user_id, connection_id).await?;
         let connector = match connector {
             "youtube_history" => "youtube",
             other => other,
@@ -67,7 +81,7 @@ impl TimelineIngestor for CoreIngestor {
                     "Invalid personal activity".into(),
                 ));
             }
-            let source_ref = format!("{connector}:{}", item.source_id);
+            let source_ref = format!("{connection_id}:{connector}:{}", item.source_id);
             let payload = json!({
                 "connection_id": connection_id,
                 "source_id": item.source_id,
@@ -114,12 +128,13 @@ impl TimelineIngestor for CoreIngestor {
         time_min: DateTime<Utc>,
         time_max: DateTime<Utc>,
     ) -> Result<usize, FreshConnectionError> {
+        Self::scope_transaction(tx, user_id, connection_id).await?;
         let now = Utc::now();
         let mut seen_ids = HashSet::new();
         let mut created_or_updated = 0;
 
         for event in events {
-            let source_ref = format!("{account_id}:primary:{}", event.id);
+            let source_ref = format!("{connection_id}:{account_id}:primary:{}", event.id);
             seen_ids.insert(source_ref.clone());
             let span_status = if event.status == "cancelled" {
                 "cancelled"
@@ -202,12 +217,13 @@ impl TimelineIngestor for CoreIngestor {
         }
 
         let existing_calendar_spans = sqlx::query(
-            "SELECT id, source_ref FROM spans WHERE user_id = $1 AND source = 'google_calendar' AND start_at >= $2 AND start_at < $3 AND status <> 'cancelled' AND data->>'account_id'=$4"
+            "SELECT id, source_ref FROM spans WHERE user_id = $1 AND source = 'google_calendar' AND start_at >= $2 AND start_at < $3 AND status <> 'cancelled' AND data->>'account_id'=$4 AND data->>'connection_id'=$5"
         )
         .bind(user_id)
         .bind(time_min)
         .bind(time_max)
         .bind(account_id)
+        .bind(connection_id.to_string())
         .fetch_all(&mut **tx)
         .await?;
 
@@ -234,6 +250,7 @@ impl TimelineIngestor for CoreIngestor {
         connection_id: Uuid,
         activities: &[ObservedActivity],
     ) -> Result<usize, FreshConnectionError> {
+        Self::scope_transaction(tx, user_id, connection_id).await?;
         let mut spans_created = 0;
 
         {
@@ -257,8 +274,8 @@ impl TimelineIngestor for CoreIngestor {
                 )
                 .bind(user_id)
                 .bind(connection_id.to_string())
-                .bind(&act.source_ref)
-                .bind(format!("{:x}", Sha256::digest(act.source_ref.as_bytes())))
+                .bind(format!("{connection_id}:{}", act.source_ref))
+                .bind(format!("{:x}", Sha256::digest(format!("{connection_id}:{}", act.source_ref).as_bytes())))
                 .bind(act.observation_start)
                 .bind(&payload)
                 .fetch_one(&mut **tx)
@@ -291,7 +308,7 @@ impl TimelineIngestor for CoreIngestor {
                     "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2"
                 )
                 .bind(user_id)
-                .bind(&act.source_ref)
+                .bind(format!("{connection_id}:{}", act.source_ref))
                 .fetch_optional(&mut **tx)
                 .await?;
 
@@ -303,7 +320,7 @@ impl TimelineIngestor for CoreIngestor {
                     .bind(user_id)
                     .bind(title)
                     .bind(notes)
-                    .bind(&act.source_ref)
+                    .bind(format!("{connection_id}:{}", act.source_ref))
                     .bind(Option::<DateTime<Utc>>::None)
                     .bind(Option::<DateTime<Utc>>::None)
                     .bind(span_data)
@@ -326,13 +343,17 @@ impl TimelineIngestor for CoreIngestor {
         connection_id: Uuid,
         games: &[PlayStationGame],
     ) -> Result<usize, FreshConnectionError> {
+        Self::scope_transaction(tx, user_id, connection_id).await?;
         let mut written = 0;
         for game in games {
             let (Some(first), Some(last)) = (game.first_played_at, game.last_played_at) else {
                 continue;
             };
-            let end = last.max(first);
-            let source_ref = format!("history:{}", game.title_id);
+            if last < first {
+                continue;
+            }
+            let end = last;
+            let source_ref = format!("history:{connection_id}:{}", game.title_id);
             let hours = game.play_duration_seconds as f64 / 3600.0;
             let data = json!({
                 "game": game.name,
@@ -341,12 +362,14 @@ impl TimelineIngestor for CoreIngestor {
                 "total_seconds": game.play_duration_seconds,
                 "total_display": format!("{:.1}h", hours),
                 "play_count": game.play_count,
-                "timing": "first_to_last_played",
+                "timing": "observed_history_range",
+                "is_session": false,
+                "duration_is_elapsed_playtime": false,
                 "connection_id": connection_id,
             });
             let title = format!("PlayStation: {}", game.name);
             let notes = format!(
-                "Played on {} · {:.1}h in total across {} sessions",
+                "Observed first-to-last-played range on {} · {:.1}h cumulative playtime · {} provider-reported plays; continuous session timing is unknown",
                 game.platform, hours, game.play_count
             );
             let existing = sqlx::query_scalar::<_, Uuid>(
@@ -397,6 +420,7 @@ impl TimelineIngestor for CoreIngestor {
         connection_id: Uuid,
         orders: &[FoodDeliveryOrder],
     ) -> Result<usize, FreshConnectionError> {
+        Self::scope_transaction(tx, user_id, connection_id).await?;
         let mut spans_created = 0;
 
         for order in orders {
@@ -406,7 +430,7 @@ impl TimelineIngestor for CoreIngestor {
             if order.status == FoodDeliveryStatus::Unknown {
                 continue;
             }
-            let source_ref = format!("{}:{}", order.provider, order.order_id);
+            let source_ref = format!("{connection_id}:{}:{}", order.provider, order.order_id);
             let span_status = match order.status {
                 FoodDeliveryStatus::Delivered => "done",
                 FoodDeliveryStatus::Cancelled => "cancelled",
@@ -637,7 +661,7 @@ async fn notify(
     Ok(())
 }
 #[derive(Clone)]
-pub struct FreshConnectionsService(vox_connections::accounts::FreshConnectionsService);
+pub struct FreshConnectionsService(vox_connections::accounts::FreshConnectionsService, PgPool);
 impl std::ops::Deref for FreshConnectionsService {
     type Target = vox_connections::accounts::FreshConnectionsService;
     fn deref(&self) -> &Self::Target {
@@ -645,6 +669,21 @@ impl std::ops::Deref for FreshConnectionsService {
     }
 }
 impl FreshConnectionsService {
+    pub async fn native_scope(
+        &self,
+        user: Uuid,
+    ) -> Result<vox_connections::identity::RequestContext, FreshConnectionError> {
+        let (id,deployment) = sqlx::query_as::<_,(Uuid,Uuid)>("SELECT u.id,u.deployment_id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web'")
+            .bind(user).fetch_optional(&self.1).await?.ok_or(FreshConnectionError::Unauthorized)?;
+        Ok(vox_connections::identity::RequestContext {
+            id: vox_connections::identity::UserContextId(id),
+            user_id: vox_connections::identity::UserId(user),
+            subject: vox_connections::identity::RequestSubject {
+                deployment_id: vox_connections::identity::DeploymentId(deployment),
+            },
+        })
+    }
+
     pub fn new(
         pool: PgPool,
         credential_key: Option<&str>,
@@ -655,13 +694,14 @@ impl FreshConnectionsService {
     ) -> Result<Self, FreshConnectionError> {
         Ok(Self(
             vox_connections::accounts::FreshConnectionsService::new(
-                pool,
+                pool.clone(),
                 credential_key,
                 std::sync::Arc::new(CoreIngestor { hub }),
                 client,
                 secret,
                 core_url,
             )?,
+            pool,
         ))
     }
 }

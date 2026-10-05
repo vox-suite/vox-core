@@ -33,7 +33,7 @@ pub async fn list_connections(
     State(svc): State<FreshConnectionsService>,
     Extension(actor): Extension<Actor>,
 ) -> Result<Json<Vec<ConnectionItem>>, (StatusCode, String)> {
-    svc.list_connections(actor.user_id)
+    svc.list_connections(&svc.native_scope(actor.user_id).await.map_err(scope_error)?)
         .await
         .map(Json)
         .map_err(|_| {
@@ -50,7 +50,13 @@ pub async fn start_connection(
     Extension(actor): Extension<Actor>,
     Json(req): Json<StartConnectionRequest>,
 ) -> Result<Json<StartConnectionResponse>, (StatusCode, String)> {
-    svc.start(actor.user_id, req).await.map(Json).map_err(|_| {
+    svc.start(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        req,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             "Connection request failed".to_string(),
@@ -64,15 +70,18 @@ pub async fn setup_status(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SetupStatusResponse>, (StatusCode, String)> {
-    svc.get_setup_status(actor.user_id, id)
-        .await
-        .map(Json)
-        .map_err(|_| {
-            (
-                StatusCode::NOT_FOUND,
-                "Connection request failed".to_string(),
-            )
-        })
+    svc.get_setup_status(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            "Connection request failed".to_string(),
+        )
+    })
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/{id}/preferences", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), request_body = PreferencesRequest, responses((status = 200, body = ConnectionItem)))]
@@ -82,15 +91,19 @@ pub async fn update_preferences(
     Path(id): Path<Uuid>,
     Json(req): Json<PreferencesRequest>,
 ) -> Result<Json<ConnectionItem>, (StatusCode, String)> {
-    svc.update_preferences(actor.user_id, id, req)
-        .await
-        .map(Json)
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                "Connection request failed".to_string(),
-            )
-        })
+    svc.update_preferences(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+        req,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Connection request failed".to_string(),
+        )
+    })
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/{id}/refresh", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 200, body = RefreshResponse)))]
@@ -99,7 +112,13 @@ pub async fn refresh_connection(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RefreshResponse>, (StatusCode, String)> {
-    svc.refresh(actor.user_id, id).await.map(Json).map_err(|_| {
+    svc.refresh(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
         (
             StatusCode::BAD_GATEWAY,
             "Connection request failed".to_string(),
@@ -113,15 +132,18 @@ pub async fn disconnect_connection(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    svc.disconnect(actor.user_id, id)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                "Connection request failed".to_string(),
-            )
-        })
+    svc.disconnect(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(|_| StatusCode::NO_CONTENT)
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Connection request failed".to_string(),
+        )
+    })
 }
 
 pub async fn google_callback(
@@ -144,10 +166,13 @@ pub async fn cancel_setup(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    svc.cancel_setup(actor.user_id, id)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Unable to cancel setup".into()))
+    svc.cancel_setup(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(|_| StatusCode::NO_CONTENT)
+    .map_err(|_| (StatusCode::BAD_REQUEST, "Unable to cancel setup".into()))
 }
 
 pub async fn connector_callback(
@@ -182,15 +207,19 @@ pub async fn import_youtube_history(
     Extension(actor): Extension<Actor>,
     Json(req): Json<YouTubeHistoryImportRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    svc.import_youtube_history(actor.user_id, req.history, req.consent)
-        .await
-        .map(Json)
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                "Unable to import YouTube history".into(),
-            )
-        })
+    svc.import_youtube_history(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        req.history,
+        req.consent,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Unable to import YouTube history".into(),
+        )
+    })
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/{id}/read", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 200, body = serde_json::Value)))]
@@ -199,13 +228,23 @@ pub async fn read_personal(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    svc.read_personal(actor.user_id, id)
-        .await
-        .map(Json)
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                "Unable to read connected account".into(),
-            )
-        })
+    svc.read_personal_account(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        id,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Unable to read connected account".into(),
+        )
+    })
+}
+
+fn scope_error(_: vox_core::fresh_connections::FreshConnectionError) -> (StatusCode, String) {
+    (
+        StatusCode::FORBIDDEN,
+        "Connection context unavailable".into(),
+    )
 }
