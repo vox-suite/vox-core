@@ -530,9 +530,11 @@ impl TimelineIngestor for CoreIngestor {
     fn food_committed(&self, user_id: Uuid, orders: &[FoodDeliveryOrder]) {
         let mut active_order_scene: Option<crate::map_scene::MapScene> = None;
         for order in orders {
-            if order.status.is_active() && active_order_scene.is_none() {
-                if let (Some(rest), Some(cust)) =
+            if order.status.is_active()
+                && active_order_scene.is_none()
+                && let (Some(rest), Some(cust)) =
                     (order.restaurant_location, order.delivery_location)
+            {
                 {
                     let Some(rider_pt) = order.rider_location else {
                         continue;

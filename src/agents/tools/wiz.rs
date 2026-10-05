@@ -56,8 +56,14 @@ impl Tool for ControlWizLights {
         _context: &mut rig::tool::ToolContext,
         args: WizArgs,
     ) -> Result<Value, WizToolError> {
-        let db = self.db.as_ref().ok_or(WizToolError::Unavailable("Database not configured"))?;
-        let hub = self.hub.as_ref().ok_or(WizToolError::Unavailable("Device link not configured"))?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or(WizToolError::Unavailable("Database not configured"))?;
+        let hub = self
+            .hub
+            .as_ref()
+            .ok_or(WizToolError::Unavailable("Device link not configured"))?;
         if !matches!(args.action.as_str(), "list" | "set") {
             return Err(WizToolError::Unavailable("action must be list or set"));
         }

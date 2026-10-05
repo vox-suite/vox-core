@@ -607,6 +607,7 @@ mod governed_tool_surface_tests {
             connections: None,
             tts_provider: "fixture".into(),
             user_events: None,
+            device_hub: None,
         };
         for (channel, text) in [
             ("web", "run a terminal command"),
@@ -629,6 +630,7 @@ mod governed_tool_surface_tests {
                 names,
                 [
                     "clear_map",
+                    "control_wiz_lights",
                     "get_agent_memory",
                     "library",
                     "list_visits",
@@ -636,7 +638,7 @@ mod governed_tool_surface_tests {
                     "show_on_map",
                     "update_agent_memory"
                 ],
-                "{channel} must expose only governed tools and the map display tools"
+                "{channel} must expose only governed tools, the map display tools and WiZ lights"
             );
         }
     }
