@@ -414,15 +414,7 @@ impl TimelineIngestor for CoreIngestor {
                 _ => "active",
             };
 
-            let title = format!(
-                "{}: {}",
-                if order.provider == "swiggy" {
-                    "Swiggy"
-                } else {
-                    "Zomato"
-                },
-                order.restaurant_name
-            );
+            let title = format!("{}: {}", order.provider_label(), order.restaurant_name);
             let notes = format!(
                 "{} · {} · {}",
                 order.items.join(", "),
@@ -562,14 +554,7 @@ impl TimelineIngestor for CoreIngestor {
                             id: format!("rider-{}", order.order_id),
                             lng: rider_pt.lng,
                             lat: rider_pt.lat,
-                            label: Some(format!(
-                                "{} Delivery",
-                                if order.provider == "swiggy" {
-                                    "Swiggy"
-                                } else {
-                                    "Zomato"
-                                }
-                            )),
+                            label: Some(format!("{} Delivery", order.provider_label())),
                             kind: crate::map_scene::PinKind::Task,
                             state: order
                                 .eta_minutes
@@ -609,11 +594,7 @@ impl TimelineIngestor for CoreIngestor {
                         }],
                         narration_hint: Some(format!(
                             "Your {} order from {}: {}{}",
-                            if order.provider == "swiggy" {
-                                "Swiggy"
-                            } else {
-                                "Zomato"
-                            },
+                            order.provider_label(),
                             order.restaurant_name,
                             order.status.as_str(),
                             order
