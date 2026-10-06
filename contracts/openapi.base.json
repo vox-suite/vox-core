@@ -648,7 +648,8 @@
           "line",
           "bar",
           "pie",
-          "area"
+          "area",
+          "stat"
         ],
         "type": "string"
       },
@@ -726,6 +727,14 @@
           },
           "source": {
             "type": "string"
+          },
+          "total": {
+            "description": "Headline value for the window: the sum of points, or their mean for averaged measurements.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "undated_count": {
             "format": "int64",

@@ -78,6 +78,9 @@ pub struct PulsePoint {
 pub struct PulseResult {
     pub source: String,
     pub points: Vec<PulsePoint>,
+    /// Headline value for the window: the sum of points, or their mean for averaged measurements.
+    #[serde(default)]
+    pub total: Option<f64>,
     pub unit: String,
     pub quality: String,
     pub description: String,

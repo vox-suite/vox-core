@@ -155,9 +155,19 @@ async fn execute_inner(
                     })
                     .collect();
             }
+            let values: Vec<f64> = points.iter().filter_map(|p| p.value).collect();
+            let total = (!values.is_empty()).then(|| {
+                let sum: f64 = values.iter().sum();
+                if m.kind == MeasurementKind::NumericAverage {
+                    sum / values.len() as f64
+                } else {
+                    sum
+                }
+            });
             Ok(PulseResult {
                 source: m.profile.source.clone(),
                 points,
+                total,
                 unit: m.unit.clone(),
                 quality: m.quality.clone(),
                 description: m.description.clone(),

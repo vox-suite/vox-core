@@ -277,7 +277,7 @@ impl PulseService {
             }
             if let Ok(measurement) = validate_definition(&candidate.definition, &catalog) {
                 valid.push((candidate, measurement));
-                if valid.len() == limit * 2 {
+                if valid.len() == (limit * 2).min(12) {
                     break;
                 }
             }
@@ -505,6 +505,7 @@ impl PulseService {
                     chart.result = Some(PulseResult {
                         source: "Source unavailable".into(),
                         points: vec![],
+                        total: None,
                         unit: String::new(),
                         quality: "unavailable".into(),
                         description: message.clone(),
