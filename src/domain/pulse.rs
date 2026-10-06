@@ -63,6 +63,9 @@ pub struct PulseDefinition {
     /// Shift the window back by this many days, e.g. period 7 + offset 7 is the previous 7 days.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub offset_days: u16,
+    /// Keep only the largest N groups of a category chart (1-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_n: Option<u8>,
     pub timezone: String,
     pub chart_type: ChartType,
 }

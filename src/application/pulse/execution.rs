@@ -46,7 +46,7 @@ async fn execute_inner(
  let next=local+Duration::days(1);
  let to=if d.offset_days==0 {now} else {tz.from_local_datetime(&next.and_hms_opt(0,0,0).unwrap()).earliest().unwrap_or_else(||tz.from_utc_datetime(&next.and_hms_opt(0,0,0).unwrap())).with_timezone(&Utc)};
  let from=tz.from_local_datetime(&first.and_hms_opt(0,0,0).unwrap()).earliest().unwrap_or_else(||tz.from_utc_datetime(&first.and_hms_opt(0,0,0).unwrap())).with_timezone(&Utc);
- json!({"index":index,"kind":m.kind,"field":m.field,"source":m.profile.source,"schema_id":m.profile.schema_id,"connection_id":m.profile.connection_id,"category":m.profile.category,"action":m.profile.action,"timing":m.profile.timing,"currency":m.profile.currency,"from":from,"to":to,"bucket":d.bucket,"dimension":d.dimension,"timezone":d.timezone,"scale":m.scale})
+ json!({"index":index,"kind":m.kind,"field":m.field,"source":m.profile.source,"schema_id":m.profile.schema_id,"connection_id":m.profile.connection_id,"category":m.profile.category,"action":m.profile.action,"timing":m.profile.timing,"currency":m.profile.currency,"from":from,"to":to,"bucket":d.bucket,"top_n":d.top_n,"dimension":d.dimension,"timezone":d.timezone,"scale":m.scale})
  }).collect();
     let sql = format!(
         r#"
@@ -85,8 +85,8 @@ async fn execute_inner(
  ), values AS (SELECT * FROM regular UNION ALL SELECT * FROM intervals),
  deduped AS (SELECT * FROM values WHERE timing<>'first_to_last_played' UNION ALL SELECT index,label,max(val) AS val,min(kind) AS kind,timing,entity FROM values WHERE timing='first_to_last_played' GROUP BY index,label,timing,entity),
  totals AS (SELECT index,label,CASE WHEN min(kind)='numeric_average' THEN avg(val) ELSE sum(val) END::float8 AS value FROM deduped WHERE val IS NOT NULL GROUP BY index,label),
- ranked AS (SELECT *,row_number() OVER(PARTITION BY index ORDER BY value DESC,label) AS rank FROM totals),
- points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY label) AS points FROM ranked WHERE rank<=CASE WHEN (SELECT r->>'bucket' FROM requests WHERE (r->>'index')::int=ranked.index) IS NULL THEN 20 ELSE 1100 END GROUP BY index)
+ ranked AS (SELECT *,row_number() OVER(PARTITION BY index ORDER BY value DESC,label) AS rank,(SELECT r->>'bucket' IS NULL FROM requests WHERE (r->>'index')::int=totals.index) AS cat FROM totals),
+ points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY (CASE WHEN cat THEN rank END),label) AS points FROM ranked WHERE rank<=CASE WHEN cat THEN COALESCE((SELECT (r->>'top_n')::int FROM requests WHERE (r->>'index')::int=ranked.index),20) ELSE 1100 END GROUP BY index)
  SELECT COALESCE(jsonb_agg(jsonb_build_object('index',(r->>'index')::int,'points',COALESCE(points.points,'[]')) ORDER BY (r->>'index')::int),'[]') FROM requests LEFT JOIN points ON points.index=(r->>'index')::int
  "#,
         allowed = ALLOWED_SPANS,

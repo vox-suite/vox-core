@@ -102,7 +102,7 @@ impl PulseService {
             actor,
             meta,
             &format!(
-                "results:{}:{:x}",
+                "results2:{}:{:x}",
                 inputs
                     .iter()
                     .map(|(d, _)| Utc::now()

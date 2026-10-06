@@ -249,6 +249,10 @@ pub fn validate_definition(
     if d.period_days > 365 && d.bucket == Some(Bucket::Day) {
         return Err("Use weeks or months for periods longer than a year".into());
     }
+    if d.top_n.is_some_and(|n| !(1..=20).contains(&n)) || (d.top_n.is_some() && d.bucket.is_some())
+    {
+        return Err("Top-N applies to category charts, from 1 to 20".into());
+    }
     match (&d.bucket, &d.dimension) {
         (Some(bucket), None) if m.buckets.contains(bucket) => {}
         (None, Some(field)) if m.dimensions.contains(field) => {}

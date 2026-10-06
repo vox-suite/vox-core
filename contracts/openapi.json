@@ -1754,6 +1754,15 @@
           "timezone": {
             "type": "string"
           },
+          "top_n": {
+            "description": "Keep only the largest N groups of a category chart (1-20).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "version": {
             "format": "int32",
             "minimum": 0,
