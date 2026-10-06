@@ -17,3 +17,5 @@ pub use schemas::*;
 pub use spaces::*;
 pub use spans::*;
 pub use users::*;
+
+pub mod pulse;

@@ -171,6 +171,27 @@ pub fn build_api_router(state: ApiState) -> Router {
         schemas: state.schemas.clone(),
         suggester: state.chart_suggester.clone(),
     };
+    let pulse_service = vox_core::application::pulse::service::PulseService::new(
+        vox_core::storage::pulse::PulseRepository::new(state.pool.clone()),
+    )
+    .with_suggester(state.chart_suggester.clone());
+    let pulse_routes = Router::new()
+        .route("/v1/me/pulse/canvas", get(crate::routes::pulse::get_canvas))
+        .route(
+            "/v1/me/pulse/measurements",
+            get(crate::routes::pulse::list_measurements),
+        )
+        .route(
+            "/v1/me/pulse/suggestions",
+            post(crate::routes::pulse::discover),
+        )
+        .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
+        .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
+        .route(
+            "/v1/me/pulse/dismissals",
+            post(crate::routes::pulse::dismiss),
+        )
+        .with_state(pulse_service);
     let chart_routes = Router::new()
         .route("/v1/me/charts/suggest", post(suggest_charts))
         .route(
@@ -308,6 +329,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(map_scene_routes)
         .merge(voice_routes)
         .merge(chart_routes)
+        .merge(pulse_routes)
         .merge(space_routes)
         .merge(web_token_routes)
         .merge(connection_routes)

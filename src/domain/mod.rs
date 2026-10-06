@@ -27,3 +27,5 @@ pub enum ConcurrencyOutcome<T> {
     Conflict,
     NotFound,
 }
+
+pub mod pulse;
