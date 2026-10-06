@@ -96,18 +96,17 @@ async fn execute_inner(
         timing = TIMING
     );
     let (value, computed_at) = if let Some((key, refresh, arrived)) = cache {
-        let cached: serde_json::Value = sqlx::query_scalar(
-            "SELECT pulse_cached_aggregate($1,$2,$3,$4,$5,$6,$7)",
-        )
-        .bind(user)
-        .bind(format!("raw:{key}"))
-        .bind(json!(requests))
-        .bind(now)
-        .bind(&sql)
-        .bind(refresh)
-        .bind(arrived)
-        .fetch_one(pool)
-        .await?;
+        let cached: serde_json::Value =
+            sqlx::query_scalar("SELECT pulse_cached_aggregate($1,$2,$3,$4,$5,$6,$7)")
+                .bind(user)
+                .bind(format!("raw:{key}"))
+                .bind(json!(requests))
+                .bind(now)
+                .bind(&sql)
+                .bind(refresh)
+                .bind(arrived)
+                .fetch_one(pool)
+                .await?;
         let computed_at = serde_json::from_value(cached["computed_at"].clone())
             .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         (cached["rows"].clone(), computed_at)
