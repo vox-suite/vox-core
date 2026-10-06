@@ -115,6 +115,62 @@ fn schema_has_field(schema: &SchemaSample, field: &str) -> bool {
     false
 }
 
+/// Builds a definition from model output, ignoring unknown fields and clamping values;
+/// the server still validates the result against the user's real measurements.
+fn lenient_definition(d: &Value, timezone: &str) -> Option<crate::domain::pulse::PulseDefinition> {
+    use crate::domain::pulse::{Bucket, PulseDefinition};
+    let id = d.get("measurement_id")?.as_str()?.to_string();
+    let bucket = match d.get("bucket").and_then(Value::as_str) {
+        Some("day") => Some(Bucket::Day),
+        Some("week") => Some(Bucket::Week),
+        Some("month") => Some(Bucket::Month),
+        _ => None,
+    };
+    let dimension = d
+        .get("dimension")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned);
+    let chart_type = match d
+        .get("chart_type")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase)
+        .as_deref()
+    {
+        Some("line") => ChartType::Line,
+        Some("area") => ChartType::Area,
+        Some("pie") => ChartType::Pie,
+        Some("stat" | "number" | "total" | "metric") => ChartType::Stat,
+        _ => ChartType::Bar,
+    };
+    // Exactly one grouping: time series keep the bucket, rankings keep the dimension.
+    let (bucket, dimension) = match (bucket, dimension) {
+        (Some(b), Some(dim)) => {
+            if matches!(chart_type, ChartType::Bar | ChartType::Pie) {
+                (None, Some(dim))
+            } else {
+                (Some(b), None)
+            }
+        }
+        other => other,
+    };
+    let number = |key: &str, default: u64| d.get(key).and_then(Value::as_u64).unwrap_or(default);
+    Some(PulseDefinition {
+        version: 2,
+        measurement_id: id,
+        bucket,
+        dimension,
+        period_days: number("period_days", 30).clamp(1, 3650) as u16,
+        offset_days: number("offset_days", 0).min(730) as u16,
+        top_n: d
+            .get("top_n")
+            .and_then(Value::as_u64)
+            .map(|n| n.clamp(1, 20) as u8),
+        timezone: timezone.to_string(),
+        chart_type,
+    })
+}
+
 #[async_trait]
 impl SuggestingCharts for GeminiChartSuggester {
     async fn suggest_pulse(
@@ -173,8 +229,24 @@ impl SuggestingCharts for GeminiChartSuggester {
                 serde_json::to_string(&summaries).map_err(|_| AgentError::InvalidStructuredOutput)?
             ))
             .await
-            .map_err(|_| AgentError::Provider)?;
-        serde_json::from_str(structured_json(&raw)).map_err(|_| AgentError::InvalidStructuredOutput)
+            .map_err(|e| {
+                tracing::warn!(error = %e, "pulse compose: model call failed");
+                AgentError::Provider
+            })?;
+        let value: Value = serde_json::from_str(structured_json(&raw)).map_err(|e| {
+            tracing::warn!(error = %e, "pulse compose: reply was not valid JSON");
+            AgentError::InvalidStructuredOutput
+        })?;
+        Ok(crate::domain::pulse::ComposeOutput {
+            reply: value["reply"]
+                .as_str()
+                .unwrap_or("Here is what I built.")
+                .to_string(),
+            title: value["title"].as_str().map(str::to_owned),
+            definition: value
+                .get("definition")
+                .and_then(|d| lenient_definition(d, &input.timezone)),
+        })
     }
 
     async fn compose_goal(

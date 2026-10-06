@@ -366,7 +366,10 @@ impl PulseService {
         )
         .await
         .map_err(|_| PulseError::Busy)?
-        .map_err(|_| PulseError::Invalid("The assistant could not answer. Try again.".into()))?;
+        .map_err(|e| {
+            tracing::warn!(error = ?e, "pulse compose failed");
+            PulseError::Invalid("The assistant could not answer. Try again.".into())
+        })?;
         let reply: String = out.reply.chars().take(600).collect();
         let title = out.title.map(|t| t.chars().take(120).collect::<String>());
         let Some(mut definition) = out.definition else {
