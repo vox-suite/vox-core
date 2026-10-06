@@ -53,7 +53,7 @@ fn measurement(
         unit: unit.into(),
         quality: quality.into(),
         scale,
-        buckets: if is_counter {
+        buckets: if is_counter && p.timing != "observed_counter_delta" {
             vec![]
         } else {
             vec![Bucket::Day, Bucket::Week, Bucket::Month]
@@ -99,7 +99,7 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                 (
                     "duration_seconds",
                     "Recorded gameplay increases",
-                    "Cumulative playtime increases over sync observation intervals. Exact session days and hours are unknown.",
+                    "Playtime increases seen between syncs, grouped by when each increase was observed. Exact session days are unknown, and history before capture began is unavailable.",
                 )
             } else {
                 (
