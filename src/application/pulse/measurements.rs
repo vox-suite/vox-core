@@ -53,8 +53,15 @@ fn measurement(
         unit: unit.into(),
         quality: quality.into(),
         scale,
-        buckets: if is_counter && p.timing != "observed_counter_delta" {
+        buckets: if is_counter
+            && !matches!(
+                p.timing.as_str(),
+                "observed_counter_delta" | "estimated_from_totals"
+            ) {
             vec![]
+        } else if is_counter {
+            // Counter deltas and estimated sessions have no trustworthy day.
+            vec![Bucket::Week, Bucket::Month]
         } else {
             vec![Bucket::Day, Bucket::Week, Bucket::Month]
         },
@@ -94,6 +101,19 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                 .is_some_and(|v| v == "number")
         {
             out.push(measurement(p,MeasurementKind::NumericSum,Some("provider_data.reported_track_duration_ms"),"Estimated Spotify listening hours".into(),"hours","estimated",1.0/3_600_000.0,"Adds full track lengths for recorded plays. Skips and partial playback are unknown; this is not measured listening time."));
+        } else if p.source == "playstation" && p.timing == "estimated_from_totals" {
+            if p.known_intervals > 0 {
+                out.push(measurement(
+                    p,
+                    MeasurementKind::KnownIntervalDuration,
+                    None,
+                    "Estimated gameplay hours".into(),
+                    "hours",
+                    "estimated",
+                    1.0 / 3600.0,
+                    "Sessions estimated from PlayStation lifetime totals and spread between first and last played. PlayStation does not report real session days, so weekly shape is approximate.",
+                ));
+            }
         } else if p.source == "playstation" {
             let (field, title, description) = if p.timing == "observed_counter_delta" {
                 (
