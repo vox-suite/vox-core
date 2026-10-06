@@ -97,7 +97,7 @@ async fn execute_inner(
     );
     let (value, computed_at) = if let Some((key, refresh, arrived)) = cache {
         let cached: serde_json::Value = sqlx::query_scalar(
-            "SELECT pulse_cached_aggregate($1,$2,(r->>'to')::timestamptz,$4,$5,$6,$7)",
+            "SELECT pulse_cached_aggregate($1,$2,$3,$4,$5,$6,$7)",
         )
         .bind(user)
         .bind(format!("raw:{key}"))
