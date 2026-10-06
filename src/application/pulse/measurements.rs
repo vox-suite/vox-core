@@ -38,6 +38,14 @@ fn measurement(
         .take(10)
         .map(|(k, _)| k.clone())
         .collect();
+    let mut dimensions = dimensions;
+    if matches!(
+        p.source.as_str(),
+        "google_maps" | "google_calendar" | "swiggy" | "zomato"
+    ) && !dimensions.iter().any(|d| d == "title")
+    {
+        dimensions.push("title".into());
+    }
     let default_dimension = if is_counter && dimensions.iter().any(|d| d == "game") {
         Some("game".into())
     } else {
@@ -69,6 +77,125 @@ fn measurement(
         default_dimension,
     }
 }
+struct NumericRule {
+    financial: bool,
+    kind: MeasurementKind,
+    unit: String,
+    scale: f64,
+    label: Option<String>,
+}
+fn name_tokens(field: &str) -> Vec<String> {
+    field
+        .rsplit('.')
+        .next()
+        .unwrap_or(field)
+        .to_lowercase()
+        .split(['_', '-', ' '])
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+/// Decides whether a numeric field is a sensible measurement, and how to sum it and label its unit.
+/// Schema hints win over name heuristics; ids, coordinates and cumulative counters are skipped.
+fn numeric_rule(field: &str, ty: &str, p: &SourceProfile) -> Option<NumericRule> {
+    if ty != "number" {
+        return None;
+    }
+    let hint = p.field_hints.get(field);
+    if hint.is_some_and(|h| h.ignore) {
+        return None;
+    }
+    let tokens = name_tokens(field);
+    let has = |words: &[&str]| tokens.iter().any(|t| words.contains(&t.as_str()));
+    let financial = has(&[
+        "amount", "cost", "price", "spent", "spend", "fee", "fees", "tip",
+    ]);
+    const SKIP: &[&str] = &[
+        "id",
+        "ids",
+        "index",
+        "idx",
+        "version",
+        "epoch",
+        "timestamp",
+        "ts",
+        "offset",
+        "lat",
+        "lng",
+        "lon",
+        "latitude",
+        "longitude",
+        "year",
+        "month",
+        "day",
+        "zip",
+        "pin",
+        "pincode",
+        "phone",
+        "port",
+        "eta",
+        "lifetime",
+        "cumulative",
+        "rank",
+        "position",
+        "seq",
+        "sequence",
+        "page",
+    ];
+    let declared = hint.is_some_and(|h| h.aggregation.is_some() || h.unit.is_some());
+    if !declared && (has(SKIP) || (has(&["total"]) && !financial)) {
+        return None;
+    }
+    let averaged = match hint.and_then(|h| h.aggregation.as_deref()) {
+        Some("avg" | "average" | "mean") => true,
+        Some(_) => false,
+        None => has(&[
+            "weight",
+            "score",
+            "rating",
+            "rate",
+            "ratio",
+            "percent",
+            "pct",
+            "temperature",
+            "temp",
+            "bpm",
+            "pace",
+            "speed",
+            "avg",
+            "average",
+            "level",
+            "mood",
+            "glucose",
+        ]),
+    };
+    let last = tokens.last().map(String::as_str).unwrap_or("");
+    let (unit, scale) = if let Some(unit) = hint.and_then(|h| h.unit.clone()) {
+        (unit, 1.0)
+    } else {
+        match last {
+            "seconds" | "secs" | "sec" => ("hours".to_string(), 1.0 / 3600.0),
+            "minutes" | "mins" | "min" => ("hours".to_string(), 1.0 / 60.0),
+            "ms" | "millis" | "milliseconds" => ("hours".to_string(), 1.0 / 3_600_000.0),
+            "hours" | "hrs" | "hr" => ("hours".to_string(), 1.0),
+            "km" | "kg" | "mi" | "miles" | "kcal" | "bpm" | "cm" | "kb" | "mb" | "gb" => {
+                (last.to_string(), 1.0)
+            }
+            _ => (tokens.join(" "), 1.0),
+        }
+    };
+    Some(NumericRule {
+        financial,
+        kind: if averaged {
+            MeasurementKind::NumericAverage
+        } else {
+            MeasurementKind::NumericSum
+        },
+        unit,
+        scale,
+        label: hint.and_then(|h| h.label.clone()),
+    })
+}
 pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
     let mut out = vec![];
     for p in profiles {
@@ -81,6 +208,9 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
             ("youtube", "playlist_addition") => "YouTube playlist additions".to_string(),
             ("youtube", "like") => "YouTube likes".to_string(),
             ("playstation", _) => "Recorded gaming updates".to_string(),
+            ("google_maps", _) => "Places visited".to_string(),
+            ("google_calendar", _) => "Calendar events".to_string(),
+            ("swiggy" | "zomato", _) => "Food orders".to_string(),
             _ => format!("{} entries", p.category.replace('_', " ")),
         };
         if p.dated_count > 0 && p.source != "playstation" {
@@ -143,24 +273,10 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
         } else if p.source != "youtube" && p.source != "spotify" {
             let is_subscription = p.category.to_lowercase().contains("subscription");
             for (field, ty) in &p.fields {
-                if ty != "number"
-                    || !matches!(
-                        field.as_str(),
-                        "amount"
-                            | "total_amount"
-                            | "cost"
-                            | "price"
-                            | "distance_km"
-                            | "steps"
-                            | "calories"
-                            | "weight"
-                            | "score"
-                    )
-                {
+                let Some(rule) = numeric_rule(field, ty, p) else {
                     continue;
-                }
-                let financial =
-                    matches!(field.as_str(), "amount" | "total_amount" | "cost" | "price");
+                };
+                let financial = rule.financial;
                 if financial && p.currency.is_empty() {
                     continue;
                 }
@@ -188,15 +304,11 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                 if p.dated_count == 0 {
                     continue;
                 }
-                let kind = if matches!(field.as_str(), "weight" | "score") {
-                    MeasurementKind::NumericAverage
-                } else {
-                    MeasurementKind::NumericSum
-                };
+                let kind = rule.kind;
                 let unit = if financial {
                     p.currency.as_str()
                 } else {
-                    field.as_str()
+                    rule.unit.as_str()
                 };
                 let name = if financial {
                     format!(
@@ -210,9 +322,30 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                         p.currency
                     )
                 } else {
-                    format!("{} {}", p.category.replace('_', " "), field)
+                    rule.label.clone().unwrap_or_else(|| {
+                        let mut words = name_tokens(field);
+                        let timed = matches!(
+                            words.last().map(String::as_str),
+                            Some(
+                                "seconds"
+                                    | "secs"
+                                    | "sec"
+                                    | "minutes"
+                                    | "mins"
+                                    | "min"
+                                    | "ms"
+                                    | "millis"
+                                    | "milliseconds"
+                            )
+                        );
+                        if rule.unit == "hours" && timed {
+                            *words.last_mut().unwrap() = "hours".into();
+                        }
+                        format!("{} {}", p.category.replace('_', " "), words.join(" "))
+                    })
                 };
-                out.push(measurement(p,kind,Some(field),name,unit,"recorded",1.0,"Uses recorded numeric values and event dates. Currency groups are kept separate; refunds keep their signed values."));
+                let scale = if financial { 1.0 } else { rule.scale };
+                out.push(measurement(p,kind,Some(field),name,unit,"recorded",scale,"Uses recorded numeric values and event dates. Currency groups are kept separate; refunds keep their signed values."));
             }
             if p.known_intervals > 0 && !is_subscription {
                 out.push(measurement(
@@ -228,6 +361,7 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
             }
         }
     }
+    out.sort_by_key(|m| std::cmp::Reverse(m.profile.count));
     out
 }
 pub fn validate_definition(

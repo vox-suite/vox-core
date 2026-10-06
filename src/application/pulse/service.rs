@@ -220,7 +220,7 @@ impl PulseService {
             let ranked = tokio::time::timeout(
                 std::time::Duration::from_secs(180),
                 suggester.suggest_pulse(
-                    catalog.iter().take(40).cloned().collect(),
+                    catalog.iter().take(60).cloned().collect(),
                     input.timezone.clone(),
                     crate::agents::chart_suggester::PulseAsk {
                         instruction: prompt.clone(),
@@ -360,7 +360,7 @@ impl PulseService {
         let timezone = input.timezone.clone();
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            suggester.compose_pulse(catalog.iter().take(40).cloned().collect(), input),
+            suggester.compose_pulse(catalog.iter().take(60).cloned().collect(), input),
         )
         .await
         .map_err(|_| PulseError::Busy)?

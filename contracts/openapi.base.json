@@ -315,6 +315,15 @@
             "format": "int64",
             "type": "integer"
           },
+          "field_hints": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldHint"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "fields": {
             "additionalProperties": {
               "type": "string"
@@ -860,6 +869,33 @@
         "required": [
           "reply"
         ],
+        "type": "object"
+      },
+      "FieldHint": {
+        "description": "Optional per-field hints declared by a data schema (`x-unit`, `x-aggregation`, `title`, `x-measure`).",
+        "properties": {
+          "aggregation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ignore": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       }
     }

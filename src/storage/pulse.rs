@@ -97,7 +97,13 @@ impl PulseRepository {
  AND e.key NOT IN('connection_id','account_hint','reference','fingerprint','source_id')
  GROUP BY keyed.key,e.key
  ), field_summary AS (SELECT key,jsonb_object_agg(field,kind) AS fields FROM recent_fields GROUP BY key),
- selected AS (SELECT summary.*,COALESCE(f.fields,'{{}}'::jsonb) AS fields,'[]'::jsonb AS samples FROM summary LEFT JOIN field_summary f USING(key) ORDER BY count DESC,key)
+ schema_hints AS (
+ SELECT sc.schema_id,jsonb_object_agg(p.key,jsonb_strip_nulls(jsonb_build_object('unit',COALESCE(p.value->>'x-unit',p.value->>'unit'),'aggregation',p.value->>'x-aggregation','label',COALESCE(p.value->>'x-label',p.value->>'title'),'ignore',CASE WHEN p.value->>'x-measure'='false' THEN true END))) AS hints
+ FROM (SELECT DISTINCT schema_id FROM summary WHERE schema_id IS NOT NULL) sc
+ JOIN data_schemas ds ON ds.id=sc.schema_id
+ CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(ds.json_schema->'properties')='object' THEN ds.json_schema->'properties' ELSE '{{}}'::jsonb END) p
+ WHERE jsonb_typeof(p.value)='object' GROUP BY sc.schema_id),
+ selected AS (SELECT summary.*,COALESCE(f.fields,'{{}}'::jsonb) AS fields,COALESCE(h.hints,'{{}}'::jsonb) AS field_hints,'[]'::jsonb AS samples FROM summary LEFT JOIN field_summary f USING(key) LEFT JOIN schema_hints h ON h.schema_id=summary.schema_id ORDER BY count DESC,key)
  SELECT jsonb_build_object('profiles',COALESCE((SELECT jsonb_agg(to_jsonb(selected)) FROM selected),'[]'), 'source_count',(SELECT count(*) FROM summary),'record_count',COALESCE((SELECT sum(count) FROM summary),0)) AS inventory
  "#,
             action = ACTION,
