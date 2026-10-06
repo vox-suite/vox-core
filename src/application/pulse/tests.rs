@@ -606,7 +606,7 @@ async fn gameplay_totals_and_deltas_are_distinct_and_subscriptions_are_projectio
                 timezone: "Asia/Kolkata".into(),
                 chart_type: ChartType::Bar,
             };
-            assert!(validate_definition(&d, &[m.clone()]).is_ok());
+            assert!(validate_definition(&d, std::slice::from_ref(&m)).is_ok());
             (d, m)
         })
         .collect();

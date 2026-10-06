@@ -7,6 +7,7 @@ pub fn definition_hash(definition: &PulseDefinition) -> String {
         Sha256::digest(serde_json::to_vec(definition).expect("serializable definition"))
     )
 }
+#[allow(clippy::too_many_arguments)]
 fn measurement(
     p: &SourceProfile,
     kind: MeasurementKind,
