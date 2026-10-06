@@ -72,10 +72,10 @@ impl Tool for ListVisits {
             .await?;
         let visits: Vec<Value> = spans
             .into_iter()
-            .filter(|s| s.source == "location" && s.category == "visit")
+            .filter(|s| s.source == "google_maps" && s.category == "visit")
             .filter_map(|s| {
-                let lat = s.data.get("lat")?.as_f64()?;
-                let lng = s.data.get("lng")?.as_f64()?;
+                let lat = s.data.pointer("/provider_data/lat")?.as_f64()?;
+                let lng = s.data.pointer("/provider_data/lng")?.as_f64()?;
                 Some(json!({
                     "id": s.id,
                     "place": s.title,
