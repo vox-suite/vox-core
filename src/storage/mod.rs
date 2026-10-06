@@ -19,3 +19,4 @@ pub use spans::*;
 pub use users::*;
 
 pub mod pulse;
+pub mod pulse_goals;

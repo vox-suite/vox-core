@@ -17,6 +17,8 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+mod goals;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PulseError {
     #[error("{0}")]

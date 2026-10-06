@@ -187,6 +187,22 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
         .route("/v1/me/pulse/compose", post(crate::routes::pulse::compose))
+        .route(
+            "/v1/me/pulse/goals",
+            get(crate::routes::pulse::list_goals).post(crate::routes::pulse::create_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/compose",
+            post(crate::routes::pulse::compose_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/{id}",
+            axum::routing::delete(crate::routes::pulse::delete_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/{id}/entries",
+            post(crate::routes::pulse::add_goal_entry),
+        )
         .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
         .route(
             "/v1/me/pulse/dismissals",

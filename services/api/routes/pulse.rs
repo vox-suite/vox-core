@@ -8,7 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 use vox_core::{
     application::pulse::service::{PulseError, PulseService},
-    domain::{identity::Actor, pulse::*},
+    domain::{identity::Actor, pulse::*, pulse_goals::*},
 };
 
 impl IntoResponse for PulseApiError {
@@ -110,4 +110,53 @@ pub async fn compose(
     Json(input): Json<ComposeInput>,
 ) -> Result<Json<ComposeResponse>, PulseApiError> {
     Ok(Json(service.compose(&actor, input).await?))
+}
+#[derive(Deserialize)]
+pub struct GoalsQuery {
+    pub timezone: String,
+}
+#[utoipa::path(get,path="/v1/me/pulse/goals",tag="pulse",params(("timezone"=String,Query)),responses((status=200,body=Vec<GoalView>)))]
+pub async fn list_goals(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Query(input): Query<GoalsQuery>,
+) -> Result<Json<Vec<GoalView>>, PulseApiError> {
+    Ok(Json(service.goals(&actor, &input.timezone).await?))
+}
+#[utoipa::path(post,path="/v1/me/pulse/goals",tag="pulse",request_body=GoalDraft,responses((status=201,body=GoalView)))]
+pub async fn create_goal(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Json(input): Json<GoalDraft>,
+) -> Result<impl IntoResponse, PulseApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(service.create_goal(&actor, input).await?),
+    ))
+}
+#[utoipa::path(delete,path="/v1/me/pulse/goals/{id}",tag="pulse",params(("id"=Uuid,Path)),responses((status=204)))]
+pub async fn delete_goal(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, PulseApiError> {
+    service.delete_goal(&actor, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+#[utoipa::path(post,path="/v1/me/pulse/goals/{id}/entries",tag="pulse",params(("id"=Uuid,Path)),request_body=AddGoalEntryInput,responses((status=200,body=GoalView)))]
+pub async fn add_goal_entry(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(input): Json<AddGoalEntryInput>,
+) -> Result<Json<GoalView>, PulseApiError> {
+    Ok(Json(service.add_goal_entry(&actor, id, input).await?))
+}
+#[utoipa::path(post,path="/v1/me/pulse/goals/compose",tag="pulse",request_body=GoalComposeInput,responses((status=200,body=GoalComposeResponse)))]
+pub async fn compose_goal(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Json(input): Json<GoalComposeInput>,
+) -> Result<Json<GoalComposeResponse>, PulseApiError> {
+    Ok(Json(service.compose_goal(&actor, input).await?))
 }
