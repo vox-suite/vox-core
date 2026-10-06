@@ -186,6 +186,7 @@ pub fn build_api_router(state: ApiState) -> Router {
             post(crate::routes::pulse::discover),
         )
         .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
+        .route("/v1/me/pulse/compose", post(crate::routes::pulse::compose))
         .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
         .route(
             "/v1/me/pulse/dismissals",

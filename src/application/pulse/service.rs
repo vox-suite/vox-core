@@ -334,6 +334,80 @@ impl PulseService {
         }
         Ok(response)
     }
+    pub async fn compose(
+        &self,
+        actor: &Actor,
+        mut input: ComposeInput,
+    ) -> Result<ComposeResponse, PulseError> {
+        Self::timezone(&input.timezone)?;
+        if input.messages.is_empty() || input.messages.len() > 40 {
+            return Err(PulseError::Invalid(
+                "Send a message to build a chart".into(),
+            ));
+        }
+        let Some(suggester) = &self.suggester else {
+            return Err(PulseError::Invalid("Chart assistant is unavailable".into()));
+        };
+        let meta = self.repo.metadata(actor.user_id, None).await?;
+        let inventory = self.inventory(actor, &meta, false).await?;
+        let catalog = measurement_catalog(&inventory.profiles);
+        input.messages.iter_mut().for_each(|m| {
+            m.content = m.content.chars().take(500).collect();
+            if m.role != "assistant" {
+                m.role = "user".into();
+            }
+        });
+        let timezone = input.timezone.clone();
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            suggester.compose_pulse(catalog.iter().take(40).cloned().collect(), input),
+        )
+        .await
+        .map_err(|_| PulseError::Busy)?
+        .map_err(|_| PulseError::Invalid("The assistant could not answer. Try again.".into()))?;
+        let reply: String = out.reply.chars().take(600).collect();
+        let title = out.title.map(|t| t.chars().take(120).collect::<String>());
+        let Some(mut definition) = out.definition else {
+            return Ok(ComposeResponse {
+                reply,
+                title,
+                definition: None,
+                measurement: None,
+                preview: None,
+            });
+        };
+        definition.timezone = timezone;
+        match validate_definition(&definition, &catalog) {
+            Ok(measurement) => {
+                let preview = self
+                    .results(
+                        actor,
+                        &meta,
+                        &[(definition.clone(), measurement.clone())],
+                        false,
+                        Utc::now(),
+                    )
+                    .await?
+                    .remove(0);
+                Ok(ComposeResponse {
+                    reply,
+                    title,
+                    definition: Some(definition),
+                    measurement: Some(measurement),
+                    preview: Some(preview),
+                })
+            }
+            Err(_) => Ok(ComposeResponse {
+                reply:
+                    "I couldn't build that from your recorded data. Try describing it another way."
+                        .into(),
+                title: None,
+                definition: None,
+                measurement: None,
+                preview: None,
+            }),
+        }
+    }
     pub async fn preview(
         &self,
         actor: &Actor,

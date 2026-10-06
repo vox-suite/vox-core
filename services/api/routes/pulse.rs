@@ -103,3 +103,11 @@ pub async fn dismiss(
     service.dismiss(&actor, input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[utoipa::path(post,path="/v1/me/pulse/compose",tag="pulse",request_body=ComposeInput,responses((status=200,body=ComposeResponse)))]
+pub async fn compose(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Json(input): Json<ComposeInput>,
+) -> Result<Json<ComposeResponse>, PulseApiError> {
+    Ok(Json(service.compose(&actor, input).await?))
+}

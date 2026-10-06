@@ -60,8 +60,14 @@ pub struct PulseDefinition {
     pub bucket: Option<Bucket>,
     pub dimension: Option<String>,
     pub period_days: u16,
+    /// Shift the window back by this many days, e.g. period 7 + offset 7 is the previous 7 days.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset_days: u16,
     pub timezone: String,
     pub chart_type: ChartType,
+}
+fn is_zero(v: &u16) -> bool {
+    *v == 0
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PulsePoint {
@@ -145,4 +151,32 @@ pub struct PulseCandidate {
     pub title: String,
     pub reason: String,
     pub definition: PulseDefinition,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ComposeMessage {
+    pub role: String,
+    pub content: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComposeInput {
+    pub timezone: String,
+    pub messages: Vec<ComposeMessage>,
+    pub current_title: Option<String>,
+    pub current: Option<PulseDefinition>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ComposeResponse {
+    pub reply: String,
+    pub title: Option<String>,
+    pub definition: Option<PulseDefinition>,
+    pub measurement: Option<Measurement>,
+    pub preview: Option<PulseResult>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct ComposeOutput {
+    pub reply: String,
+    pub title: Option<String>,
+    pub definition: Option<PulseDefinition>,
 }

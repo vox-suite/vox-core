@@ -216,6 +216,7 @@ pub fn validate_definition(
 ) -> Result<Measurement, String> {
     if d.version != 2
         || !(1..=365).contains(&d.period_days)
+        || d.offset_days > 730
         || d.timezone.parse::<chrono_tz::Tz>().is_err()
     {
         return Err("Choose a valid period and timezone".into());

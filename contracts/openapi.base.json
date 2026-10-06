@@ -433,6 +433,12 @@
           "measurement_id": {
             "type": "string"
           },
+          "offset_days": {
+            "description": "Shift the window back by this many days, e.g. period 7 + offset 7 is the previous 7 days.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "period_days": {
             "format": "int32",
             "minimum": 0,
@@ -738,6 +744,103 @@
           "record_count",
           "undated_count",
           "computed_at"
+        ],
+        "type": "object"
+      },
+      "ComposeMessage": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "ComposeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            ]
+          },
+          "current_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ComposeMessage"
+            },
+            "type": "array"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ComposeResponse": {
+        "properties": {
+          "definition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            ]
+          },
+          "measurement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Measurement"
+              }
+            ]
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseResult"
+              }
+            ]
+          },
+          "reply": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "reply"
         ],
         "type": "object"
       }
@@ -1800,6 +1903,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PulseResult"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/compose": {
+      "post": {
+        "operationId": "compose",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
                 }
               }
             },

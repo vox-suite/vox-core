@@ -35,6 +35,7 @@ use utoipa::OpenApi;
     crate::routes::pulse::list_measurements,
     crate::routes::pulse::discover,
     crate::routes::pulse::preview,
+    crate::routes::pulse::compose,
     crate::routes::pulse::save,
     crate::routes::pulse::dismiss,
     crate::routes::charts::suggest_charts,
