@@ -8,14 +8,12 @@ use crate::db::Db;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataSource {
     Sms,
-    Location,
 }
 
 impl DataSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Sms => "sms",
-            Self::Location => "location",
         }
     }
 }

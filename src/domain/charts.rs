@@ -9,6 +9,8 @@ pub enum ChartType {
     Bar,
     Pie,
     Area,
+    /// Single headline number; Pulse-only, never stored by legacy boards.
+    Stat,
 }
 
 impl ChartType {
@@ -18,6 +20,7 @@ impl ChartType {
             Self::Bar => "bar",
             Self::Pie => "pie",
             Self::Area => "area",
+            Self::Stat => "stat",
         }
     }
 

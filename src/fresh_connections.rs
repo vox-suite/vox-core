@@ -42,11 +42,13 @@ impl TimelineIngestor for CoreIngestor {
         Self::scope_transaction(tx, user_id, connection_id).await?;
         let connector = match connector {
             "youtube_history" => "youtube",
+            "maps_timeline" => "google_maps",
             other => other,
         };
         let category = match connector {
             "spotify" => "music",
             "youtube" => "video",
+            "google_maps" => "visit",
             _ => {
                 return Err(FreshConnectionError::Invalid(
                     "Unsupported activity source".into(),
@@ -70,6 +72,7 @@ impl TimelineIngestor for CoreIngestor {
         for item in items {
             let (event_type, title) = match (connector, item.provider_data["action"].as_str()) {
                 ("spotify", _) => ("music.listened", item.title.clone()),
+                ("google_maps", Some("visit")) => ("place.visited", item.title.clone()),
                 ("youtube", Some("watch")) if item.provider_data["watch_event"] == true => {
                     ("video.watched", item.title.clone())
                 }

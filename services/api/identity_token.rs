@@ -19,6 +19,7 @@ pub struct VerifiedIdentity {
     pub issuer: String,
     pub subject: String,
     pub email: Option<String>,
+    pub email_verified: bool,
     pub name: Option<String>,
 }
 
@@ -32,6 +33,8 @@ struct TokenClaims {
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
+    email_verified: Option<serde_json::Value>,
+    #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     user_metadata: Option<SupabaseUserMetadata>,
@@ -40,9 +43,27 @@ struct TokenClaims {
 #[derive(Debug, Deserialize)]
 struct SupabaseUserMetadata {
     #[serde(default)]
+    email_verified: Option<serde_json::Value>,
+    #[serde(default)]
     full_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
+}
+
+fn flag(value: &Option<serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::Bool(flag)) => *flag,
+        Some(serde_json::Value::String(text)) => text == "true",
+        _ => false,
+    }
+}
+
+fn claims_email_verified(claims: &TokenClaims) -> bool {
+    flag(&claims.email_verified)
+        || claims
+            .user_metadata
+            .as_ref()
+            .is_some_and(|metadata| flag(&metadata.email_verified))
 }
 
 fn claims_name(claims: &TokenClaims) -> Option<String> {
@@ -173,6 +194,7 @@ fn identity_from_payload(
             .email
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        email_verified: claims_email_verified(&claims),
         name,
     })
 }
@@ -255,6 +277,7 @@ fn verify_asymmetric_components(
             .email
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        email_verified: claims_email_verified(&data.claims),
         name: claims_name(&data.claims),
     })
 }

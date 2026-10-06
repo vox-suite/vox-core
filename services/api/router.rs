@@ -26,10 +26,6 @@ use crate::{
         identity::get_me,
         internal::dispatch_device_request,
         live::{LiveApiState, live_socket},
-        location::{
-            get_consent as get_location_consent, grant_consent as grant_location_consent,
-            revoke_consent as revoke_location_consent, submit_segments,
-        },
         map_scene::get_map_scene,
         phone::{PhoneApiState, confirm_phone_verification, link_phone, start_phone_verification},
         records::{create_record, delete_record, get_record, list_records, update_record},
@@ -105,22 +101,6 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.consent.clone());
 
-    let location_routes = Router::new()
-        .route("/v1/location/segments", post(submit_segments))
-        .with_state(state.location_ingestion.clone());
-
-    let location_consent_routes = Router::new()
-        .route("/v1/location/consent/get", post(get_location_consent))
-        .route(
-            "/v1/location/consent/grant",
-            post(grant_location_consent).layer(refresh_cache.clone()),
-        )
-        .route(
-            "/v1/location/consent/revoke",
-            post(revoke_location_consent).layer(refresh_cache.clone()),
-        )
-        .with_state(state.consent.clone());
-
     let client_log_routes = Router::new().route("/v1/logs/batches", post(submit_client_logs));
 
     let device_api_state = DeviceApiState {
@@ -191,6 +171,28 @@ pub fn build_api_router(state: ApiState) -> Router {
         schemas: state.schemas.clone(),
         suggester: state.chart_suggester.clone(),
     };
+    let pulse_service = vox_core::application::pulse::service::PulseService::new(
+        vox_core::storage::pulse::PulseRepository::new(state.pool.clone()),
+    )
+    .with_suggester(state.chart_suggester.clone());
+    let pulse_routes = Router::new()
+        .route("/v1/me/pulse/canvas", get(crate::routes::pulse::get_canvas))
+        .route(
+            "/v1/me/pulse/measurements",
+            get(crate::routes::pulse::list_measurements),
+        )
+        .route(
+            "/v1/me/pulse/suggestions",
+            post(crate::routes::pulse::discover),
+        )
+        .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
+        .route("/v1/me/pulse/compose", post(crate::routes::pulse::compose))
+        .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
+        .route(
+            "/v1/me/pulse/dismissals",
+            post(crate::routes::pulse::dismiss),
+        )
+        .with_state(pulse_service);
     let chart_routes = Router::new()
         .route("/v1/me/charts/suggest", post(suggest_charts))
         .route(
@@ -263,6 +265,11 @@ pub fn build_api_router(state: ApiState) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route(
+            "/v1/me/connections/maps_timeline/history/import",
+            post(crate::routes::connections::import_maps_timeline)
+                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
             "/v1/me/connections/setup/{id}/cancel",
             post(crate::routes::connections::cancel_setup),
         )
@@ -322,8 +329,6 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(sms_routes)
         .merge(client_log_routes)
         .merge(sms_consent_routes)
-        .merge(location_routes)
-        .merge(location_consent_routes)
         .merge(device_routes)
         .merge(device_socket_routes)
         .merge(event_routes)
@@ -333,6 +338,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(map_scene_routes)
         .merge(voice_routes)
         .merge(chart_routes)
+        .merge(pulse_routes)
         .merge(space_routes)
         .merge(web_token_routes)
         .merge(connection_routes)

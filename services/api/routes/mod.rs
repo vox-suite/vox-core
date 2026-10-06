@@ -13,7 +13,6 @@ pub mod events;
 pub mod identity;
 pub mod internal;
 pub mod live;
-pub mod location;
 pub mod map_scene;
 pub mod phone;
 pub mod records;
@@ -22,3 +21,5 @@ pub mod sms;
 pub mod spaces;
 pub mod spans;
 pub mod voice;
+
+pub mod pulse;

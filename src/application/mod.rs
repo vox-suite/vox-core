@@ -16,3 +16,5 @@ pub use devices::*;
 pub use records::*;
 pub use schemas::*;
 pub use spans::*;
+
+pub mod pulse;

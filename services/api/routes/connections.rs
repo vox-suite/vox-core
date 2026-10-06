@@ -112,18 +112,32 @@ pub async fn refresh_connection(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RefreshResponse>, (StatusCode, String)> {
-    svc.refresh(
-        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
-        id,
-    )
-    .await
-    .map(Json)
-    .map_err(|_| {
-        (
-            StatusCode::BAD_GATEWAY,
-            "Connection request failed".to_string(),
-        )
-    })
+    let scope = svc.native_scope(actor.user_id).await.map_err(scope_error)?;
+    tokio::spawn(async move { svc.refresh(&scope, id).await })
+        .await
+        .unwrap_or_else(|_| {
+            Err(vox_core::fresh_connections::FreshConnectionError::Provider(
+                "refresh task aborted".into(),
+            ))
+        })
+        .map(Json)
+        .map_err(|error| {
+            tracing::warn!(connection_id = %id, error = %error, "connection refresh failed");
+            match error {
+                vox_core::fresh_connections::FreshConnectionError::Invalid(message)
+                    if message.contains("already syncing") =>
+                {
+                    (
+                        StatusCode::CONFLICT,
+                        "A sync is already running for this account".to_string(),
+                    )
+                }
+                _ => (
+                    StatusCode::BAD_GATEWAY,
+                    "Connection request failed".to_string(),
+                ),
+            }
+        })
 }
 
 #[utoipa::path(post, path = "/v1/me/connections/{id}/disconnect", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 204)))]
@@ -218,6 +232,27 @@ pub async fn import_youtube_history(
         (
             StatusCode::BAD_REQUEST,
             "Unable to import YouTube history".into(),
+        )
+    })
+}
+
+#[utoipa::path(post, path = "/v1/me/connections/maps_timeline/history/import", tag = "connections", security(("bearer_auth" = [])), request_body = YouTubeHistoryImportRequest, responses((status = 200, body = serde_json::Value)))]
+pub async fn import_maps_timeline(
+    State(svc): State<FreshConnectionsService>,
+    Extension(actor): Extension<Actor>,
+    Json(req): Json<YouTubeHistoryImportRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    svc.import_maps_timeline(
+        &svc.native_scope(actor.user_id).await.map_err(scope_error)?,
+        req.history,
+        req.consent,
+    )
+    .await
+    .map(Json)
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Unable to import Google Maps Timeline".into(),
         )
     })
 }

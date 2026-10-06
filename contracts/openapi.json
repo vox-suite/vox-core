@@ -202,7 +202,8 @@
           "line",
           "bar",
           "pie",
-          "area"
+          "area",
+          "stat"
         ],
         "type": "string"
       },
@@ -1531,6 +1532,621 @@
         "required": [
           "token",
           "expires_at"
+        ],
+        "type": "object"
+      },
+      "PulsePoint": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
+      },
+      "SavedPulseChart": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/PulseDefinition"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseResult"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "definition",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "Bucket": {
+        "enum": [
+          "day",
+          "week",
+          "month"
+        ],
+        "type": "string"
+      },
+      "SourceProfile": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "connection_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "dated_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "first_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "known_intervals": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "samples": {
+            "items": {},
+            "type": "array"
+          },
+          "schema_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "timing": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "source",
+          "category",
+          "action",
+          "timing",
+          "currency",
+          "count",
+          "dated_count",
+          "known_intervals",
+          "fields",
+          "samples"
+        ],
+        "type": "object"
+      },
+      "PulseConnection": {
+        "properties": {
+          "assistant_read": {
+            "type": "boolean"
+          },
+          "authorization_state": {
+            "type": "string"
+          },
+          "connector_id": {
+            "type": "string"
+          },
+          "last_synced_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sync_timeline": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connector_id",
+          "authorization_state",
+          "sync_timeline",
+          "assistant_read"
+        ],
+        "type": "object"
+      },
+      "PulseDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "bucket": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Bucket"
+              }
+            ]
+          },
+          "chart_type": {
+            "$ref": "#/components/schemas/ChartType"
+          },
+          "dimension": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measurement_id": {
+            "type": "string"
+          },
+          "offset_days": {
+            "description": "Shift the window back by this many days, e.g. period 7 + offset 7 is the previous 7 days.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "period_days": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "measurement_id",
+          "period_days",
+          "timezone",
+          "chart_type"
+        ],
+        "type": "object"
+      },
+      "Measurement": {
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/Bucket"
+            },
+            "type": "array"
+          },
+          "default_dimension": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MeasurementKind"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/SourceProfile"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "title",
+          "description",
+          "kind",
+          "unit",
+          "quality",
+          "scale",
+          "buckets",
+          "dimensions"
+        ],
+        "type": "object"
+      },
+      "CanvasResponse": {
+        "properties": {
+          "charts": {
+            "items": {
+              "$ref": "#/components/schemas/SavedPulseChart"
+            },
+            "type": "array"
+          },
+          "legacy_boards": {
+            "items": {},
+            "type": "array"
+          },
+          "next_cursor": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "charts",
+          "legacy_boards"
+        ],
+        "type": "object"
+      },
+      "SavePulseInput": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PulseDefinition"
+          },
+          "idempotency_key": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "title",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "DiscoveryResponse": {
+        "properties": {
+          "computed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/PulseConnection"
+            },
+            "type": "array"
+          },
+          "profiled_days": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "record_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "source_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/PulseSuggestion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions",
+          "connections",
+          "source_count",
+          "record_count",
+          "profiled_days",
+          "computed_at"
+        ],
+        "type": "object"
+      },
+      "DiscoveryInput": {
+        "additionalProperties": false,
+        "properties": {
+          "more": {
+            "type": "boolean",
+            "description": "Append a fresh batch to the stored suggestions."
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text request; returns ad-hoc suggestions without touching the stored list."
+          },
+          "refresh": {
+            "type": "boolean"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "MeasurementKind": {
+        "enum": [
+          "event_count",
+          "numeric_sum",
+          "numeric_average",
+          "known_interval_duration",
+          "recurring_cost_projection"
+        ],
+        "type": "string"
+      },
+      "PulseSuggestion": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PulseDefinition"
+          },
+          "measurement": {
+            "$ref": "#/components/schemas/Measurement"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/PulseResult"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "reason",
+          "definition",
+          "measurement",
+          "preview"
+        ],
+        "type": "object"
+      },
+      "PulseResult": {
+        "properties": {
+          "computed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "data_as_of": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PulsePoint"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "record_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "total": {
+            "description": "Headline value for the window: the sum of points, or their mean for averaged measurements.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "undated_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "points",
+          "unit",
+          "quality",
+          "description",
+          "record_count",
+          "undated_count",
+          "computed_at"
+        ],
+        "type": "object"
+      },
+      "ComposeMessage": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "ComposeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            ]
+          },
+          "current_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ComposeMessage"
+            },
+            "type": "array"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ComposeResponse": {
+        "properties": {
+          "definition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            ]
+          },
+          "measurement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Measurement"
+              }
+            ]
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseResult"
+              }
+            ]
+          },
+          "reply": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "reply"
         ],
         "type": "object"
       }
@@ -3420,6 +4036,229 @@
         },
         "tags": [
           "spans"
+        ]
+      }
+    },
+    "/v1/me/pulse/canvas": {
+      "get": {
+        "operationId": "get_canvas",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanvasResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/charts": {
+      "post": {
+        "operationId": "save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePulseInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPulseChart"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/dismissals": {
+      "post": {
+        "operationId": "dismiss",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/measurements": {
+      "get": {
+        "operationId": "list_measurements",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Measurement"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/preview": {
+      "post": {
+        "operationId": "preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PulseResult"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/compose": {
+      "post": {
+        "operationId": "compose",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/suggestions": {
+      "post": {
+        "operationId": "discover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
         ]
       }
     }

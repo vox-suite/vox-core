@@ -20,10 +20,10 @@ impl Tool for ReadConnectedApp {
     type Output = Value;
     type Error = FreshConnectionError;
     fn description(&self) -> String {
-        "Read the user's connected Google Calendar, PlayStation, food delivery, Spotify or YouTube account. Consent is enforced on every invocation. Respect completeness and observed_at. Gaming playDuration is a lifetime counter, not a session duration; exact gaming session times are unknown. Spotify listening timestamps do not prove playback duration. YouTube watch history requires a consented Takeout import; subscriptions and likes are not watch history.".into()
+        "Read the user's connected Google Calendar, PlayStation, food delivery, Spotify or YouTube account. Consent is enforced on every invocation. Respect completeness and observed_at. Gaming playDuration is a lifetime counter, not a session duration; exact gaming session times are unknown. Spotify listening timestamps do not prove playback duration. YouTube watch history requires a consented Takeout import; maps_timeline holds places the user visited from a consented Google Maps Timeline import; subscriptions and likes are not watch history.".into()
     }
     fn parameters(&self) -> Value {
-        json!({"type":"object","properties":{"connector_id":{"type":"string","enum":["google_calendar","playstation","swiggy","zomato","spotify","youtube","youtube_history"]},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["connector_id"]})
+        json!({"type":"object","properties":{"connector_id":{"type":"string","enum":["google_calendar","playstation","swiggy","zomato","spotify","youtube","youtube_history","maps_timeline"]},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["connector_id"]})
     }
     async fn call(
         &self,
