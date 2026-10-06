@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     agents::chart_suggester::SuggestingCharts,
-    domain::{charts::ChartType, identity::Actor, pulse::*},
+    domain::{identity::Actor, pulse::*},
     storage::pulse::{Inventory, PulseMetadata, PulseRepository},
 };
 use chrono::Utc;
@@ -176,94 +176,42 @@ impl PulseService {
         .await
         .map_err(|_| PulseError::Busy)??;
         let meta = self.repo.metadata(actor.user_id, None).await?;
-        let key = Self::key(
-            actor,
-            &meta,
-            &format!(
-                "discovery:{}:{}",
-                input.timezone,
-                Utc::now()
-                    .with_timezone(&input.timezone.parse::<chrono_tz::Tz>().unwrap())
-                    .date_naive()
-            ),
-        );
+        let mut stable = meta.clone();
+        stable.revision = "stable".into();
+        let key = Self::key(actor, &stable, &format!("discovery:{}", input.timezone));
         if let Some(value) = meta.caches.get(&key)
             && (!input.refresh
                 || serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
                     .is_ok_and(|at| at >= arrived))
         {
-            return serde_json::from_value(value.clone())
-                .map_err(|_| PulseError::Invalid("Invalid cached suggestions".into()));
+            let mut cached: DiscoveryResponse = serde_json::from_value(value.clone())
+                .map_err(|_| PulseError::Invalid("Invalid cached suggestions".into()))?;
+            cached.suggestions.retain(|s| {
+                let hash = definition_hash(&s.definition);
+                !meta.dismissed.contains(&hash) && !meta.saved_hashes.contains(&hash)
+            });
+            return Ok(cached);
         }
         let inventory = self.inventory(actor, &meta, input.refresh).await?;
         let catalog = measurement_catalog(&inventory.profiles);
         let mut candidates = vec![];
-        // Prefer one meaningful metric per profile, before alternate views.
-        let mut ranked = catalog.clone();
-        ranked.sort_by_key(|m| {
-            (
-                matches!(m.kind, MeasurementKind::EventCount),
-                std::cmp::Reverse(m.profile.count),
-            )
-        });
-        for m in &ranked {
-            let (bucket, dimension) = if let Some(d) = &m.default_dimension {
-                (None, Some(d.clone()))
-            } else {
-                (m.buckets.first().cloned(), None)
-            };
-            if bucket.is_none() && dimension.is_none() {
-                continue;
-            }
-            candidates.push(PulseCandidate {
-                title: m.title.clone(),
-                reason: format!(
-                    "Based on {} recorded {} entries.",
-                    m.profile.count, m.profile.source
-                ),
-                definition: PulseDefinition {
-                    version: 2,
-                    measurement_id: m.id.clone(),
-                    bucket,
-                    dimension,
-                    period_days: 30,
-                    timezone: input.timezone.clone(),
-                    chart_type: ChartType::Bar,
-                },
-            });
-        }
-        for m in &ranked {
-            if let Some(dim) = m.dimensions.first() {
-                candidates.push(PulseCandidate {
-                    title: format!("{} by {}", m.title, dim),
-                    reason: m.description.clone(),
-                    definition: PulseDefinition {
-                        version: 2,
-                        measurement_id: m.id.clone(),
-                        bucket: None,
-                        dimension: Some(dim.clone()),
-                        period_days: 30,
-                        timezone: input.timezone.clone(),
-                        chart_type: ChartType::Bar,
-                    },
-                })
-            }
-        }
+        let mut llm_ok = false;
         if !catalog.is_empty()
             && let Some(suggester) = &self.suggester
         {
             let ranked = tokio::time::timeout(
-                std::time::Duration::from_secs(20),
+                std::time::Duration::from_secs(180),
                 suggester.suggest_pulse(
                     catalog.iter().take(40).cloned().collect(),
                     input.timezone.clone(),
                 ),
             )
             .await;
-            if let Ok(Ok(ai)) = ranked {
-                let mut combined = ai;
-                combined.extend(candidates);
-                candidates = combined;
+            if let Ok(Ok(ai)) = ranked
+                && !ai.is_empty()
+            {
+                llm_ok = true;
+                candidates = ai;
             }
         }
         let mut valid = vec![];
@@ -346,7 +294,12 @@ impl PulseService {
             computed_at: Utc::now(),
         };
         self.repo
-            .put_cache(actor.user_id, &key, json!(response), 900)
+            .put_cache(
+                actor.user_id,
+                &key,
+                json!(response),
+                if llm_ok { 31_536_000 } else { 60 },
+            )
             .await?;
         Ok(response)
     }
