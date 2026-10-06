@@ -26,10 +26,6 @@ use crate::{
         identity::get_me,
         internal::dispatch_device_request,
         live::{LiveApiState, live_socket},
-        location::{
-            get_consent as get_location_consent, grant_consent as grant_location_consent,
-            revoke_consent as revoke_location_consent, submit_segments,
-        },
         map_scene::get_map_scene,
         phone::{PhoneApiState, confirm_phone_verification, link_phone, start_phone_verification},
         records::{create_record, delete_record, get_record, list_records, update_record},
@@ -102,22 +98,6 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/sms/consent/revoke",
             post(revoke_consent).layer(refresh_cache.clone()),
-        )
-        .with_state(state.consent.clone());
-
-    let location_routes = Router::new()
-        .route("/v1/location/segments", post(submit_segments))
-        .with_state(state.location_ingestion.clone());
-
-    let location_consent_routes = Router::new()
-        .route("/v1/location/consent/get", post(get_location_consent))
-        .route(
-            "/v1/location/consent/grant",
-            post(grant_location_consent).layer(refresh_cache.clone()),
-        )
-        .route(
-            "/v1/location/consent/revoke",
-            post(revoke_location_consent).layer(refresh_cache.clone()),
         )
         .with_state(state.consent.clone());
 
@@ -263,6 +243,11 @@ pub fn build_api_router(state: ApiState) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route(
+            "/v1/me/connections/maps_timeline/history/import",
+            post(crate::routes::connections::import_maps_timeline)
+                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
             "/v1/me/connections/setup/{id}/cancel",
             post(crate::routes::connections::cancel_setup),
         )
@@ -314,8 +299,6 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(sms_routes)
         .merge(client_log_routes)
         .merge(sms_consent_routes)
-        .merge(location_routes)
-        .merge(location_consent_routes)
         .merge(device_routes)
         .merge(device_socket_routes)
         .merge(event_routes)

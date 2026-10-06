@@ -71,7 +71,7 @@ impl SpanService {
         if let Some(span) = self.repo.get_by_id(actor.user_id, id).await?
             && matches!(
                 span.source.as_str(),
-                "google_calendar" | "spotify" | "youtube"
+                "google_calendar" | "spotify" | "youtube" | "google_maps"
             )
             && (patch.title.is_some()
                 || patch.start_at.is_some()

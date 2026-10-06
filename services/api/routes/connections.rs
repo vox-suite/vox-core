@@ -213,6 +213,23 @@ pub async fn import_youtube_history(
         })
 }
 
+#[utoipa::path(post, path = "/v1/me/connections/maps_timeline/history/import", tag = "connections", security(("bearer_auth" = [])), request_body = YouTubeHistoryImportRequest, responses((status = 200, body = serde_json::Value)))]
+pub async fn import_maps_timeline(
+    State(svc): State<FreshConnectionsService>,
+    Extension(actor): Extension<Actor>,
+    Json(req): Json<YouTubeHistoryImportRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    svc.import_maps_timeline(actor.user_id, req.history, req.consent)
+        .await
+        .map(Json)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Unable to import Google Maps Timeline".into(),
+            )
+        })
+}
+
 #[utoipa::path(post, path = "/v1/me/connections/{id}/read", tag = "connections", security(("bearer_auth" = [])), params(("id" = Uuid, Path)), responses((status = 200, body = serde_json::Value)))]
 pub async fn read_personal(
     State(svc): State<FreshConnectionsService>,

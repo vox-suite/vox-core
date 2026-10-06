@@ -12,7 +12,6 @@ use vox_core::{
     consent::ConsentService,
     db::Db,
     http::AppState,
-    location_ingestion::LocationIngestionService,
     memory::MemoryService,
     realtime::{DeviceHub, UserEventHub},
     sms_ingestion::SmsIngestionService,
@@ -35,7 +34,6 @@ pub struct ApiState {
     pub memory: MemoryService,
     pub user_events: UserEventHub,
     pub sms_ingestion: SmsIngestionService,
-    pub location_ingestion: LocationIngestionService,
     pub consent: ConsentService,
     pub tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
     pub stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
@@ -78,8 +76,6 @@ impl ApiState {
         let schemas = SchemaService::new(schema_repo);
         let devices = DeviceService::new(device_repo);
         let sms_ingestion = SmsIngestionService::new(db.clone());
-        let location_ingestion =
-            LocationIngestionService::new(db.clone(), config.google_maps_api_key.clone());
         let consent = ConsentService::new(db.clone());
         let connections = vox_core::fresh_connections::FreshConnectionsService::new(
             pool.clone(),
@@ -103,7 +99,6 @@ impl ApiState {
             memory,
             user_events,
             sms_ingestion,
-            location_ingestion,
             consent,
             tts,
             stt,

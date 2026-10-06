@@ -7,6 +7,7 @@ use utoipa::OpenApi;
     crate::routes::connections::list_connectors,
     crate::routes::connections::read_personal,
     crate::routes::connections::import_youtube_history,
+    crate::routes::connections::import_maps_timeline,
     crate::routes::connections::list_connections,
     crate::routes::connections::start_connection,
     crate::routes::connections::setup_status,

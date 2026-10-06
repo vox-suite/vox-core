@@ -37,7 +37,6 @@ pub mod identity_adapters;
 pub mod ingestion;
 pub mod jev;
 pub mod jobs;
-pub mod location_ingestion;
 pub mod map_scene;
 pub mod memory;
 pub mod outbound;
