@@ -86,7 +86,7 @@ async fn execute_inner(
  deduped AS (SELECT * FROM values WHERE timing<>'first_to_last_played' UNION ALL SELECT index,label,max(val) AS val,min(kind) AS kind,timing,entity FROM values WHERE timing='first_to_last_played' GROUP BY index,label,timing,entity),
  totals AS (SELECT index,label,CASE WHEN min(kind)='numeric_average' THEN avg(val) ELSE sum(val) END::float8 AS value FROM deduped WHERE val IS NOT NULL GROUP BY index,label),
  ranked AS (SELECT *,row_number() OVER(PARTITION BY index ORDER BY value DESC,label) AS rank FROM totals),
- points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY label) AS points FROM ranked WHERE rank<=CASE WHEN (SELECT r->>'bucket' FROM requests WHERE (r->>'index')::int=ranked.index) IS NULL THEN 20 ELSE 366 END GROUP BY index)
+ points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY label) AS points FROM ranked WHERE rank<=CASE WHEN (SELECT r->>'bucket' FROM requests WHERE (r->>'index')::int=ranked.index) IS NULL THEN 20 ELSE 1100 END GROUP BY index)
  SELECT COALESCE(jsonb_agg(jsonb_build_object('index',(r->>'index')::int,'points',COALESCE(points.points,'[]')) ORDER BY (r->>'index')::int),'[]') FROM requests LEFT JOIN points ON points.index=(r->>'index')::int
  "#,
         allowed = ALLOWED_SPANS,

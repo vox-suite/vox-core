@@ -235,7 +235,7 @@ pub fn validate_definition(
     catalog: &[Measurement],
 ) -> Result<Measurement, String> {
     if d.version != 2
-        || !(1..=365).contains(&d.period_days)
+        || !(1..=3650).contains(&d.period_days)
         || d.offset_days > 730
         || d.timezone.parse::<chrono_tz::Tz>().is_err()
     {
@@ -246,6 +246,9 @@ pub fn validate_definition(
         .find(|m| m.id == d.measurement_id)
         .ok_or("Measurement is unavailable or its source access has changed")?
         .clone();
+    if d.period_days > 365 && d.bucket == Some(Bucket::Day) {
+        return Err("Use weeks or months for periods longer than a year".into());
+    }
     match (&d.bucket, &d.dimension) {
         (Some(bucket), None) if m.buckets.contains(bucket) => {}
         (None, Some(field)) if m.dimensions.contains(field) => {}
