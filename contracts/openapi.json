@@ -1920,6 +1920,17 @@
       "DiscoveryInput": {
         "additionalProperties": false,
         "properties": {
+          "more": {
+            "type": "boolean",
+            "description": "Append a fresh batch to the stored suggestions."
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text request; returns ad-hoc suggestions without touching the stored list."
+          },
           "refresh": {
             "type": "boolean"
           },

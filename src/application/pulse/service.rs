@@ -179,10 +179,15 @@ impl PulseService {
         let mut stable = meta.clone();
         stable.revision = "stable".into();
         let key = Self::key(actor, &stable, &format!("discovery:{}", input.timezone));
-        if let Some(value) = meta.caches.get(&key)
-            && (!input.refresh
-                || serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
-                    .is_ok_and(|at| at >= arrived))
+        let prompt = input
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(|p| p.chars().take(500).collect::<String>());
+        let mut existing: Option<DiscoveryResponse> = None;
+        if prompt.is_none()
+            && let Some(value) = meta.caches.get(&key)
         {
             let mut cached: DiscoveryResponse = serde_json::from_value(value.clone())
                 .map_err(|_| PulseError::Invalid("Invalid cached suggestions".into()))?;
@@ -190,8 +195,21 @@ impl PulseService {
                 let hash = definition_hash(&s.definition);
                 !meta.dismissed.contains(&hash) && !meta.saved_hashes.contains(&hash)
             });
-            return Ok(cached);
+            let fresh =
+                serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
+                    .is_ok_and(|at| at >= arrived);
+            if input.more || (input.refresh && !fresh) {
+                existing = Some(cached);
+            } else {
+                return Ok(cached);
+            }
         }
+        let limit: usize = if prompt.is_some() { 4 } else { 8 };
+        let kept: Vec<PulseSuggestion> = if input.refresh {
+            vec![]
+        } else {
+            existing.take().map(|e| e.suggestions).unwrap_or_default()
+        };
         let inventory = self.inventory(actor, &meta, input.refresh).await?;
         let catalog = measurement_catalog(&inventory.profiles);
         let mut candidates = vec![];
@@ -204,6 +222,11 @@ impl PulseService {
                 suggester.suggest_pulse(
                     catalog.iter().take(40).cloned().collect(),
                     input.timezone.clone(),
+                    crate::agents::chart_suggester::PulseAsk {
+                        instruction: prompt.clone(),
+                        exclude_titles: kept.iter().map(|s| s.title.clone()).collect(),
+                        limit,
+                    },
                 ),
             )
             .await;
@@ -215,7 +238,10 @@ impl PulseService {
             }
         }
         let mut valid = vec![];
-        let mut hashes = std::collections::HashSet::new();
+        let mut hashes: std::collections::HashSet<String> = kept
+            .iter()
+            .map(|s| definition_hash(&s.definition))
+            .collect();
         for mut candidate in candidates {
             candidate.title = candidate.title.chars().take(120).collect();
             candidate.reason = candidate.reason.chars().take(400).collect();
@@ -243,15 +269,15 @@ impl PulseService {
                 }
             }
             let hash = definition_hash(&candidate.definition);
-            if meta.dismissed.contains(&hash)
-                || meta.saved_hashes.contains(&hash)
+            if (prompt.is_none()
+                && (meta.dismissed.contains(&hash) || meta.saved_hashes.contains(&hash)))
                 || !hashes.insert(hash)
             {
                 continue;
             }
             if let Ok(measurement) = validate_definition(&candidate.definition, &catalog) {
                 valid.push((candidate, measurement));
-                if valid.len() == 12 {
+                if valid.len() == limit * 2 {
                     break;
                 }
             }
@@ -270,7 +296,7 @@ impl PulseService {
                 continue;
             }
             let source = measurement.profile.key.clone();
-            if sources.contains(&source) && suggestions.len() < 3 {
+            if prompt.is_none() && sources.contains(&source) && suggestions.len() < 3 {
                 continue;
             }
             sources.insert(source);
@@ -281,10 +307,13 @@ impl PulseService {
                 measurement,
                 preview,
             });
-            if suggestions.len() == 6 {
+            if suggestions.len() == limit {
                 break;
             }
         }
+        let mut all = kept;
+        all.extend(suggestions);
+        let suggestions = all;
         let response = DiscoveryResponse {
             suggestions,
             connections: meta.connections,
@@ -293,14 +322,16 @@ impl PulseService {
             profiled_days: 90,
             computed_at: Utc::now(),
         };
-        self.repo
-            .put_cache(
-                actor.user_id,
-                &key,
-                json!(response),
-                if llm_ok { 31_536_000 } else { 60 },
-            )
-            .await?;
+        if prompt.is_none() {
+            self.repo
+                .put_cache(
+                    actor.user_id,
+                    &key,
+                    json!(response),
+                    if llm_ok { 31_536_000 } else { 60 },
+                )
+                .await?;
+        }
         Ok(response)
     }
     pub async fn preview(

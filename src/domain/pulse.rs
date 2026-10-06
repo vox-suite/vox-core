@@ -126,6 +126,12 @@ pub struct DiscoveryInput {
     pub timezone: String,
     #[serde(default)]
     pub refresh: bool,
+    /// Append a fresh batch to the stored suggestions.
+    #[serde(default)]
+    pub more: bool,
+    /// Free-text request; returns ad-hoc suggestions without touching the stored list.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
