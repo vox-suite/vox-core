@@ -17,8 +17,9 @@ use vox_core::domain::identity::Actor;
 
 const LIVE_SOCKET_PATH: &str = "/v1/me/events/socket";
 const SUBPROTOCOL_TOKEN_PREFIX: &str = "bearer.";
-const WEB_SCOPE_PREFIXES: [&str; 8] = [
+const WEB_SCOPE_PREFIXES: [&str; 9] = [
     "/v1/spans",
+    "/v1/integrations/authorize",
     "/v1/collections",
     "/v1/me/schemas",
     "/v1/me/charts",
@@ -74,47 +75,56 @@ pub async fn extract_actor(
             .as_deref()
             .or(claims.email.as_deref())
             .unwrap_or("Vox User");
-        let mut tx = pool
-            .begin()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query(
-            "INSERT INTO users (id, status, display_name) \
-             VALUES ($1, 'active', $2) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(user_id)
-        .bind(display_name)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query(
-            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
-             SELECT d.id, h.id, $1::text, $2::uuid \
-             FROM platform_deployments d \
-             JOIN host_apps h ON h.deployment_id = d.id \
-             WHERE d.external_key = 'vox.standalone.deployment' \
-               AND h.external_key = 'vox.standalone.web' \
-             ON CONFLICT (user_id) DO NOTHING",
-        )
-        .bind(user_id.to_string())
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let has_context = sqlx::query_scalar::<_, bool>(
+        let known = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
         )
         .bind(user_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if !has_context {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        tx.commit()
+        if !known {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query(
+                "INSERT INTO users (id, status, display_name) \
+                 VALUES ($1, 'active', $2) \
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(display_name)
+            .execute(&mut *tx)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query(
+                "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+                 SELECT d.id, h.id, $1::text, $2::uuid \
+                 FROM platform_deployments d \
+                 JOIN host_apps h ON h.deployment_id = d.id \
+                 WHERE d.external_key = 'vox.standalone.deployment' \
+                   AND h.external_key = 'vox.standalone.web' \
+                 ON CONFLICT (user_id) DO NOTHING",
+            )
+            .bind(user_id.to_string())
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let has_context = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
+            )
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if !has_context {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            tx.commit()
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
 
         let actor = Actor::user(user_id);
         req.extensions_mut().insert(actor);
@@ -151,4 +161,49 @@ pub async fn extract_actor(
     req.extensions_mut().insert(actor);
 
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod integration_boundary_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires dedicated INTEGRATION_TEST_DATABASE_URL with Core migrations"]
+    async fn delegated_bearer_cannot_authenticate_general_user_route() {
+        let pool = PgPool::connect(&std::env::var("INTEGRATION_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let user = sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let grant=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_grants(user_id,client_id,collection_ids,board_ids,allow_create_plans) VALUES($1,'share_to_action','{}','{}',true) RETURNING id").bind(user).fetch_one(&pool).await.unwrap();
+        let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        sqlx::query("INSERT INTO integration_tokens(access_hash,refresh_hash,grant_id,access_expires_at,refresh_expires_at) VALUES($1,$2,$3,now()+interval '1 hour',now()+interval '1 day')").bind(vox_core::integrations::hash(&token)).bind(Uuid::new_v4().to_string()).bind(grant).execute(&pool).await.unwrap();
+        let app = axum::Router::new()
+            .route(
+                "/v1/spans",
+                axum::routing::post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                pool.clone(),
+                extract_actor,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/v1/spans"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401);
+        server.abort();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

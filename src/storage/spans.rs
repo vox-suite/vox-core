@@ -142,11 +142,13 @@ impl SpanRepository {
             return Ok(ConcurrencyOutcome::Conflict);
         }
 
-        if matches!(source.as_str(), "google_calendar" | "spotify" | "youtube" | "google_maps")
-            && (patch.title.is_some()
-                || patch.start_at.is_some()
-                || patch.end_at.is_some()
-                || patch.status.is_some())
+        if matches!(
+            source.as_str(),
+            "google_calendar" | "spotify" | "youtube" | "google_maps"
+        ) && (patch.title.is_some()
+            || patch.start_at.is_some()
+            || patch.end_at.is_some()
+            || patch.status.is_some())
         {
             return Ok(ConcurrencyOutcome::Conflict);
         }

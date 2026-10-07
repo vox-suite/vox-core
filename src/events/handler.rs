@@ -20,6 +20,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const BATCH_CONCURRENCY: usize = 4;
+const STALE_EVENT_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct EventHandler {
@@ -99,7 +100,7 @@ impl EventHandler {
             return Ok(());
         };
 
-        let triage = match triager.triage(&event_type, &payload).await {
+        let mut triage = match triager.triage(&event_type, &payload).await {
             Ok(triage) => triage,
             Err(err) => {
                 return self
@@ -108,6 +109,12 @@ impl EventHandler {
             }
         };
 
+        if source_kind == "sms"
+            && payload.get("authorization_only").and_then(Value::as_bool) == Some(true)
+        {
+            triage.action = EventTriageAction::StoreRecord;
+        }
+
         tracing::info!(
             event_id = %event_id.0,
             action = ?triage.action,
@@ -115,6 +122,12 @@ impl EventHandler {
             is_critical_alert = triage.is_critical_alert,
             "Jev System 1: event triage decision"
         );
+
+        if triage.action == EventTriageAction::PlanAction
+            && Utc::now() - occurred_at > chrono::Duration::hours(STALE_EVENT_HOURS)
+        {
+            triage.action = EventTriageAction::StoreRecord;
+        }
 
         if triage.action == EventTriageAction::Ignore && triage.confidence >= 0.80 {
             tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
@@ -339,6 +352,28 @@ impl EventHandler {
         occurred_at: DateTime<Utc>,
         source_kind: &str,
     ) -> Result<(), EventHandlerError> {
+        // Authorization SMS is an attempt, never proof of a debit. Enforce
+        // this independently of the model's extraction choices.
+        let authorization_only = if source_kind == "sms" {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT COALESCE((payload->>'authorization_only')::boolean, false) FROM inbound_events WHERE id = $1",
+            )
+            .bind(event_id.0)
+            .fetch_optional(self.db.pool())
+            .await?
+            .unwrap_or(false)
+        } else {
+            false
+        };
+        let mut data = data.clone();
+        if authorization_only && let Some(fields) = data.as_object_mut() {
+            fields.insert("direction".into(), serde_json::json!("info"));
+            fields.insert(
+                "status".into(),
+                serde_json::json!("authorization_requested"),
+            );
+            fields.insert("authorization_only".into(), serde_json::json!(true));
+        }
         let span_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO spans (user_id, title, category, source, status, start_at, data, schema_id, source_event_id) \
              SELECT $1, $2, s.name, $3, 'done', $4, $5, s.id, $6 \
@@ -349,15 +384,20 @@ impl EventHandler {
         .bind(title)
         .bind(source_kind)
         .bind(occurred_at)
-        .bind(data)
+        .bind(&data)
         .bind(event_id.0)
         .bind(schema_id)
         .fetch_one(self.db.pool())
         .await?;
 
-        if source_kind == "sms" {
-            crate::sms_ingestion::finance::dedupe_or_settle(self.db.pool(), user_id, span_id, data)
-                .await?;
+        if source_kind == "sms" && !authorization_only {
+            crate::sms_ingestion::finance::dedupe_or_settle(
+                self.db.pool(),
+                user_id,
+                span_id,
+                &data,
+            )
+            .await?;
         }
 
         self.delete_inbound_event(event_id).await

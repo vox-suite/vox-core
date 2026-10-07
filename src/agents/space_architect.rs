@@ -49,6 +49,7 @@ fn build_preamble(available_schemas: &[DataSchema]) -> String {
          Given a user's vision/intent and their existing timeline data categories, produce a tailored agent specification.\n\
          Output ONLY a valid JSON object, with no markdown fences, matching this structure:\n\
          {{\n\
+           \"title\": \"A short, specific title of 2-5 words for this space\",\n\
            \"mission\": \"Clear, concise mission statement of what to explore and achieve\",\n\
            \"look_for\": [\n\
              \"Specific data to query or check from user categories (e.g. recent expenses, budget, past trips)\",\n\
@@ -93,6 +94,9 @@ impl SpaceArchitecting for GeminiSpaceArchitect {
         let json_text = structured_json(&raw);
         match serde_json::from_str::<AgentSpec>(json_text) {
             Ok(mut spec) => {
+                if spec.title.trim().is_empty() {
+                    spec.title = fallback_title(intent);
+                }
                 if spec.limits.max_steps == 0 {
                     spec.limits.max_steps = crate::config::DEFAULT_SPACE_MAX_STEPS;
                 }
@@ -106,8 +110,14 @@ impl SpaceArchitecting for GeminiSpaceArchitect {
     }
 }
 
+fn fallback_title(intent: &str) -> String {
+    let words: Vec<&str> = intent.split_whitespace().take(5).collect();
+    words.join(" ")
+}
+
 fn fallback_spec(intent: &str) -> AgentSpec {
     AgentSpec {
+        title: fallback_title(intent),
         mission: format!("Explore and plan: {}", intent),
         look_for: vec![
             "User's past spending and budget headroom".to_string(),

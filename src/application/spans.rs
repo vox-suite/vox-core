@@ -62,6 +62,29 @@ impl SpanService {
         Ok(span)
     }
 
+    pub async fn create_span_in_transaction(
+        &self,
+        actor: &Actor,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        input: NewSpan,
+    ) -> Result<Uuid, SpanServiceError> {
+        if input.title.trim().is_empty() {
+            return Err(SpanServiceError::Invalid("title must not be empty"));
+        }
+        if input.start_at.zip(input.end_at).is_some_and(|(s, e)| e < s) {
+            return Err(SpanServiceError::Invalid(
+                "end_at must not precede start_at",
+            ));
+        }
+        SpanRepository::record_in_transaction(tx, actor.user_id, input)
+            .await
+            .map_err(missing_reference)
+    }
+
+    pub fn notify_created(&self, user_id: Uuid, span_id: Uuid) {
+        self.notify(user_id, "span_created", span_id);
+    }
+
     pub async fn update_span(
         &self,
         actor: &Actor,

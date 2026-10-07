@@ -38,6 +38,16 @@ use crate::{
 };
 
 pub fn build_api_router(state: ApiState) -> Router {
+    let integration_service = vox_core::integrations::IntegrationService::new(
+        state.pool.clone(),
+        state.spans.clone(),
+        state.collections.clone(),
+        state.charts.clone(),
+    );
+    let integration_public =
+        vox_core::integrations::http::public_router(integration_service.clone());
+    let integration_authorize =
+        vox_core::integrations::http::authorization_router(integration_service);
     let auth_routes = Router::new()
         .route("/v1/auth/exchange", post(exchange_token))
         .with_state(state.pool.clone());
@@ -171,6 +181,31 @@ pub fn build_api_router(state: ApiState) -> Router {
         schemas: state.schemas.clone(),
         suggester: state.chart_suggester.clone(),
     };
+    let pulse_service = vox_core::application::pulse::service::PulseService::new(
+        vox_core::storage::pulse::PulseRepository::new(state.pool.clone()),
+    )
+    .with_suggester(state.chart_suggester.clone());
+    let pulse_routes = Router::new()
+        .route("/v1/me/pulse/canvas", get(crate::routes::pulse::get_canvas))
+        .route(
+            "/v1/me/pulse/measurements",
+            get(crate::routes::pulse::list_measurements),
+        )
+        .route(
+            "/v1/me/pulse/suggestions",
+            post(crate::routes::pulse::discover),
+        )
+        .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
+        .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
+        .route(
+            "/v1/me/pulse/charts/{id}",
+            axum::routing::delete(crate::routes::pulse::delete_chart),
+        )
+        .route(
+            "/v1/me/pulse/dismissals",
+            post(crate::routes::pulse::dismiss),
+        )
+        .with_state(pulse_service);
     let chart_routes = Router::new()
         .route("/v1/me/charts/suggest", post(suggest_charts))
         .route(
@@ -293,6 +328,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.connections.clone());
 
     let protected_routes = span_routes
+        .merge(integration_authorize)
         .merge(collection_routes)
         .merge(record_routes)
         .merge(schema_routes)
@@ -308,6 +344,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(map_scene_routes)
         .merge(voice_routes)
         .merge(chart_routes)
+        .merge(pulse_routes)
         .merge(space_routes)
         .merge(web_token_routes)
         .merge(connection_routes)
@@ -321,6 +358,7 @@ pub fn build_api_router(state: ApiState) -> Router {
     base_legacy_router
         .merge(openapi_route)
         .merge(auth_routes)
+        .merge(integration_public)
         .merge(internal_routes)
         .merge(google_callback_route)
         .merge(protected_routes)

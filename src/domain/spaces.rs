@@ -84,6 +84,8 @@ fn default_max_children() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentSpec {
+    #[serde(default)]
+    pub title: String,
     pub mission: String,
     #[serde(default)]
     pub look_for: Vec<String>,

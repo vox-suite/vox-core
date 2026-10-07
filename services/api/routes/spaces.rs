@@ -35,7 +35,8 @@ pub struct SpaceApiState {
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSpaceInput {
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub intent: String,
 }
 
@@ -70,9 +71,8 @@ pub async fn create_space(
     Extension(actor): Extension<Actor>,
     Json(input): Json<CreateSpaceInput>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let title = input.title.trim();
     let intent = input.intent.trim();
-    if title.is_empty() || intent.is_empty() {
+    if intent.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -87,6 +87,18 @@ pub async fn create_space(
         .generate_spec(intent, &available_schemas)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let title = input
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(spec.title.trim());
+    let title = if title.is_empty() {
+        "Untitled space"
+    } else {
+        title
+    };
 
     let spec_json = serde_json::to_value(&spec).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

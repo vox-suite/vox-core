@@ -51,7 +51,7 @@ impl EventTriager {
                 vec![
                     ("ignore", Some("Routine telemetry, duplicate, ping, heartbeat, or benign event requiring no user action")),
                     ("store_record", Some("Passive personal metric, vitals, location breadcrumb, log, or telemetry to validate and record")),
-                    ("plan_action", Some("Important change or event requiring notification, outbound call, or reactive task planning")),
+                    ("plan_action", Some("Only when the user must be told something or act on it now: an alert, an upcoming deadline, a request, or a time-sensitive change. Completed transactions, receipts, statements, promotions and other past-tense messages are store_record")),
                 ],
             ),
         );
