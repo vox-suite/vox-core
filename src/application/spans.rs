@@ -200,8 +200,21 @@ impl SpanService {
                 day_bounds(day, tz).map(|(start, end)| (day, start, end))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let revision = self.repo.revision(actor.user_id).await?;
+        if query.if_revision == Some(revision) {
+            return Ok(SpanDays {
+                revision,
+                unchanged: true,
+                days: Vec::new(),
+            });
+        }
         Ok(SpanDays {
-            days: self.repo.day_counts(actor.user_id, &bounds).await?,
+            revision,
+            unchanged: false,
+            days: self
+                .repo
+                .day_counts(actor.user_id, query.collection_id, &bounds)
+                .await?,
         })
     }
 
@@ -214,9 +227,17 @@ impl SpanService {
         let (start, end) = day_bounds(query.day, tz)?;
         let after = query.cursor.as_deref().map(decode_cursor).transpose()?;
         let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
+        let revision = self.repo.revision(actor.user_id).await?;
         let mut items = self
             .repo
-            .day_page(actor.user_id, start, end, after, limit + 1)
+            .day_page(
+                actor.user_id,
+                query.collection_id,
+                start,
+                end,
+                after,
+                limit + 1,
+            )
             .await?;
         let has_more = items.len() as i64 > limit;
         items.truncate(limit as usize);
@@ -225,7 +246,11 @@ impl SpanService {
         } else {
             None
         };
-        Ok(SpanDayPage { items, next_cursor })
+        Ok(SpanDayPage {
+            revision,
+            items,
+            next_cursor,
+        })
     }
 
     pub async fn delete_span(&self, actor: &Actor, id: Uuid) -> Result<bool, sqlx::Error> {
@@ -251,5 +276,214 @@ fn missing_reference(err: sqlx::Error) -> SpanServiceError {
             SpanServiceError::ReferenceNotFound
         }
         _ => SpanServiceError::Database(err),
+    }
+}
+
+#[cfg(test)]
+mod day_tests {
+    use super::*;
+    use crate::db::Db;
+    use std::collections::HashSet;
+
+    async fn insert(
+        pool: &sqlx::PgPool,
+        user: Uuid,
+        title: &str,
+        category: &str,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+    ) {
+        sqlx::query(
+            "INSERT INTO spans (user_id, title, category, source, status, start_at, end_at)
+             VALUES ($1, $2, $3, 'test', 'done', $4, $5)",
+        )
+        .bind(user)
+        .bind(title)
+        .bind(category)
+        .bind(start)
+        .bind(end)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated TEST_DATABASE_URL"]
+    async fn day_counts_and_pages_respect_timezone_overlap_and_cursor() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").expect("isolated database"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        crate::identity::IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let service = SpanService::new(
+            SpanRepository::new(db.pool().clone()),
+            crate::realtime::UserEventHub::new(),
+        );
+        let actor = Actor::user(user);
+        let ist = chrono_tz::Asia::Kolkata;
+        let day = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+        let at = |d: NaiveDate, h: u32, m: u32| {
+            ist.from_local_datetime(&d.and_hms_opt(h, m, 0).unwrap())
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+
+        for i in 0..95 {
+            let cat = if i % 2 == 0 { "money" } else { "music" };
+            let start = at(day, 8, 0) + Duration::minutes(i * 5);
+            insert(db.pool(), user, &format!("e{i}"), cat, Some(start), None).await;
+        }
+        insert(
+            db.pool(),
+            user,
+            "late",
+            "money",
+            Some(at(day, 23, 30)),
+            None,
+        )
+        .await;
+        insert(
+            db.pool(),
+            user,
+            "tomorrow-early",
+            "money",
+            Some(at(day.succ_opt().unwrap(), 0, 30)),
+            None,
+        )
+        .await;
+        insert(
+            db.pool(),
+            user,
+            "overnight",
+            "sleep",
+            Some(at(day.pred_opt().unwrap(), 22, 0)),
+            Some(at(day, 2, 0)),
+        )
+        .await;
+        insert(db.pool(), user, "unscheduled", "money", None, None).await;
+
+        let counts = service
+            .day_counts(
+                &actor,
+                &SpanDaysQuery {
+                    from_day: day.pred_opt().unwrap(),
+                    to_day: day.succ_opt().unwrap(),
+                    timezone: "Asia/Kolkata".into(),
+                    collection_id: None,
+                    if_revision: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(counts.revision > 0 && !counts.unchanged);
+        let same = service
+            .day_counts(
+                &actor,
+                &SpanDaysQuery {
+                    from_day: day,
+                    to_day: day,
+                    timezone: "Asia/Kolkata".into(),
+                    collection_id: None,
+                    if_revision: Some(counts.revision),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(same.unchanged && same.days.is_empty());
+        let other = service
+            .day_counts(
+                &actor,
+                &SpanDaysQuery {
+                    from_day: day,
+                    to_day: day,
+                    timezone: "Asia/Kolkata".into(),
+                    collection_id: Some(Uuid::new_v4()),
+                    if_revision: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(other.days.is_empty());
+        let count_of = |d: NaiveDate| {
+            counts
+                .days
+                .iter()
+                .find(|s| s.day == d)
+                .map_or(0, |s| s.count)
+        };
+        assert_eq!(count_of(day.pred_opt().unwrap()), 1);
+        assert_eq!(count_of(day), 95 + 1 + 1);
+        assert_eq!(count_of(day.succ_opt().unwrap()), 1);
+
+        let mut seen = HashSet::new();
+        let mut cursor = None;
+        let mut pages = 0;
+        let mut last_start = None;
+        loop {
+            let page = service
+                .day_page(
+                    &actor,
+                    &SpanDayQuery {
+                        day,
+                        timezone: "Asia/Kolkata".into(),
+                        collection_id: None,
+                        cursor: cursor.clone(),
+                        limit: Some(40),
+                    },
+                )
+                .await
+                .unwrap();
+            pages += 1;
+            for span in &page.items {
+                assert!(seen.insert(span.id), "duplicate across pages");
+                assert!(last_start <= span.start_at, "ordering broke");
+                last_start = span.start_at;
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(seen.len(), 97);
+        assert_eq!(pages, 3);
+
+        insert(db.pool(), user, "bump", "money", Some(at(day, 9, 0)), None).await;
+        let bumped = service
+            .day_counts(
+                &actor,
+                &SpanDaysQuery {
+                    from_day: day,
+                    to_day: day,
+                    timezone: "Asia/Kolkata".into(),
+                    collection_id: None,
+                    if_revision: Some(counts.revision),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!bumped.unchanged && bumped.revision > counts.revision);
+
+        assert!(
+            service
+                .day_counts(
+                    &actor,
+                    &SpanDaysQuery {
+                        from_day: day,
+                        to_day: day,
+                        timezone: "Mars/Olympus".into(),
+                        collection_id: None,
+                        if_revision: None,
+                    },
+                )
+                .await
+                .is_err()
+        );
     }
 }

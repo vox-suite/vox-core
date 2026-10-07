@@ -117,9 +117,20 @@ impl SpanRepository {
         Ok(rows.into_iter().map(map_span).collect())
     }
 
+    pub async fn revision(&self, user_id: Uuid) -> Result<i64, sqlx::Error> {
+        Ok(
+            sqlx::query_scalar("SELECT revision FROM span_revisions WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(0),
+        )
+    }
+
     pub async fn day_counts(
         &self,
         user_id: Uuid,
+        collection_id: Option<Uuid>,
         bounds: &[(NaiveDate, DateTime<Utc>, DateTime<Utc>)],
     ) -> Result<Vec<SpanDaySummary>, sqlx::Error> {
         let days: Vec<NaiveDate> = bounds.iter().map(|b| b.0).collect();
@@ -132,6 +143,9 @@ impl SpanRepository {
                  SELECT category FROM spans
                  WHERE user_id = $1 AND start_at IS NOT NULL
                    AND span_range(start_at, end_at) && tstzrange(d.s, d.e, '[)')
+                   AND ($5::uuid IS NULL OR EXISTS (
+                        SELECT 1 FROM collection_spans cs
+                        WHERE cs.span_id = spans.id AND cs.collection_id = $5))
              ) s ON true
              GROUP BY d.day, s.category
              ORDER BY d.day, n DESC",
@@ -140,6 +154,7 @@ impl SpanRepository {
         .bind(&days)
         .bind(&starts)
         .bind(&ends)
+        .bind(collection_id)
         .fetch_all(&self.pool)
         .await?;
         let mut out: Vec<SpanDaySummary> = Vec::new();
@@ -168,6 +183,7 @@ impl SpanRepository {
     pub async fn day_page(
         &self,
         user_id: Uuid,
+        collection_id: Option<Uuid>,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         after: Option<(DateTime<Utc>, Uuid)>,
@@ -179,6 +195,9 @@ impl SpanRepository {
                  WHERE user_id = $1 AND start_at IS NOT NULL
                    AND span_range(start_at, end_at) && tstzrange($2, $3, '[)')
                    AND ($4::timestamptz IS NULL OR (start_at, id) > ($4, $5))
+                   AND ($7::uuid IS NULL OR EXISTS (
+                        SELECT 1 FROM collection_spans cs
+                        WHERE cs.span_id = spans.id AND cs.collection_id = $7))
              ), page AS (
                  SELECT id FROM m ORDER BY start_at, id LIMIT $6
              )
@@ -191,6 +210,7 @@ impl SpanRepository {
         .bind(after.map(|a| a.0))
         .bind(after.map(|a| a.1))
         .bind(limit)
+        .bind(collection_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(map_span).collect())

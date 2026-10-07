@@ -158,6 +158,8 @@ pub struct SpanDaysQuery {
     pub from_day: NaiveDate,
     pub to_day: NaiveDate,
     pub timezone: String,
+    pub collection_id: Option<Uuid>,
+    pub if_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -175,6 +177,8 @@ pub struct SpanDaySummary {
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct SpanDays {
+    pub revision: i64,
+    pub unchanged: bool,
     pub days: Vec<SpanDaySummary>,
 }
 
@@ -182,12 +186,14 @@ pub struct SpanDays {
 pub struct SpanDayQuery {
     pub day: NaiveDate,
     pub timezone: String,
+    pub collection_id: Option<Uuid>,
     pub cursor: Option<String>,
     pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct SpanDayPage {
+    pub revision: i64,
     pub items: Vec<Span>,
     pub next_cursor: Option<String>,
 }
