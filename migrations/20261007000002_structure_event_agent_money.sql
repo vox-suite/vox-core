@@ -11,7 +11,8 @@ WHERE source = 'event_agent'
   AND category ~* '(subscri|bill|expens|spend|purchase|payment|paid)'
   AND category NOT IN ('subscription', 'bill', 'expense');
 
-CREATE TEMP TABLE event_agent_money ON COMMIT DROP AS
+DROP TABLE IF EXISTS event_agent_money;
+CREATE TEMP TABLE event_agent_money AS
 SELECT s.id,
        s.user_id,
        replace(m[2], ',', '')::numeric AS amount,
@@ -57,3 +58,5 @@ SET data = s.data || jsonb_build_object(
 FROM event_agent_money e
 WHERE s.id = e.id
   AND COALESCE(s.data ->> 'duplicate_of', '') = '';
+
+DROP TABLE event_agent_money;
