@@ -383,7 +383,7 @@ impl EventHandler {
         .fetch_one(self.db.pool())
         .await?;
 
-        if source_kind == "sms" && !authorization_only {
+        if source_kind == "sms" {
             crate::sms_ingestion::finance::dedupe_or_settle(
                 self.db.pool(),
                 user_id,

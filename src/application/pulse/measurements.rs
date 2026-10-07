@@ -314,10 +314,11 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                     format!(
                         "{} {} ({})",
                         p.category.replace('_', " "),
-                        if matches!(p.action.as_str(), "credit" | "refund" | "income") {
-                            p.action.as_str()
-                        } else {
-                            "spending"
+                        match p.action.as_str() {
+                            "credit" | "refund" | "income" => p.action.as_str(),
+                            // OTP messages record attempts, which are not confirmed spending.
+                            "info" => "authorization attempts",
+                            _ => "spending",
                         },
                         p.currency
                     )

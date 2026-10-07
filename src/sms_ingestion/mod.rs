@@ -85,7 +85,7 @@ impl SmsIngestionService {
                     external_event_id: message_digest(&sanitized),
                     occurred_at: m.received_at,
                     payload: json!({ "sender": m.sender, "body": sanitized.body,
-                        "authorization_only": looks_like_otp(&m.body) || m.body.contains("OTP [REDACTED]") }),
+                        "authorization_only": looks_like_otp(&m.body) || m.body.contains(REDACTED) }),
                 })
             })
             .collect();
@@ -134,6 +134,61 @@ pub fn looks_like_otp(body: &str) -> bool {
         .any(|token| token.len() >= 4 && token.len() <= 8)
 }
 
+const REDACTED: &str = "[REDACTED]";
+
+/// Replaces only the digits of any labelled authentication code, keeping the rest of the message.
+/// Returns `None` when no labelled code was found.
+fn redact_codes(body: &str) -> Option<String> {
+    const LABEL: &str =
+        r"(?:otp|verification code|one-time password|one time password|security code)";
+    static DIRECT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(&format!(
+            r"(?i)\b{LABEL}\s*(?:is\s*|:|=|-)?\s*([0-9]{{4,8}})\b"
+        ))
+        .unwrap()
+    });
+    static CODE_FIRST: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(&format!(
+            r"(?i)\b([0-9]{{4,8}})\s+(?:is\s+|as\s+)?(?:(?:your|the|this)\s+)?{LABEL}\b"
+        ))
+        .unwrap()
+    });
+    // "Your OTP for txn of INR 500 at AMAZON on card XX1234 is 123456": code at the end of the sentence.
+    static TRAILING: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(&format!(
+            r"(?i)\b{LABEL}\b[^\n]{{0,160}}?\bis\s*([0-9]{{4,8}})\b"
+        ))
+        .unwrap()
+    });
+    fn replace(re: &regex::Regex, text: &str) -> (String, bool) {
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0;
+        let mut found = false;
+        for caps in re.captures_iter(text) {
+            let code = caps.get(1).unwrap();
+            out.push_str(&text[last..code.start()]);
+            out.push_str(REDACTED);
+            last = code.end();
+            found = true;
+        }
+        out.push_str(&text[last..]);
+        (out, found)
+    }
+    let mut text = body.to_owned();
+    let mut any = false;
+    for re in [&*DIRECT, &*CODE_FIRST] {
+        let (next, found) = replace(re, &text);
+        text = next;
+        any |= found;
+    }
+    if !any {
+        let (next, found) = replace(&TRAILING, &text);
+        text = next;
+        any = found;
+    }
+    any.then_some(text)
+}
+
 /// Keep financial context, but never upload the authentication code. Unknown
 /// code layouts remain excluded rather than guessing which number is secret.
 pub fn sanitize_sms_body(body: &str) -> Option<String> {
@@ -150,29 +205,26 @@ pub fn sanitize_sms_body(body: &str) -> Option<String> {
     if !financial || !amount {
         return None;
     }
-    static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)\b(?:otp|verification code|one-time password|one time password|security code)\s*(?:is\s*|:|=|-)?\s*[0-9]{4,8}\b|\b[0-9]{4,8}\s+(?:is\s+)?(?:your\s+)?(?:otp|verification code|one-time password|one time password|security code)\b").unwrap()
-    });
-    if !CODE.is_match(body) && !body.contains("OTP [REDACTED]") {
-        return None;
-    }
+    // Already redacted on the phone: keep it, but still verify nothing else is secret.
+    let cleaned = match redact_codes(body) {
+        Some(text) => text,
+        None if body.contains(REDACTED) => body.to_owned(),
+        None => return None,
+    };
     static CONTEXT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"(?i)(?:inr|rs\.?|₹|usd|\$|eur|gbp)\s*[0-9][0-9,.]*|(?:card|a/c|acct|account)\s*(?:ending\s*(?:in\s*)?|no\.?\s*)?[*xX -]*[0-9]{4}\b").unwrap()
     });
     static NUMBERS: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"\b[0-9]{4,8}\b").unwrap());
-    let safe_ranges: Vec<_> = CODE
-        .find_iter(body)
-        .chain(CONTEXT.find_iter(body))
-        .collect();
-    if NUMBERS.find_iter(body).any(|n| {
+    let safe_ranges: Vec<_> = CONTEXT.find_iter(&cleaned).collect();
+    if NUMBERS.find_iter(&cleaned).any(|n| {
         !safe_ranges
             .iter()
             .any(|r| r.start() <= n.start() && r.end() >= n.end())
     }) {
         return None;
     }
-    Some(CODE.replace_all(body, "OTP [REDACTED]").into_owned())
+    Some(cleaned)
 }
 
 const PROMO_MARKERS: &[&str] = &[
@@ -256,6 +308,20 @@ mod otp_tests {
     fn pure_and_ambiguous_otps_are_dropped() {
         assert!(sanitize_sms_body("Your login OTP is 654321").is_none());
         assert!(sanitize_sms_body("Use OTP to pay INR 1200 on card 4321. Code: 654321").is_none());
+    }
+    #[test]
+    fn common_bank_layouts_keep_details_and_hide_the_code() {
+        for body in [
+            "123456 is the OTP for your transaction of INR 2,500.00 at AMAZON on card ending 4321.",
+            "Your OTP for txn of INR 2500.00 at AMAZON on HDFC Bank Card ending 4321 is 123456. Do not share.",
+            "Use 123456 as OTP to pay INR 2500 on card XX4321 at AMAZON.",
+        ] {
+            let out = sanitize_sms_body(body).unwrap_or_else(|| panic!("dropped: {body}"));
+            assert!(!out.contains("123456"), "{out}");
+            assert!(out.contains("AMAZON") && out.contains("4321"), "{out}");
+            assert!(out.contains(REDACTED), "{out}");
+            assert_eq!(sanitize_sms_body(&out), Some(out.clone()));
+        }
     }
     #[test]
     fn ordinary_transaction_is_unchanged() {
