@@ -1,13 +1,16 @@
 /**
 * Application service for spans: validation, ownership, and change notifications.
 */
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use uuid::Uuid;
 
 use crate::{
     domain::{
         ConcurrencyOutcome,
         identity::Actor,
-        spans::{NewSpan, Span, SpanPatch, SpanQuery},
+        spans::{
+            NewSpan, Span, SpanDayPage, SpanDayQuery, SpanDays, SpanDaysQuery, SpanPatch, SpanQuery,
+        },
     },
     realtime::UserEventHub,
     storage::spans::SpanRepository,
@@ -25,6 +28,47 @@ pub enum SpanServiceError {
     VersionConflict,
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+}
+
+const MAX_DAYS_PER_REQUEST: i64 = 62;
+const DEFAULT_PAGE: i64 = 40;
+const MAX_PAGE: i64 = 100;
+
+fn day_bounds(
+    day: NaiveDate,
+    tz: chrono_tz::Tz,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), SpanServiceError> {
+    let start_of = |d: NaiveDate| {
+        (0..=3)
+            .find_map(|h| {
+                d.and_hms_opt(h, 0, 0)
+                    .and_then(|local| tz.from_local_datetime(&local).earliest())
+            })
+            .map(|t| t.with_timezone(&Utc))
+            .ok_or(SpanServiceError::Invalid("invalid day"))
+    };
+    let next = day
+        .succ_opt()
+        .ok_or(SpanServiceError::Invalid("invalid day"))?;
+    Ok((start_of(day)?, start_of(next)?))
+}
+
+fn parse_timezone(name: &str) -> Result<chrono_tz::Tz, SpanServiceError> {
+    name.parse()
+        .map_err(|_| SpanServiceError::Invalid("unknown timezone"))
+}
+
+fn encode_cursor(span: &Span) -> Option<String> {
+    let start = span.start_at?;
+    Some(format!("{}_{}", start.timestamp_micros(), span.id))
+}
+
+fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), SpanServiceError> {
+    let invalid = || SpanServiceError::Invalid("invalid cursor");
+    let (micros, id) = cursor.split_once('_').ok_or_else(invalid)?;
+    let start = DateTime::from_timestamp_micros(micros.parse().map_err(|_| invalid())?)
+        .ok_or_else(invalid)?;
+    Ok((start, id.parse().map_err(|_| invalid())?))
 }
 
 #[derive(Clone)]
@@ -115,6 +159,50 @@ impl SpanService {
             return Err(SpanServiceError::Invalid("to must not precede from"));
         }
         Ok(self.repo.list(actor.user_id, query).await?)
+    }
+
+    pub async fn day_counts(
+        &self,
+        actor: &Actor,
+        query: &SpanDaysQuery,
+    ) -> Result<SpanDays, SpanServiceError> {
+        let tz = parse_timezone(&query.timezone)?;
+        let span = (query.to_day - query.from_day).num_days();
+        if !(0..MAX_DAYS_PER_REQUEST).contains(&span) {
+            return Err(SpanServiceError::Invalid("day range must be 1 to 62 days"));
+        }
+        let bounds = (0..=span)
+            .map(|offset| {
+                let day = query.from_day + Duration::days(offset);
+                day_bounds(day, tz).map(|(start, end)| (day, start, end))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SpanDays {
+            days: self.repo.day_counts(actor.user_id, &bounds).await?,
+        })
+    }
+
+    pub async fn day_page(
+        &self,
+        actor: &Actor,
+        query: &SpanDayQuery,
+    ) -> Result<SpanDayPage, SpanServiceError> {
+        let tz = parse_timezone(&query.timezone)?;
+        let (start, end) = day_bounds(query.day, tz)?;
+        let after = query.cursor.as_deref().map(decode_cursor).transpose()?;
+        let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
+        let mut items = self
+            .repo
+            .day_page(actor.user_id, start, end, after, limit + 1)
+            .await?;
+        let has_more = items.len() as i64 > limit;
+        items.truncate(limit as usize);
+        let next_cursor = if has_more {
+            items.last().and_then(encode_cursor)
+        } else {
+            None
+        };
+        Ok(SpanDayPage { items, next_cursor })
     }
 
     pub async fn delete_span(&self, actor: &Actor, id: Uuid) -> Result<bool, sqlx::Error> {
