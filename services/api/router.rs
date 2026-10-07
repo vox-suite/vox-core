@@ -208,7 +208,7 @@ pub fn build_api_router(state: ApiState) -> Router {
             "/v1/me/pulse/dismissals",
             post(crate::routes::pulse::dismiss),
         )
-        .with_state(pulse_service);
+        .with_state(pulse_service.clone());
     let chart_routes = Router::new()
         .route("/v1/me/charts/suggest", post(suggest_charts))
         .route(
@@ -226,6 +226,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         architect: state.space_architect.clone(),
         runtime: state.space_runtime.clone(),
         user_events: state.user_events.clone(),
+        pulse: pulse_service.clone(),
     };
     let space_routes = Router::new()
         .route(
@@ -251,6 +252,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/me/spaces/{id}/nodes/{node_id}",
             patch(crate::routes::spaces::update_space_node),
+        )
+        .route(
+            "/v1/me/spaces/{id}/nodes/{node_id}/goal",
+            post(crate::routes::spaces::approve_node_goal),
         )
         .with_state(space_api_state);
 

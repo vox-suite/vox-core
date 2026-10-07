@@ -55,7 +55,8 @@ use utoipa::OpenApi;
     crate::routes::spaces::send_space_chat,
     crate::routes::spaces::commit_space,
     crate::routes::spaces::list_space_messages,
-    crate::routes::spaces::update_space_node
+    crate::routes::spaces::update_space_node,
+    crate::routes::spaces::approve_node_goal
 ))]
 struct ApiDoc;
 

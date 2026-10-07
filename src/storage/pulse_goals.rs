@@ -53,6 +53,20 @@ impl PulseRepository {
         .await?;
         row.as_ref().map(row_to_goal).transpose()
     }
+    pub async fn goal_for_node(
+        &self,
+        user: Uuid,
+        node: Uuid,
+    ) -> Result<Option<GoalRow>, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.space_node_id=$2"
+        ))
+        .bind(user)
+        .bind(node)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(row_to_goal).transpose()
+    }
     pub async fn count_goals(&self, user: Uuid) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar("SELECT count(*) FROM pulse_goals WHERE user_id=$1")
             .bind(user)
@@ -64,6 +78,7 @@ impl PulseRepository {
         user: Uuid,
         draft: &GoalDraft,
         starts_on: NaiveDate,
+        space_node_id: Option<Uuid>,
     ) -> Result<Uuid, sqlx::Error> {
         let definition = draft
             .definition
@@ -72,8 +87,8 @@ impl PulseRepository {
             .transpose()
             .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
         sqlx::query_scalar(
-            "INSERT INTO pulse_goals(user_id,title,kind,direction,period,target,unit,definition,starts_on,deadline) \
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
+            "INSERT INTO pulse_goals(user_id,title,kind,direction,period,target,unit,definition,starts_on,deadline,space_node_id) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id",
         )
         .bind(user)
         .bind(draft.title.trim())
@@ -85,6 +100,7 @@ impl PulseRepository {
         .bind(definition)
         .bind(starts_on)
         .bind(draft.deadline)
+        .bind(space_node_id)
         .fetch_one(&self.pool)
         .await
     }

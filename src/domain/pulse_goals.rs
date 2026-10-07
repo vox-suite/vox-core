@@ -125,7 +125,7 @@ pub struct GoalComposeResponse {
 }
 
 /// What the model proposes; the server turns it into a validated `GoalDraft`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoalSuggestion {
     pub title: String,
     pub kind: GoalKind,
@@ -144,4 +144,10 @@ fn default_direction() -> GoalDirection {
 pub struct GoalComposeOutput {
     pub reply: String,
     pub draft: Option<GoalSuggestion>,
+}
+
+#[derive(Clone, Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproveNodeGoalInput {
+    pub timezone: String,
 }

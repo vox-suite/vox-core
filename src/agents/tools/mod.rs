@@ -10,6 +10,7 @@ pub mod google_maps;
 pub mod library;
 pub mod map_scene;
 pub mod records;
+pub mod space_goals;
 pub mod space_graph;
 pub mod spans;
 pub mod visits;

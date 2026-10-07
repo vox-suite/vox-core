@@ -3,6 +3,10 @@ use crate::{
     application::pulse::measurements::{measurement_catalog, validate_definition},
     domain::{identity::Actor, pulse::*, pulse_goals::*},
 };
+use crate::{
+    domain::spaces::{SpaceNode, SpaceState},
+    storage::spaces::SpaceRepository,
+};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
 use uuid::Uuid;
 
@@ -126,6 +130,35 @@ fn view(g: &GoalRow, current: f64, today: NaiveDate, error: Option<String>) -> G
         per_week_needed,
         projected_on,
         error,
+    }
+}
+
+/// Turns a model- or agent-written suggestion into a draft; the server validates it afterwards.
+pub(super) fn draft_from_suggestion(raw: GoalSuggestion, timezone: &str) -> GoalDraft {
+    let definition = match (raw.kind, raw.measurement_id) {
+        (GoalKind::Metric, Some(id)) => Some(PulseDefinition {
+            version: 2,
+            measurement_id: id,
+            bucket: Some(Bucket::Week),
+            dimension: None,
+            period_days: 30,
+            offset_days: 0,
+            top_n: None,
+            timezone: timezone.to_string(),
+            chart_type: crate::domain::charts::ChartType::Stat,
+        }),
+        _ => None,
+    };
+    GoalDraft {
+        timezone: timezone.to_string(),
+        title: raw.title,
+        kind: raw.kind,
+        direction: raw.direction,
+        period: raw.period,
+        target: raw.target,
+        unit: raw.unit.unwrap_or_default(),
+        definition,
+        deadline: raw.deadline,
     }
 }
 
@@ -275,6 +308,14 @@ impl PulseService {
         actor: &Actor,
         draft: GoalDraft,
     ) -> Result<GoalView, PulseError> {
+        self.create_goal_for(actor, draft, None).await
+    }
+    async fn create_goal_for(
+        &self,
+        actor: &Actor,
+        draft: GoalDraft,
+        space_node_id: Option<Uuid>,
+    ) -> Result<GoalView, PulseError> {
         let draft = self.validate_draft(actor, draft).await?;
         if self.repo.count_goals(actor.user_id).await? >= MAX_GOALS {
             return Err(PulseError::Invalid(
@@ -282,7 +323,10 @@ impl PulseService {
             ));
         }
         let today = today_in(&draft.timezone)?;
-        let id = self.repo.insert_goal(actor.user_id, &draft, today).await?;
+        let id = self
+            .repo
+            .insert_goal(actor.user_id, &draft, today, space_node_id)
+            .await?;
         let row = self
             .repo
             .get_goal(actor.user_id, id)
@@ -336,6 +380,61 @@ impl PulseService {
             .await?
             .remove(0))
     }
+    /// Creates the goal an agent proposed on a space node, after the user pressed approve,
+    /// and stores the goal id back on the node.
+    pub async fn approve_node_goal(
+        &self,
+        actor: &Actor,
+        space_id: Uuid,
+        node_id: Uuid,
+        timezone: &str,
+    ) -> Result<(GoalView, SpaceNode), PulseError> {
+        let spaces = SpaceRepository::new(self.repo.pool.clone());
+        let invalid = |m: &str| PulseError::Invalid(m.into());
+        let space = spaces
+            .get_space(actor.user_id, space_id)
+            .await?
+            .ok_or_else(|| invalid("Space not found"))?;
+        if space.state == SpaceState::Dropped {
+            return Err(invalid("This space was dropped"));
+        }
+        let lock = self.lock(&format!("goal-node:{node_id}")).await?;
+        let _guard = lock.lock().await;
+        let node = spaces
+            .get_node(space_id, node_id)
+            .await?
+            .ok_or_else(|| invalid("Node not found"))?;
+        if let Some(existing) = self.repo.goal_for_node(actor.user_id, node_id).await? {
+            let view = self
+                .goal_views(actor, vec![existing], timezone)
+                .await?
+                .remove(0);
+            return Ok((view, node));
+        }
+        let proposal: GoalSuggestion = node
+            .data
+            .get("goal_proposal")
+            .cloned()
+            .and_then(|p| serde_json::from_value(p).ok())
+            .ok_or_else(|| invalid("This node has no goal proposal"))?;
+        let draft = draft_from_suggestion(proposal, timezone);
+        let view = self.create_goal_for(actor, draft, Some(node_id)).await?;
+        let mut data = node.data.clone();
+        if let Some(fields) = data.as_object_mut() {
+            fields.insert("goal_id".into(), serde_json::json!(view.id));
+            if let Some(p) = fields
+                .get_mut("goal_proposal")
+                .and_then(|p| p.as_object_mut())
+            {
+                p.insert("status".into(), serde_json::json!("approved"));
+            }
+        }
+        let node = spaces
+            .update_node(space_id, node_id, None, None, Some(data), None, None, None)
+            .await?
+            .ok_or_else(|| invalid("Node not found"))?;
+        Ok((view, node))
+    }
     pub async fn compose_goal(
         &self,
         actor: &Actor,
@@ -371,31 +470,7 @@ impl PulseService {
                 preview: None,
             });
         };
-        let definition = match (raw.kind, raw.measurement_id) {
-            (GoalKind::Metric, Some(id)) => Some(PulseDefinition {
-                version: 2,
-                measurement_id: id,
-                bucket: Some(Bucket::Week),
-                dimension: None,
-                period_days: 30,
-                offset_days: 0,
-                top_n: None,
-                timezone: timezone.clone(),
-                chart_type: crate::domain::charts::ChartType::Stat,
-            }),
-            _ => None,
-        };
-        let draft = GoalDraft {
-            timezone: timezone.clone(),
-            title: raw.title,
-            kind: raw.kind,
-            direction: raw.direction,
-            period: raw.period,
-            target: raw.target,
-            unit: raw.unit.unwrap_or_default(),
-            definition,
-            deadline: raw.deadline,
-        };
+        let draft = draft_from_suggestion(raw, &timezone);
         match self.validate_draft(actor, draft).await {
             Ok(draft) => {
                 let row = row_from_draft(&draft, today);

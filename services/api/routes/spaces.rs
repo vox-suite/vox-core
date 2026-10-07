@@ -13,7 +13,9 @@ use uuid::Uuid;
 
 use vox_core::{
     agents::{space_architect::SpaceArchitecting, space_runtime::SpaceRuntime},
+    application::pulse::service::{PulseError, PulseService},
     application::schemas::SchemaService,
+    domain::pulse_goals::{ApproveNodeGoalInput, GoalView},
     domain::{
         collections::CollectionKind,
         identity::Actor,
@@ -31,6 +33,7 @@ pub struct SpaceApiState {
     pub architect: Arc<dyn SpaceArchitecting>,
     pub runtime: Arc<SpaceRuntime>,
     pub user_events: UserEventHub,
+    pub pulse: PulseService,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -493,4 +496,42 @@ pub async fn update_space_node(
     );
 
     Ok(Json(node))
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ApproveNodeGoalResponse {
+    pub goal: GoalView,
+    pub node: SpaceNode,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/me/spaces/{id}/nodes/{node_id}/goal",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path), ("node_id" = uuid::Uuid, Path)),
+    request_body = ApproveNodeGoalInput,
+    responses((status = 200, body = ApproveNodeGoalResponse))
+)]
+pub async fn approve_node_goal(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path((id, node_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<ApproveNodeGoalInput>,
+) -> Result<Json<ApproveNodeGoalResponse>, StatusCode> {
+    match state
+        .pulse
+        .approve_node_goal(&actor, id, node_id, &input.timezone)
+        .await
+    {
+        Ok((goal, node)) => {
+            state.user_events.notify(
+                actor.user_id,
+                json!({ "type": "space_node_updated", "space_id": id, "node": node }),
+            );
+            Ok(Json(ApproveNodeGoalResponse { goal, node }))
+        }
+        Err(PulseError::Invalid(_)) => Err(StatusCode::UNPROCESSABLE_ENTITY),
+        Err(PulseError::Conflict(_)) => Err(StatusCode::CONFLICT),
+        Err(_) => Err(StatusCode::SERVICE_UNAVAILABLE),
+    }
 }

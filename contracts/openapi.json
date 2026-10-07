@@ -2468,6 +2468,33 @@
           "reply"
         ],
         "type": "object"
+      },
+      "ApproveNodeGoalInput": {
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "ApproveNodeGoalResponse": {
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/GoalView"
+          },
+          "node": {
+            "$ref": "#/components/schemas/SpaceNode"
+          }
+        },
+        "required": [
+          "goal",
+          "node"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -4010,6 +4037,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SpaceNode"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "spaces"
+        ]
+      }
+    },
+    "/v1/me/spaces/{id}/nodes/{node_id}/goal": {
+      "post": {
+        "operationId": "approve_node_goal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveNodeGoalInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveNodeGoalResponse"
                 }
               }
             },
