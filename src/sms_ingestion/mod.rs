@@ -74,12 +74,19 @@ impl SmsIngestionService {
 
         let items: Vec<BatchEvent> = messages
             .iter()
-            .filter(|m| !looks_like_otp(&m.body) && !looks_like_promo(&m.sender, &m.body))
-            .map(|m| BatchEvent {
-                source_id: m.sender.clone(),
-                external_event_id: message_digest(m),
-                occurred_at: m.received_at,
-                payload: json!({ "sender": m.sender, "body": m.body }),
+            .filter_map(|m| {
+                let body = sanitize_sms_body(&m.body)?;
+                if looks_like_promo(&m.sender, &body) {
+                    return None;
+                }
+                let sanitized = SmsMessage { body, ..m.clone() };
+                Some(BatchEvent {
+                    source_id: m.sender.clone(),
+                    external_event_id: message_digest(&sanitized),
+                    occurred_at: m.received_at,
+                    payload: json!({ "sender": m.sender, "body": sanitized.body,
+                        "authorization_only": looks_like_otp(&m.body) || m.body.contains("OTP [REDACTED]") }),
+                })
             })
             .collect();
         let event_ids = self
@@ -125,6 +132,47 @@ pub fn looks_like_otp(body: &str) -> bool {
     }
     body.split(|c: char| !c.is_ascii_digit())
         .any(|token| token.len() >= 4 && token.len() <= 8)
+}
+
+/// Keep financial context, but never upload the authentication code. Unknown
+/// code layouts remain excluded rather than guessing which number is secret.
+pub fn sanitize_sms_body(body: &str) -> Option<String> {
+    if !looks_like_otp(body) {
+        return Some(body.to_owned());
+    }
+    let lower = body.to_lowercase();
+    let financial = ["card", "transaction", "txn", "payment", "pay ", "purchase"]
+        .iter()
+        .any(|s| lower.contains(s));
+    let amount = ["inr", "rs.", "rs ", "₹", "usd", "$", "eur", "gbp"]
+        .iter()
+        .any(|s| lower.contains(s));
+    if !financial || !amount {
+        return None;
+    }
+    static CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b(?:otp|verification code|one-time password|one time password|security code)\s*(?:is\s*|:|=|-)?\s*[0-9]{4,8}\b|\b[0-9]{4,8}\s+(?:is\s+)?(?:your\s+)?(?:otp|verification code|one-time password|one time password|security code)\b").unwrap()
+    });
+    if !CODE.is_match(body) && !body.contains("OTP [REDACTED]") {
+        return None;
+    }
+    static CONTEXT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(?:inr|rs\.?|₹|usd|\$|eur|gbp)\s*[0-9][0-9,.]*|(?:card|a/c|acct|account)\s*(?:ending\s*(?:in\s*)?|no\.?\s*)?[*xX -]*[0-9]{4}\b").unwrap()
+    });
+    static NUMBERS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\b[0-9]{4,8}\b").unwrap());
+    let safe_ranges: Vec<_> = CODE
+        .find_iter(body)
+        .chain(CONTEXT.find_iter(body))
+        .collect();
+    if NUMBERS.find_iter(body).any(|n| {
+        !safe_ranges
+            .iter()
+            .any(|r| r.start() <= n.start() && r.end() >= n.end())
+    }) {
+        return None;
+    }
+    Some(CODE.replace_all(body, "OTP [REDACTED]").into_owned())
 }
 
 const PROMO_MARKERS: &[&str] = &[
@@ -177,4 +225,41 @@ pub fn looks_like_promo(sender: &str, body: &str) -> bool {
     let promotional = sender.trim().to_ascii_uppercase().ends_with("-P")
         || PROMO_MARKERS.iter().any(|marker| lower.contains(marker));
     promotional && !MONEY_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+#[cfg(test)]
+mod otp_tests {
+    use super::*;
+    #[test]
+    fn transaction_otp_is_retained_without_secret() {
+        let body = "OTP is 654321 for transaction of INR 1,250 on credit card XX4321 at AMAZON. Valid for 5 minutes.";
+        let sanitized = sanitize_sms_body(body).expect("transaction details retained");
+        assert!(!sanitized.contains("654321"));
+        assert!(sanitized.contains("1,250"));
+        assert!(sanitized.contains("XX4321"));
+        assert!(sanitized.contains("AMAZON"));
+    }
+    #[test]
+    fn android_redaction_survives_server_filter() {
+        let body = "654321 is your OTP for INR 1200 transaction on card XX4321 at AMAZON";
+        let redacted = sanitize_sms_body(body).unwrap();
+        assert_eq!(sanitize_sms_body(&redacted), Some(redacted));
+    }
+    #[test]
+    fn additional_unlabelled_secret_is_not_uploaded() {
+        assert!(
+            sanitize_sms_body("OTP 654321 for INR 1200 on card XX4321. Alternate code 987654")
+                .is_none()
+        );
+    }
+    #[test]
+    fn pure_and_ambiguous_otps_are_dropped() {
+        assert!(sanitize_sms_body("Your login OTP is 654321").is_none());
+        assert!(sanitize_sms_body("Use OTP to pay INR 1200 on card 4321. Code: 654321").is_none());
+    }
+    #[test]
+    fn ordinary_transaction_is_unchanged() {
+        let body = "INR 1200 spent on card XX4321 at AMAZON";
+        assert_eq!(sanitize_sms_body(body).as_deref(), Some(body));
+    }
 }
