@@ -12,7 +12,7 @@ use vox_core::{
     application::spans::{SpanService, SpanServiceError},
     domain::{
         identity::Actor,
-        spans::{NewSpan, SpanPatch, SpanQuery},
+        spans::{NewSpan, SpanDayQuery, SpanDaysQuery, SpanPatch, SpanQuery},
     },
 };
 
@@ -44,6 +44,43 @@ pub async fn list_spans(
         .await
         .map_err(status_for)?;
     Ok(Json(spans))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/spans/days",
+    tag = "spans",
+    request_body = vox_core::domain::spans::SpanDaysQuery,
+    responses((status = 200, body = vox_core::domain::spans::SpanDays))
+)]
+pub async fn list_span_days(
+    State(service): State<SpanService>,
+    Extension(actor): Extension<Actor>,
+    Json(query): Json<SpanDaysQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    Ok(Json(
+        service
+            .day_counts(&actor, &query)
+            .await
+            .map_err(status_for)?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/spans/day",
+    tag = "spans",
+    request_body = vox_core::domain::spans::SpanDayQuery,
+    responses((status = 200, body = vox_core::domain::spans::SpanDayPage))
+)]
+pub async fn list_span_day(
+    State(service): State<SpanService>,
+    Extension(actor): Extension<Actor>,
+    Json(query): Json<SpanDayQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    Ok(Json(
+        service.day_page(&actor, &query).await.map_err(status_for)?,
+    ))
 }
 
 #[utoipa::path(

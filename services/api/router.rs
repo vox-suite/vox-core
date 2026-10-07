@@ -31,7 +31,10 @@ use crate::{
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name, list_schemas},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
-        spans::{create_span, delete_span, get_span, list_spans, update_span},
+        spans::{
+            create_span, delete_span, get_span, list_span_day, list_span_days, list_spans,
+            update_span,
+        },
         voice::{VoiceSocketState, voice_socket},
     },
     state::ApiState,
@@ -55,6 +58,8 @@ pub fn build_api_router(state: ApiState) -> Router {
     let span_routes = Router::new()
         .route("/v1/spans", post(create_span))
         .route("/v1/spans/list", post(list_spans))
+        .route("/v1/spans/days", post(list_span_days))
+        .route("/v1/spans/day", post(list_span_day))
         .route("/v1/spans/{id}", post(get_span))
         .route("/v1/spans/{id}/update", post(update_span))
         .route("/v1/spans/{id}/delete", post(delete_span))

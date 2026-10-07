@@ -1,12 +1,16 @@
 /**
 * Storage repository for spans and their automatic nesting.
 */
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 use crate::domain::{
     ConcurrencyOutcome,
-    spans::{ExecutionType, NewSpan, Span, SpanPatch, SpanQuery, SpanStatus},
+    spans::{
+        ExecutionType, NewSpan, Span, SpanCategoryCount, SpanDaySummary, SpanPatch, SpanQuery,
+        SpanStatus,
+    },
 };
 
 const SPAN_COLUMNS: &str = "s.id, s.user_id, s.parent_id, s.title, s.notes, s.category, s.source, \
@@ -108,6 +112,85 @@ impl SpanRepository {
         .bind(query.unscheduled)
         .bind(query.limit.unwrap_or(500).clamp(1, 2000))
         .bind(query.schema_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(map_span).collect())
+    }
+
+    pub async fn day_counts(
+        &self,
+        user_id: Uuid,
+        bounds: &[(NaiveDate, DateTime<Utc>, DateTime<Utc>)],
+    ) -> Result<Vec<SpanDaySummary>, sqlx::Error> {
+        let days: Vec<NaiveDate> = bounds.iter().map(|b| b.0).collect();
+        let starts: Vec<DateTime<Utc>> = bounds.iter().map(|b| b.1).collect();
+        let ends: Vec<DateTime<Utc>> = bounds.iter().map(|b| b.2).collect();
+        let rows = sqlx::query(
+            "SELECT d.day, COALESCE(s.category, '') AS category, count(*)::bigint AS n
+             FROM unnest($2::date[], $3::timestamptz[], $4::timestamptz[]) AS d(day, s, e)
+             JOIN LATERAL (
+                 SELECT category FROM spans
+                 WHERE user_id = $1 AND start_at IS NOT NULL
+                   AND span_range(start_at, end_at) && tstzrange(d.s, d.e, '[)')
+             ) s ON true
+             GROUP BY d.day, s.category
+             ORDER BY d.day, n DESC",
+        )
+        .bind(user_id)
+        .bind(&days)
+        .bind(&starts)
+        .bind(&ends)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out: Vec<SpanDaySummary> = Vec::new();
+        for row in rows {
+            let day: NaiveDate = row.get("day");
+            let count: i64 = row.get("n");
+            let item = SpanCategoryCount {
+                category: row.get("category"),
+                count,
+            };
+            match out.last_mut() {
+                Some(last) if last.day == day => {
+                    last.count += count;
+                    last.categories.push(item);
+                }
+                _ => out.push(SpanDaySummary {
+                    day,
+                    count,
+                    categories: vec![item],
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn day_page(
+        &self,
+        user_id: Uuid,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        after: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> Result<Vec<Span>, sqlx::Error> {
+        let rows = sqlx::query(&format!(
+            "WITH m AS MATERIALIZED (
+                 SELECT id, start_at FROM spans
+                 WHERE user_id = $1 AND start_at IS NOT NULL
+                   AND span_range(start_at, end_at) && tstzrange($2, $3, '[)')
+                   AND ($4::timestamptz IS NULL OR (start_at, id) > ($4, $5))
+             ), page AS (
+                 SELECT id FROM m ORDER BY start_at, id LIMIT $6
+             )
+             SELECT {SPAN_COLUMNS} FROM page p JOIN spans s ON s.id = p.id {SPAN_JOIN}
+             ORDER BY s.start_at, s.id"
+        ))
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .bind(after.map(|a| a.0))
+        .bind(after.map(|a| a.1))
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(map_span).collect())
