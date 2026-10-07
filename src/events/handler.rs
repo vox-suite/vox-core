@@ -108,8 +108,14 @@ impl EventHandler {
             }
         };
 
+        // Authorization attempts and payments that already happened are structured
+        // transactions, never agent to-dos, whatever the classifier guessed.
         if source_kind == "sms"
-            && payload.get("authorization_only").and_then(Value::as_bool) == Some(true)
+            && (payload.get("authorization_only").and_then(Value::as_bool) == Some(true)
+                || payload
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(crate::sms_ingestion::looks_like_completed_payment))
         {
             triage.action = EventTriageAction::StoreRecord;
         }

@@ -677,7 +677,8 @@
           "numeric_sum",
           "numeric_average",
           "known_interval_duration",
-          "recurring_cost_projection"
+          "recurring_cost_projection",
+          "spending_total"
         ],
         "type": "string"
       },

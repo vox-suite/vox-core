@@ -196,8 +196,75 @@ fn numeric_rule(field: &str, ty: &str, p: &SourceProfile) -> Option<NumericRule>
         label: hint.and_then(|h| h.label.clone()),
     })
 }
+/// One "All spending" measurement per currency, summing completed money-out across
+/// categories. Subscription plans stay separate, as do refunds and credits.
+fn spending_measurements(profiles: &[SourceProfile]) -> Vec<Measurement> {
+    let mut by_currency: std::collections::BTreeMap<&str, Vec<&SourceProfile>> =
+        std::collections::BTreeMap::new();
+    for p in profiles {
+        let money_field = ["amount", "total_amount"]
+            .iter()
+            .any(|f| p.fields.get(*f).is_some_and(|t| t == "number"));
+        if !p.currency.is_empty()
+            && money_field
+            && p.dated_count > 0
+            && !p.category.to_lowercase().contains("subscription")
+            && !matches!(
+                p.action.as_str(),
+                "credit" | "refund" | "income" | "info" | "due"
+            )
+        {
+            by_currency.entry(p.currency.as_str()).or_default().push(p);
+        }
+    }
+    by_currency
+        .into_iter()
+        .map(|(currency, members)| {
+            let mut fields = std::collections::BTreeMap::from([("amount".to_string(), "number".to_string())]);
+            if members.iter().any(|p| p.fields.contains_key("merchant")) {
+                fields.insert("merchant".into(), "string".into());
+            }
+            let profile = SourceProfile {
+                key: format!("spending:{currency}"),
+                schema_id: None,
+                connection_id: None,
+                source: "all_sources".into(),
+                category: "spending".into(),
+                action: String::new(),
+                timing: String::new(),
+                currency: currency.to_string(),
+                count: members.iter().map(|p| p.count).sum(),
+                dated_count: members.iter().map(|p| p.dated_count).sum(),
+                first_at: members.iter().filter_map(|p| p.first_at).min(),
+                last_at: members.iter().filter_map(|p| p.last_at).max(),
+                known_intervals: 0,
+                fields,
+                field_hints: Default::default(),
+                samples: vec![],
+            };
+            let mut m = measurement(
+                &profile,
+                MeasurementKind::SpendingTotal,
+                Some("amount"),
+                format!("All spending ({currency})"),
+                currency,
+                "recorded",
+                1.0,
+                "Every completed payment with an amount in this currency: expenses, bills and card transactions. Subscription plans are tracked separately; refunds and credits are excluded.",
+            );
+            m.dimensions = ["category", "merchant", "source", "title"]
+                .iter()
+                .filter(|d| **d != "merchant" || profile.fields.contains_key("merchant"))
+                .map(|d| d.to_string())
+                .collect();
+            m.default_dimension = Some("category".into());
+            m
+        })
+        .collect()
+}
+
 pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
-    let mut out = vec![];
+    let mut out = spending_measurements(profiles);
     for p in profiles {
         if p.count == 0 {
             continue;
@@ -280,25 +347,27 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                 if financial && p.currency.is_empty() {
                     continue;
                 }
-                if is_subscription && financial {
-                    if p.fields.contains_key("billing_interval")
-                        || p.fields.contains_key("interval")
-                    {
-                        let mut m = measurement(
-                            p,
-                            MeasurementKind::RecurringCostProjection,
-                            Some(field),
-                            format!("Monthly subscription cost ({})", p.currency),
-                            &p.currency,
-                            "projected",
-                            1.0,
-                            "Normalizes explicit active subscriptions to monthly cost. This is a projection, not actual payments.",
-                        );
-                        m.buckets.clear();
-                        m.default_dimension = Some("title".into());
-                        m.dimensions.push("title".into());
-                        out.push(m);
-                    }
+                // Plans with a billing interval become a monthly projection; without one the
+                // charges themselves are charted below.
+                if is_subscription
+                    && financial
+                    && (p.fields.contains_key("billing_interval")
+                        || p.fields.contains_key("interval"))
+                {
+                    let mut m = measurement(
+                        p,
+                        MeasurementKind::RecurringCostProjection,
+                        Some(field),
+                        format!("Monthly subscription cost ({})", p.currency),
+                        &p.currency,
+                        "projected",
+                        1.0,
+                        "Normalizes explicit active subscriptions to monthly cost. This is a projection, not actual payments.",
+                    );
+                    m.buckets.clear();
+                    m.default_dimension = Some("title".into());
+                    m.dimensions.push("title".into());
+                    out.push(m);
                     continue;
                 }
                 if p.dated_count == 0 {

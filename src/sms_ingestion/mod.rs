@@ -134,6 +134,49 @@ pub fn looks_like_otp(body: &str) -> bool {
         .any(|token| token.len() >= 4 && token.len() <= 8)
 }
 
+/// A card, bank or UPI payment that already happened. Due notices, failures, refunds and
+/// reminders are excluded so they still go through normal triage.
+pub fn looks_like_completed_payment(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    let amount = ["inr", "rs.", "rs ", "₹", "usd", "$"]
+        .iter()
+        .any(|s| lower.contains(s));
+    let done = [
+        "spent",
+        "debited",
+        "paid ",
+        "charged",
+        "purchase of",
+        "payment of",
+        "txn of",
+        "transaction of",
+        "successfully paid",
+    ]
+    .iter()
+    .any(|s| lower.contains(s));
+    let not_a_spend = [
+        "due",
+        "overdue",
+        "will be",
+        "failed",
+        "declined",
+        "unsuccessful",
+        "reminder",
+        "upcoming",
+        "pay by",
+        "outstanding",
+        "reversed",
+        "refund",
+        "credited",
+        "otp",
+        "verification code",
+        "pending",
+    ]
+    .iter()
+    .any(|s| lower.contains(s));
+    amount && done && !not_a_spend
+}
+
 const REDACTED: &str = "[REDACTED]";
 
 /// Replaces only the digits of any labelled authentication code, keeping the rest of the message.
@@ -282,6 +325,27 @@ pub fn looks_like_promo(sender: &str, body: &str) -> bool {
 #[cfg(test)]
 mod otp_tests {
     use super::*;
+    #[test]
+    fn completed_payments_are_recognised_and_reminders_are_not() {
+        assert!(looks_like_completed_payment(
+            "Spent Rs.999 on HDFC Bank Card 9313 at IGP on 07-10-26"
+        ));
+        assert!(looks_like_completed_payment(
+            "INR 1200 debited from a/c XX4321 at AMAZON"
+        ));
+        assert!(!looks_like_completed_payment(
+            "Rs.3500 is due on 10-10-26 for your card"
+        ));
+        assert!(!looks_like_completed_payment(
+            "Payment of INR 500 failed. Please retry"
+        ));
+        assert!(!looks_like_completed_payment(
+            "OTP 123456 for payment of INR 500"
+        ));
+        assert!(!looks_like_completed_payment(
+            "INR 500 credited to your account"
+        ));
+    }
     #[test]
     fn transaction_otp_is_retained_without_secret() {
         let body = "OTP is 654321 for transaction of INR 1,250 on credit card XX4321 at AMAZON. Valid for 5 minutes.";

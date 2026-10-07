@@ -18,6 +18,8 @@ pub enum MeasurementKind {
     NumericAverage,
     KnownIntervalDuration,
     RecurringCostProjection,
+    /// Completed money-out across categories in one currency, excluding subscription plans.
+    SpendingTotal,
 }
 /// Optional per-field hints declared by a data schema (`x-unit`, `x-aggregation`, `title`, `x-measure`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, utoipa::ToSchema)]
