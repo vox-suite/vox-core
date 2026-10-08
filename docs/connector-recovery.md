@@ -31,3 +31,11 @@ Native span, legacy chart and Pulse reads isolate the exact native context and h
 New goals preserve context ownership through an additive migration. Ambiguous existing goals and entries survive without inferred authority; explicit reassociation is a release gate tracked in https://github.com/vox-suite/vox-core/issues/121 alongside https://github.com/vox-suite/vox-web/issues/27.
 
 Performance fixture with PostgreSQL18/pgvector, six charts and 100,000 records: cold5 queries/2,275.82ms, cached1 query/p95 0.82ms, forced refresh5 queries/2,140.63ms. At 1,000 records, cold30.36ms and cached p95 1.16ms. These local results do not guarantee production latency.
+
+## Confidence audit corrections
+
+Internal processors now use the normal owned Personal Assistant's explicit grants; no additional inaccessible agent identities or auto-grants. Maps/Takeout timeline sources resolve grants through their connection's actual declaration. Timeline filtering uses hash sets; agent chart aggregates filter authorized records in SQL. Schema discovery hides other-context and ungranted-account private metadata while preserving global declarations.
+
+Relinking and repeat imports preserve disabled preferences. Paused callbacks/imports skip host ingestion and food notifications. Account reassociation moves account-bound spans and both root/personal-envelope inbound events atomically, retaining IDs, annotations and deduplication keys; failure rolls back ownership. Required-timestamp legacy PlayStation exports/parser remain source-compatible, while optional curated history uses a separate type/parser.
+
+Renewed suites: 27 account lifecycle, 18 scoped chart/schema/grant and 12 ingestion checks. The repeated local six-chart fixture at 100,000 records measured cold5 queries/2,470.10ms, cached1 query/p95 0.89ms and refresh5 queries/2,163.70ms; at1,000 records cold30.09ms and cached p95 1.04ms. Cached results are unchanged in query budget; cold latency remains a documented limitation.

@@ -175,7 +175,7 @@ impl PlayStationCapture {
                 source: Some("playstation".into()),
                 source_ref: Some(source_ref),
                 status: Some(SpanStatus::Done),
-                start_at: observed.game.last_played_at.map(|last| last.min(now)),
+                start_at: Some(observed.game.last_played_at.min(now)),
                 end_at: None,
                 execution_type: Some(ExecutionType::ManualHuman),
                 source_event_id: Some(event_id),
@@ -187,9 +187,7 @@ impl PlayStationCapture {
         }
         let mut snapshots = previous.clone();
         for game in &games {
-            let Some(last_played_at) = game.last_played_at else {
-                continue;
-            };
+            let last_played_at = game.last_played_at;
             snapshots.insert(
                 game.title_id.clone(),
                 GameSnapshot {

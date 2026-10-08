@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: vox-suite/vox-connections
-          ref: f15b89c82dd5b60fa7f3ad399a2652ac31c92e63
+          ref: 4136e1020fb8e01fde13215afa2eb4e7daeb0a59
           path: vox-connections
       - uses: actions/checkout@v4
         with:

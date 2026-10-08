@@ -10,7 +10,7 @@ use vox_connections::providers::{
     google_calendar::GoogleCalendarEvent,
     observations::ObservedActivity,
     personal::PersonalActivity,
-    playstation::PlayStationGame,
+    playstation::PlayStationGameHistory,
 };
 
 struct CoreIngestor {
@@ -31,6 +31,26 @@ impl CoreIngestor {
 }
 #[async_trait::async_trait]
 impl TimelineIngestor for CoreIngestor {
+    async fn reassociate_history(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user: Uuid,
+        connection: Uuid,
+        context: Uuid,
+    ) -> Result<(), FreshConnectionError> {
+        sqlx::query(
+            "UPDATE spans SET user_context_id=$3 WHERE user_id=$1 AND data->>'connection_id'=$2",
+        )
+        .bind(user)
+        .bind(connection.to_string())
+        .bind(context)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query("UPDATE inbound_events SET user_context_id=$3 WHERE user_id=$1 AND COALESCE(payload->>'connection_id',payload->'activity'->>'connection_id')=$2")
+            .bind(user).bind(connection.to_string()).bind(context).execute(&mut **tx).await?;
+        Ok(())
+    }
+
     async fn personal_activity(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -416,7 +436,7 @@ impl TimelineIngestor for CoreIngestor {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         user_id: Uuid,
         connection_id: Uuid,
-        games: &[PlayStationGame],
+        games: &[PlayStationGameHistory],
     ) -> Result<usize, FreshConnectionError> {
         Self::scope_transaction(tx, user_id, connection_id).await?;
         let mut written = 0;

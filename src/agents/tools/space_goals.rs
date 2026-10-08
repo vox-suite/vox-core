@@ -63,11 +63,7 @@ impl Tool for ListGoalMeasurements {
         let catalog = crate::application::pulse::service::PulseService::new(PulseRepository::new(
             db.pool().clone(),
         ))
-        .catalog_for_agent(
-            self.user_id.0,
-            measurement_catalog(&profiles),
-            "space-agent",
-        )
+        .catalog_for_agent(self.user_id.0, measurement_catalog(&profiles), "general")
         .await
         .map_err(|e| SpaceGraphToolError::InvalidInput(e.to_string()))?;
         let list: Vec<Value> = catalog.into_iter()
@@ -209,11 +205,7 @@ impl Tool for ProposeGoal {
                 let catalog = crate::application::pulse::service::PulseService::new(
                     PulseRepository::new(db.pool().clone()),
                 )
-                .catalog_for_agent(
-                    self.user_id.0,
-                    measurement_catalog(&profiles),
-                    "space-agent",
-                )
+                .catalog_for_agent(self.user_id.0, measurement_catalog(&profiles), "general")
                 .await
                 .map_err(|e| invalid(&e.to_string()))?;
                 let m = catalog.into_iter().find(|m| m.id == id).ok_or_else(|| {

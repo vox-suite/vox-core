@@ -120,22 +120,15 @@ async fn chart_agent_grant(
         .resolve_for_user(user)
         .await
         .unwrap();
-    let agent:uuid::Uuid=sqlx::query_scalar("INSERT INTO agent_definitions(deployment_id,owner_user_context_id,external_key,purpose,requested_capability_categories) VALUES($1,$2,'pulse-discovery','Chart suggestions',ARRAY['curated_spotify.read']) RETURNING id").bind(context.subject.deployment_id.0).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
-    let model: uuid::Uuid = sqlx::query_scalar("INSERT INTO agent_model_configurations(agent_definition_id,version,model_adapter,model) VALUES($1,1,'gemini','fixture') RETURNING id").bind(agent).fetch_one(db.pool()).await.unwrap();
-    sqlx::query(
-        "INSERT INTO deployment_agent_selections(deployment_id,agent_definition_id,model_configuration_id) VALUES($1,$2,$3)",
-    )
-    .bind(context.subject.deployment_id.0)
-    .bind(agent)
-    .bind(model)
-    .execute(db.pool())
-    .await
-    .unwrap();
+    crate::agent_registry::AgentRegistry::new(db.clone())
+        .owned_for_context(&context)
+        .await
+        .unwrap();
     vox_connections::capability_grants::CapabilityGrantService::new(db.pool().clone())
         .grant(
             &context.request_context(),
             vox_connections::capability_grants::CreateGrantRequest {
-                agent_external_key: "pulse-discovery".into(),
+                agent_external_key: "general".into(),
                 connection_id: connection,
                 capability_external_key: "curated_spotify.read".into(),
             },
@@ -1224,7 +1217,7 @@ async fn revoking_during_model_request_discards_connector_suggestions() {
         crate::agents::tools::spans::permitted_agent_spans(
             &db,
             owner,
-            Some("pulse-discovery"),
+            Some("general"),
             spans.clone()
         )
         .await
@@ -1237,7 +1230,7 @@ async fn revoking_during_model_request_discards_connector_suggestions() {
         crate::agents::tools::spans::permitted_agent_spans(
             &db,
             owner,
-            Some("pulse-discovery"),
+            Some("general"),
             spans.clone()
         )
         .await
@@ -1277,15 +1270,10 @@ async fn revoking_during_model_request_discards_connector_suggestions() {
     resume.notify_one();
     assert!(task.await.unwrap().unwrap().suggestions.is_empty());
     assert!(
-        crate::agents::tools::spans::permitted_agent_spans(
-            &db,
-            owner,
-            Some("pulse-discovery"),
-            spans
-        )
-        .await
-        .unwrap()
-        .is_empty()
+        crate::agents::tools::spans::permitted_agent_spans(&db, owner, Some("general"), spans)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 #[tokio::test]
@@ -1307,14 +1295,14 @@ async fn composite_spending_is_owner_only_and_agent_identity_is_specific() {
     let service = PulseService::new(PulseRepository::new(db.pool().clone()));
     assert!(
         service
-            .catalog_for_agent(id, catalog.clone(), "pulse-discovery")
+            .catalog_for_agent(id, catalog.clone(), "general")
             .await
             .unwrap()
             .is_empty()
     );
     chart_agent_grant(&db, id, conn).await;
     let allowed = service
-        .catalog_for_agent(id, catalog.clone(), "pulse-discovery")
+        .catalog_for_agent(id, catalog.clone(), "general")
         .await
         .unwrap();
     assert!(!allowed.is_empty());
@@ -1329,5 +1317,168 @@ async fn composite_spending_is_owner_only_and_agent_identity_is_specific() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn normal_personal_assistant_grants_authorize_normalized_import_sources_and_aggregates() {
+    use crate::domain::charts::{Aggregation, GroupBy, QuerySpec};
+    use crate::{identity::IdentityService, storage::spans::SpanRepository};
+    let db = database().await;
+    let id = user(&db).await;
+    let scope = IdentityService::new(db.clone())
+        .resolve_for_user(id)
+        .await
+        .unwrap();
+    let owner = scope.owner();
+    let agents = crate::agent_registry::AgentRegistry::new(db.clone())
+        .owned_for_context(&scope)
+        .await
+        .unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].definition.external_key, "general");
+    let schema:uuid::Uuid=sqlx::query_scalar("INSERT INTO data_schemas(user_id,namespace,name,version,json_schema) VALUES($1,'regression','Imports',1,'{}') RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    let spec = QuerySpec {
+        metric_field: "amount".into(),
+        aggregation: Aggregation::Sum,
+        group_by: GroupBy::Day,
+    };
+    let mut grants = Vec::new();
+    for (connector, source) in [
+        ("maps_timeline", "google_maps"),
+        ("youtube_history", "youtube"),
+    ] {
+        let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,$2,$3,now()) RETURNING id").bind(id).bind(scope.id.0).bind(connector).fetch_one(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO spans(user_id,user_context_id,title,status,source,category,schema_id,start_at,data) VALUES($1,$2,'Imported record','done',$3,'activity',$4,now(),$5)")
+            .bind(id).bind(scope.id.0).bind(source).bind(schema).bind(json!({"connection_id":conn,"amount":10})).execute(db.pool()).await.unwrap();
+        let grant =
+            vox_connections::capability_grants::CapabilityGrantService::new(db.pool().clone())
+                .grant(
+                    &scope.request_context(),
+                    vox_connections::capability_grants::CreateGrantRequest {
+                        agent_external_key: "general".into(),
+                        connection_id: conn,
+                        capability_external_key: format!("curated_{connector}.read"),
+                    },
+                )
+                .await
+                .unwrap();
+        grants.push((conn, grant.id));
+    }
+    let spans = SpanRepository::new(db.pool().clone())
+        .list_for_owner(owner, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::agents::tools::spans::permitted_agent_spans(
+            &db,
+            owner,
+            Some("general"),
+            spans.clone()
+        )
+        .await
+        .unwrap()
+        .len(),
+        2
+    );
+    let points = crate::application::chart_query::compute_chart_data_for_agent(
+        db.pool(),
+        owner,
+        "general",
+        &[schema],
+        &spec,
+    )
+    .await
+    .unwrap();
+    assert_eq!(points.iter().map(|p| p.value).sum::<f64>(), 20.0);
+    assert!(
+        crate::application::chart_query::compute_chart_data_for_agent(
+            db.pool(),
+            owner,
+            "ungranted-specialist",
+            &[schema],
+            &spec
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    sqlx::query("UPDATE vox_connections SET sync_timeline=false WHERE id=$1")
+        .bind(grants[0].0)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE id=$1")
+        .bind(grants[1].1)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    assert!(
+        crate::agents::tools::spans::permitted_agent_spans(&db, owner, Some("general"), spans)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::application::chart_query::compute_chart_data_for_agent(
+            db.pool(),
+            owner,
+            "general",
+            &[schema],
+            &spec
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn schema_tool_hides_other_context_and_ungranted_account_metadata() {
+    use crate::agents::tools::data_query::{FindSchemas, FindSchemasArgs};
+    use rig::tool::Tool;
+    let db = database().await;
+    let id = user(&db).await;
+    let scope = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(id)
+        .await
+        .unwrap();
+    let second:uuid::Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) VALUES($1,$2,$4,$3) RETURNING id").bind(scope.subject.deployment_id.0).bind(scope.subject.host_app_id.0).bind(id).bind(format!("other-{id}")).fetch_one(db.pool()).await.unwrap();
+    for (context, name, account) in [
+        (scope.id.0, "Local schema", None),
+        (second, "Private other host", None),
+        (scope.id.0, "Private provider", Some("spotify")),
+    ] {
+        let schema:uuid::Uuid=sqlx::query_scalar("INSERT INTO data_schemas(user_id,user_context_id,namespace,name,version,json_schema) VALUES($1,$3,$2,$2,1,'{\"default\":\"private\"}') RETURNING id").bind(id).bind(name).bind(context).fetch_one(db.pool()).await.unwrap();
+        let data = if let Some(connector) = account {
+            let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,$2,$3,now()) RETURNING id").bind(id).bind(context).bind(connector).fetch_one(db.pool()).await.unwrap();
+            json!({"connection_id":conn})
+        } else {
+            json!({})
+        };
+        sqlx::query("INSERT INTO spans(user_id,user_context_id,title,status,source,schema_id,data) VALUES($1,$2,'Record','done','user',$3,$4)").bind(id).bind(context).bind(schema).bind(data).execute(db.pool()).await.unwrap();
+    }
+    let mut tool_context = rig::prelude::ToolContext::new();
+    let tool = FindSchemas::new(Some(db.clone()), scope.user_id).with_owner(scope.owner());
+    let result = tool
+        .call(&mut tool_context, FindSchemasArgs { query: "".into() })
+        .await
+        .unwrap();
+    let names: Vec<&str> = result["schemas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    assert!(names.contains(&"Local schema"));
+    assert!(!names.contains(&"Private other host"));
+    assert!(!names.contains(&"Private provider"));
+    assert!(
+        FindSchemas::new(Some(db), scope.user_id)
+            .call(&mut tool_context, FindSchemasArgs { query: "".into() })
+            .await
+            .is_err()
     );
 }

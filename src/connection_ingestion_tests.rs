@@ -240,7 +240,7 @@ async fn gaming_ingestion_retains_unknown_session_times_and_deduplicates() {
     let connection = Uuid::new_v4();
     let now = Utc::now();
     let activity = ObservedActivity {
-        game: vox_connections::providers::playstation::PlayStationGame {
+        game: vox_connections::providers::playstation::PlayStationGameHistory {
             title_id: "game".into(),
             name: "Game".into(),
             platform: "PS5".into(),
@@ -790,7 +790,7 @@ async fn playstation_markers_label_observed_ranges_without_continuous_gaming() {
         .unwrap();
     let first: DateTime<Utc> = "2025-01-01T12:00:00Z".parse().unwrap();
     let last: DateTime<Utc> = "2026-10-01T12:00:00Z".parse().unwrap();
-    let game = PlayStationGame {
+    let game = PlayStationGameHistory {
         title_id: "game".into(),
         name: "Game".into(),
         platform: "PS5".into(),
@@ -909,5 +909,89 @@ async fn same_user_host_contexts_keep_imported_history_separate() {
             .await
             .unwrap(),
         2
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+async fn reassociation_moves_account_bound_history_atomically_without_duplicates_or_grants() {
+    let db = crate::db::Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let owner = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let second:Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) VALUES($1,$2,$4,$3) RETURNING id").bind(owner.subject.deployment_id.0).bind(owner.subject.host_app_id.0).bind(user).bind(format!("other-{user}")).fetch_one(db.pool()).await.unwrap();
+    let service =
+        FreshConnectionsService::new(db.pool().clone(), None, None, None, None, None).unwrap();
+    let history = json!([{"title":"Watched Video","products":["YouTube"],"titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","time":"2026-01-01T08:00:00Z"}]);
+    let imported = service
+        .import_youtube_history(&owner.request_context(), history.clone(), true)
+        .await
+        .unwrap();
+    let connection: Uuid = serde_json::from_value(imported["connection_id"].clone()).unwrap();
+    // An ambiguous migration can retain history in an earlier context while the account is unscoped.
+    sqlx::query("UPDATE vox_connections SET user_context_id=NULL WHERE id=$1")
+        .bind(connection)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE spans SET user_context_id=$2,notes='Keep annotation' WHERE user_id=$1")
+        .bind(user)
+        .bind(second)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE inbound_events SET user_context_id=$2 WHERE user_id=$1")
+        .bind(user)
+        .bind(second)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let before: Uuid = sqlx::query_scalar("SELECT id FROM spans WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    service
+        .reassociate(&owner.request_context(), connection)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .import_youtube_history(&owner.request_context(), history, true)
+            .await
+            .unwrap()["imported"],
+        0
+    );
+    let row: (Uuid, Uuid, String) =
+        sqlx::query_as("SELECT id,user_context_id,notes FROM spans WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(row, (before, owner.id.0, "Keep annotation".into()));
+    let event_context: Uuid =
+        sqlx::query_scalar("SELECT user_context_id FROM inbound_events WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(event_context, owner.id.0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM agent_capability_grants WHERE connection_id=$1"
+        )
+        .bind(connection)
+        .fetch_one(db.pool())
+        .await
+        .unwrap(),
+        0
     );
 }

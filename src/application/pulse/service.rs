@@ -203,8 +203,7 @@ impl PulseService {
         user: Uuid,
         catalog: Vec<Measurement>,
     ) -> Result<Vec<Measurement>, PulseError> {
-        self.catalog_for_agent(user, catalog, "pulse-discovery")
-            .await
+        self.catalog_for_agent(user, catalog, "general").await
     }
     pub async fn measurements(
         &self,

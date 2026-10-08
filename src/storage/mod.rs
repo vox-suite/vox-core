@@ -20,3 +20,5 @@ pub use users::*;
 
 pub mod pulse;
 pub mod pulse_goals;
+
+pub(crate) mod span_authority;

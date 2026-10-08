@@ -225,10 +225,10 @@ impl SpaceRuntime {
                 .with_owner(owner),
             )
             .tool(ListGoalMeasurements::new(Some(self.db.clone()), user_id).with_owner(owner))
-            .tool(FindSchemas::new(Some(self.db.clone()), user_id))
-            .tool(QueryUserData::new(Some(self.db.clone()), user_id))
-            .tool(ListSpans::new(Some(self.db.clone()), owner).with_agent("space-agent"))
-            .tool(GetSpan::new(Some(self.db.clone()), owner).with_agent("space-agent"))
+            .tool(FindSchemas::new(Some(self.db.clone()), user_id).with_owner(owner))
+            .tool(QueryUserData::new(Some(self.db.clone()), user_id).with_owner(owner))
+            .tool(ListSpans::new(Some(self.db.clone()), owner).with_agent("general"))
+            .tool(GetSpan::new(Some(self.db.clone()), owner).with_agent("general"))
             .tool(WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
             .tool(SearchPlaces::new(
                 self.http.clone(),

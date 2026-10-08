@@ -484,40 +484,19 @@ pub(crate) async fn permitted_agent_spans(
     agent: Option<&str>,
     spans: Vec<Span>,
 ) -> Result<Vec<Span>, SpanToolError> {
-    use crate::identity_contract::{
-        DeploymentId, RequestContext, RequestSubject, UserContextId, UserId,
-    };
-    let deployment: Uuid =
-        sqlx::query_scalar("SELECT deployment_id FROM user_contexts WHERE id=$1 AND user_id=$2")
-            .bind(owner.user_context_id.0)
-            .bind(owner.user_id.0)
-            .fetch_one(db.pool())
-            .await?;
+    let permitted =
+        crate::storage::span_authority::permitted_connections(db.pool(), owner, agent).await?;
     let ids: Vec<Uuid> = spans.iter().map(|s| s.id).collect();
-    let scoped: Vec<Uuid> = sqlx::query_scalar(
+    let scoped: std::collections::HashSet<Uuid> = sqlx::query_scalar(
         "SELECT id FROM spans WHERE id=ANY($1) AND user_context_id=$2 AND user_id=$3",
     )
     .bind(&ids)
     .bind(owner.user_context_id.0)
     .bind(owner.user_id.0)
     .fetch_all(db.pool())
-    .await?;
-    let context = RequestContext {
-        id: UserContextId(owner.user_context_id.0),
-        user_id: UserId(owner.user_id.0),
-        subject: RequestSubject {
-            deployment_id: DeploymentId(deployment),
-        },
-    };
-    let grants = match agent {
-        Some(key) => {
-            vox_connections::capability_grants::CapabilityGrantService::new(db.pool().clone())
-                .effective_for_agent(&context, key)
-                .await
-                .map_err(|_| SpanToolError::InvalidInput("Agent access unavailable".into()))?
-        }
-        None => vec![],
-    };
+    .await?
+    .into_iter()
+    .collect();
     Ok(spans
         .into_iter()
         .filter(|s| {
@@ -527,16 +506,7 @@ pub(crate) async fn permitted_agent_spans(
                     Some(raw) => raw
                         .as_str()
                         .and_then(|s| Uuid::parse_str(s).ok())
-                        .is_some_and(|id| {
-                            grants.iter().any(|g| {
-                                g.connection_id == id
-                                    && (g.capability_external_key
-                                        == format!("curated_{}.read", s.source)
-                                        || (s.source == "playstation"
-                                            && g.capability_external_key
-                                                == "playstation.game_activity"))
-                            })
-                        }),
+                        .is_some_and(|id| permitted.contains(&id)),
                 }
         })
         .collect())
