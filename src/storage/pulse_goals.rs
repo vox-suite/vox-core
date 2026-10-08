@@ -1,4 +1,4 @@
-use super::pulse::PulseRepository;
+use super::pulse::{NATIVE_CONTEXT, PulseRepository};
 use crate::domain::{pulse::PulseDefinition, pulse_goals::*};
 use chrono::NaiveDate;
 use sqlx::Row;
@@ -36,7 +36,7 @@ fn row_to_goal(row: &sqlx::postgres::PgRow) -> Result<GoalRow, sqlx::Error> {
 impl PulseRepository {
     pub async fn list_goals(&self, user: Uuid) -> Result<Vec<GoalRow>, sqlx::Error> {
         let rows = sqlx::query(&format!(
-            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 ORDER BY g.created_at,g.id"
+            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.user_context_id={NATIVE_CONTEXT} ORDER BY g.created_at,g.id"
         ))
         .bind(user)
         .fetch_all(&self.pool)
@@ -45,7 +45,7 @@ impl PulseRepository {
     }
     pub async fn get_goal(&self, user: Uuid, id: Uuid) -> Result<Option<GoalRow>, sqlx::Error> {
         let row = sqlx::query(&format!(
-            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.id=$2"
+            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.user_context_id={NATIVE_CONTEXT} AND g.id=$2"
         ))
         .bind(user)
         .bind(id)
@@ -59,7 +59,7 @@ impl PulseRepository {
         node: Uuid,
     ) -> Result<Option<GoalRow>, sqlx::Error> {
         let row = sqlx::query(&format!(
-            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.space_node_id=$2"
+            "SELECT {COLUMNS} FROM pulse_goals g WHERE g.user_id=$1 AND g.user_context_id={NATIVE_CONTEXT} AND g.space_node_id=$2"
         ))
         .bind(user)
         .bind(node)
@@ -68,7 +68,7 @@ impl PulseRepository {
         row.as_ref().map(row_to_goal).transpose()
     }
     pub async fn count_goals(&self, user: Uuid) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar("SELECT count(*) FROM pulse_goals WHERE user_id=$1")
+        sqlx::query_scalar(&format!("SELECT count(*) FROM pulse_goals g WHERE g.user_id=$1 AND g.user_context_id={NATIVE_CONTEXT}"))
             .bind(user)
             .fetch_one(&self.pool)
             .await
@@ -86,10 +86,10 @@ impl PulseRepository {
             .map(serde_json::to_value)
             .transpose()
             .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-        sqlx::query_scalar(
-            "INSERT INTO pulse_goals(user_id,title,kind,direction,period,target,unit,definition,starts_on,deadline,space_node_id) \
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id",
-        )
+        sqlx::query_scalar(&format!(
+            "INSERT INTO pulse_goals(user_id,title,kind,direction,period,target,unit,definition,starts_on,deadline,space_node_id,user_context_id) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,{NATIVE_CONTEXT}) RETURNING id"
+        ))
         .bind(user)
         .bind(draft.title.trim())
         .bind(draft.kind.as_str())
@@ -106,7 +106,7 @@ impl PulseRepository {
     }
     pub async fn delete_goal(&self, user: Uuid, id: Uuid) -> Result<bool, sqlx::Error> {
         Ok(
-            sqlx::query("DELETE FROM pulse_goals WHERE user_id=$1 AND id=$2")
+            sqlx::query(&format!("DELETE FROM pulse_goals g WHERE g.user_id=$1 AND g.id=$2 AND g.user_context_id={NATIVE_CONTEXT}"))
                 .bind(user)
                 .bind(id)
                 .execute(&self.pool)
@@ -123,9 +123,9 @@ impl PulseRepository {
         note: &str,
         on: NaiveDate,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO pulse_goal_entries(goal_id,user_id,amount,note,occurred_on) VALUES($1,$2,$3,$4,$5)",
-        )
+        let changed=sqlx::query(&format!(
+            "INSERT INTO pulse_goal_entries(goal_id,user_id,amount,note,occurred_on,user_context_id) SELECT g.id,$2,$3,$4,$5,g.user_context_id FROM pulse_goals g WHERE g.id=$1 AND g.user_id=$2 AND g.user_context_id={scope}", scope=NATIVE_CONTEXT.replace("$1","$2")
+        ))
         .bind(goal)
         .bind(user)
         .bind(amount)
@@ -133,6 +133,9 @@ impl PulseRepository {
         .bind(on)
         .execute(&self.pool)
         .await?;
+        if changed.rows_affected() != 1 {
+            return Err(sqlx::Error::RowNotFound);
+        }
         Ok(())
     }
 }

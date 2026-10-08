@@ -561,7 +561,7 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
             .unwrap(),
         0
     );
-    let connection = Uuid::new_v4();
+    let connection:Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(user).fetch_one(db.pool()).await.unwrap();
     for expected in [1, 0] {
         let mut tx = db.pool().begin().await.unwrap();
         assert_eq!(

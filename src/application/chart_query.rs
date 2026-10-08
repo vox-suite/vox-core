@@ -1,3 +1,4 @@
+use crate::storage::pulse::ALLOWED_SPANS;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -48,8 +49,8 @@ pub async fn compute_chart_data(
                             THEN (data->>$3)::numeric
                             ELSE NULL
                         END AS val_num
-                    FROM spans
-                    WHERE user_id = $1
+                    FROM spans s
+                    WHERE {ALLOWED_SPANS}
                       AND schema_id = ANY($2)
                 )
                 SELECT
@@ -91,8 +92,8 @@ pub async fn compute_chart_data(
                             THEN (data->>$3)::numeric
                             ELSE NULL
                         END AS val_num
-                    FROM spans
-                    WHERE user_id = $1
+                    FROM spans s
+                    WHERE {ALLOWED_SPANS}
                       AND schema_id = ANY($2)
                 )
                 SELECT

@@ -70,8 +70,8 @@ impl EventAgent {
             .name("event-agent")
             .record_content_telemetry(crate::telemetry::record_content())
             .preamble(PREAMBLE)
-            .tool(ListSpans::new(Some(self.db.clone()), context.owner))
-            .tool(GetSpan::new(Some(self.db.clone()), context.owner))
+            .tool(ListSpans::new(Some(self.db.clone()), context.owner).with_agent("event-agent"))
+            .tool(GetSpan::new(Some(self.db.clone()), context.owner).with_agent("event-agent"))
             .tool(QueryUserData::new(Some(self.db.clone()), user_id))
             .tool(FindSchemas::new(Some(self.db.clone()), user_id))
             .tool(RecordTask::new(

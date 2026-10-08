@@ -215,17 +215,20 @@ impl SpaceRuntime {
                 max_children,
                 self.user_events.clone(),
             ))
-            .tool(ProposeGoal::new(
-                Some(self.db.clone()),
-                user_id,
-                space_id,
-                self.user_events.clone(),
-            ))
-            .tool(ListGoalMeasurements::new(Some(self.db.clone()), user_id))
+            .tool(
+                ProposeGoal::new(
+                    Some(self.db.clone()),
+                    user_id,
+                    space_id,
+                    self.user_events.clone(),
+                )
+                .with_owner(owner),
+            )
+            .tool(ListGoalMeasurements::new(Some(self.db.clone()), user_id).with_owner(owner))
             .tool(FindSchemas::new(Some(self.db.clone()), user_id))
             .tool(QueryUserData::new(Some(self.db.clone()), user_id))
-            .tool(ListSpans::new(Some(self.db.clone()), owner))
-            .tool(GetSpan::new(Some(self.db.clone()), owner))
+            .tool(ListSpans::new(Some(self.db.clone()), owner).with_agent("space-agent"))
+            .tool(GetSpan::new(Some(self.db.clone()), owner).with_agent("space-agent"))
             .tool(WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
             .tool(SearchPlaces::new(
                 self.http.clone(),

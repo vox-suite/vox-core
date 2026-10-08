@@ -103,6 +103,7 @@ impl crate::agents::chart_suggester::SuggestingCharts for FixtureSuggester {
                     dimension: m.default_dimension,
                     period_days: 30,
                     offset_days: 0,
+                    top_n: None,
                     timezone: timezone.clone(),
                     chart_type: ChartType::Bar,
                 },
@@ -120,11 +121,13 @@ async fn chart_agent_grant(
         .await
         .unwrap();
     let agent:uuid::Uuid=sqlx::query_scalar("INSERT INTO agent_definitions(deployment_id,owner_user_context_id,external_key,purpose,requested_capability_categories) VALUES($1,$2,'pulse-discovery','Chart suggestions',ARRAY['curated_spotify.read']) RETURNING id").bind(context.subject.deployment_id.0).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+    let model: uuid::Uuid = sqlx::query_scalar("INSERT INTO agent_model_configurations(agent_definition_id,version,model_adapter,model) VALUES($1,1,'gemini','fixture') RETURNING id").bind(agent).fetch_one(db.pool()).await.unwrap();
     sqlx::query(
-        "INSERT INTO deployment_agent_selections(deployment_id,agent_definition_id) VALUES($1,$2)",
+        "INSERT INTO deployment_agent_selections(deployment_id,agent_definition_id,model_configuration_id) VALUES($1,$2,$3)",
     )
     .bind(context.subject.deployment_id.0)
     .bind(agent)
+    .bind(model)
     .execute(db.pool())
     .await
     .unwrap();
@@ -265,7 +268,10 @@ async fn previews_count_plays_without_numeric_fields_and_keep_currency_separate(
     let catalog = measurement_catalog(&profiles);
     let measurements: Vec<_> = catalog
         .into_iter()
-        .filter(|m| m.profile.source == "spotify" || m.field.as_deref() == Some("amount"))
+        .filter(|m| {
+            m.profile.source != "all_sources"
+                && (m.profile.source == "spotify" || m.field.as_deref() == Some("amount"))
+        })
         .collect();
     let inputs: Vec<_> = measurements
         .into_iter()
@@ -919,7 +925,7 @@ async fn native_pulse_excludes_other_host_context_facts_and_accounts() {
         .fetch_one(db.pool())
         .await
         .unwrap();
-    let other:uuid::Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) SELECT deployment_id,host_app_id,'different-host-subject',user_id FROM user_contexts WHERE id=$1 RETURNING id").bind(native).fetch_one(db.pool()).await.unwrap();
+    let other:uuid::Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) SELECT deployment_id,host_app_id,'different-host-subject:'||$1::text,user_id FROM user_contexts WHERE id=$1 RETURNING id").bind(native).fetch_one(db.pool()).await.unwrap();
     for (context, title) in [(native, "Visible"), (other, "Private")] {
         let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,$2,'spotify',now()) RETURNING id").bind(id).bind(context).fetch_one(db.pool()).await.unwrap();
         sqlx::query("INSERT INTO spans(user_id,user_context_id,title,status,source,category,start_at,data) VALUES($1,$2,$3,'done','spotify','listening',now(),$4)").bind(id).bind(context).bind(title).bind(json!({"connection_id":conn,"provider_data":{"action":"listen"}})).execute(db.pool()).await.unwrap();
@@ -928,10 +934,400 @@ async fn native_pulse_excludes_other_host_context_facts_and_accounts() {
     let inventory = repo.inventory(id).await.unwrap();
     assert_eq!(inventory.record_count, 1);
     assert_eq!(repo.metadata(id, None).await.unwrap().connections.len(), 1);
+    let schema:uuid::Uuid=sqlx::query_scalar("INSERT INTO data_schemas(user_id,user_context_id,namespace,name,json_schema) VALUES($1,$2,'fixture','Scope','{}') RETURNING id").bind(id).bind(native).fetch_one(db.pool()).await.unwrap();
+    sqlx::query(
+        "UPDATE spans SET schema_id=$2,data=data||jsonb_build_object('amount',1) WHERE user_id=$1",
+    )
+    .bind(id)
+    .bind(schema)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    let chart_query = crate::domain::charts::QuerySpec {
+        metric_field: "amount".into(),
+        aggregation: crate::domain::charts::Aggregation::Sum,
+        group_by: crate::domain::charts::GroupBy::Day,
+    };
+    let chart =
+        crate::application::chart_query::compute_chart_data(db.pool(), id, &[schema], &chart_query)
+            .await
+            .unwrap();
+    assert_eq!(chart.iter().map(|p| p.value).sum::<f64>(), 1.0);
+
+    let spans = crate::storage::spans::SpanRepository::new(db.pool().clone());
+    let rows = spans.list(id, &Default::default()).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Visible");
+    let private: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM spans WHERE user_id=$1 AND title='Private'")
+            .bind(id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert!(spans.get_by_id(id, private).await.unwrap().is_none());
+    assert!(!spans.delete(id, private).await.unwrap());
+    let from = chrono::Utc::now() - chrono::Duration::days(1);
+    let to = chrono::Utc::now() + chrono::Duration::days(1);
+    let counts = spans
+        .day_counts(id, None, &[(from.date_naive(), from, to)])
+        .await
+        .unwrap();
+    assert_eq!(counts.iter().map(|d| d.count).sum::<i64>(), 1);
+    assert_eq!(
+        spans
+            .day_page(id, None, from, to, None, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     sqlx::query("UPDATE vox_connections SET assistant_read=false WHERE user_context_id=$1")
         .bind(native)
         .execute(db.pool())
         .await
         .unwrap();
     assert_eq!(repo.inventory(id).await.unwrap().record_count, 0);
+    assert!(
+        crate::application::chart_query::compute_chart_data(db.pool(), id, &[schema], &chart_query)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    assert!(
+        spans
+            .list(id, &Default::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        spans
+            .day_counts(id, None, &[(from.date_naive(), from, to)])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        spans
+            .day_page(id, None, from, to, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn native_creation_and_generic_history_survive_multiple_host_contexts() {
+    let db = database().await;
+    let id = user(&db).await;
+    let context = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(id)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) SELECT deployment_id,host_app_id,'other:'||$1::text,user_id FROM user_contexts WHERE id=$1").bind(context.id.0).execute(db.pool()).await.unwrap();
+    let repo = crate::storage::spans::SpanRepository::new(db.pool().clone());
+    let native = repo
+        .create(
+            id,
+            crate::domain::spans::NewSpan {
+                title: "Native note".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(repo.get_by_id(id, native.id).await.unwrap().is_some());
+
+    let other: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM user_contexts WHERE user_id=$1 AND id<>$2")
+            .bind(id)
+            .bind(context.id.0)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    let other_owner = crate::identity::ResourceOwner {
+        user_id: context.user_id,
+        user_context_id: crate::identity::UserContextId(other),
+    };
+    let private = repo
+        .create_for_owner(
+            other_owner,
+            crate::domain::spans::NewSpan {
+                title: "Other host note".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.list_for_owner(context.owner(), &Default::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        repo.list_for_owner(other_owner, &Default::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        repo.get_for_owner(context.owner(), private.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repo.get_for_owner(other_owner, native.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        repo.update_for_owner(
+            other_owner,
+            private.id,
+            crate::domain::spans::SpanPatch {
+                notes: Some("Own note".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap(),
+        crate::domain::ConcurrencyOutcome::Success(_)
+    ));
+    assert!(matches!(
+        repo.update_for_owner(context.owner(), private.id, Default::default())
+            .await
+            .unwrap(),
+        crate::domain::ConcurrencyOutcome::NotFound
+    ));
+    assert_eq!(
+        crate::agents::tools::spans::permitted_agent_spans(
+            &db,
+            other_owner,
+            None,
+            repo.list_for_owner(other_owner, &Default::default())
+                .await
+                .unwrap()
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+    let goals = crate::storage::pulse::PulseRepository::new(db.pool().clone());
+    let draft = crate::domain::pulse_goals::GoalDraft {
+        timezone: "UTC".into(),
+        title: "Native saving".into(),
+        kind: crate::domain::pulse_goals::GoalKind::Saving,
+        direction: crate::domain::pulse_goals::GoalDirection::AtLeast,
+        period: None,
+        target: 100.0,
+        unit: "INR".into(),
+        definition: None,
+        deadline: None,
+    };
+    let goal = goals
+        .insert_goal(id, &draft, chrono::Utc::now().date_naive(), None)
+        .await
+        .unwrap();
+    goals
+        .add_goal_entry(id, goal, 10.0, "Fixture", chrono::Utc::now().date_naive())
+        .await
+        .unwrap();
+    let foreign:uuid::Uuid=sqlx::query_scalar("INSERT INTO pulse_goals(user_id,user_context_id,title,kind,target,unit,starts_on) SELECT $1,id,'Private goal','saving',100,'INR',current_date FROM user_contexts WHERE user_id=$1 AND id<>$2 RETURNING pulse_goals.id").bind(id).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+    assert_eq!(goals.list_goals(id).await.unwrap().len(), 1);
+    assert!(!goals.delete_goal(id, foreign).await.unwrap());
+    assert!(
+        goals
+            .add_goal_entry(id, foreign, 1.0, "Denied", chrono::Utc::now().date_naive())
+            .await
+            .is_err()
+    );
+    let integration:uuid::Uuid=sqlx::query_scalar("INSERT INTO integration_definitions(deployment_id,external_key,protocol,display_name,declaration_version,state) VALUES($1,$2,'direct','History fixture',1,'enabled') RETURNING id").bind(context.subject.deployment_id.0).bind(format!("history-{id}")).fetch_one(db.pool()).await.unwrap();
+    let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO external_connections(user_context_id,integration_id,external_account_hash,credential_custody,authorization_state,authorized_capabilities) VALUES($1,$2,$3,'platform_held','authorized',ARRAY['playstation.game_activity']) RETURNING id").bind(context.id.0).bind(integration).bind(vec![8u8;32]).fetch_one(db.pool()).await.unwrap();
+    let imported = repo
+        .create_for_owner(
+            context.owner(),
+            crate::domain::spans::NewSpan {
+                title: "Generic history".into(),
+                data: Some(json!({"connection_id":conn})),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(repo.get_by_id(id, imported.id).await.unwrap().is_some());
+    sqlx::query("UPDATE external_connections SET authorization_state='revoked' WHERE id=$1")
+        .bind(conn)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    assert!(repo.get_by_id(id, imported.id).await.unwrap().is_none());
+}
+
+struct PausedSuggester {
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    resume: std::sync::Arc<tokio::sync::Notify>,
+}
+#[async_trait::async_trait]
+impl crate::agents::chart_suggester::SuggestingCharts for PausedSuggester {
+    async fn suggest(
+        &self,
+        _: crate::agents::chart_suggester::ChartSuggestionPrompt,
+    ) -> Result<Vec<crate::agents::chart_suggester::ChartSuggestion>, crate::agents::AgentError>
+    {
+        Ok(vec![])
+    }
+    async fn suggest_pulse(
+        &self,
+        catalog: Vec<Measurement>,
+        timezone: String,
+        ask: crate::agents::chart_suggester::PulseAsk,
+    ) -> Result<Vec<PulseCandidate>, crate::agents::AgentError> {
+        self.entered.notify_one();
+        self.resume.notified().await;
+        FixtureSuggester.suggest_pulse(catalog, timezone, ask).await
+    }
+}
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn revoking_during_model_request_discards_connector_suggestions() {
+    use super::service::PulseService;
+    use crate::{domain::identity::Actor, storage::pulse::PulseRepository};
+    let db = database().await;
+    let id = user(&db).await;
+    let conn: uuid::Uuid = sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at,data) VALUES($1,'Song','done','spotify','music',now(),$2)").bind(id).bind(json!({"connection_id":conn,"provider_data":{"action":"listen"}})).execute(db.pool()).await.unwrap();
+
+    let owner = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(id)
+        .await
+        .unwrap()
+        .owner();
+    let spans = crate::storage::spans::SpanRepository::new(db.pool().clone())
+        .list(id, &Default::default())
+        .await
+        .unwrap();
+    assert!(
+        crate::agents::tools::spans::permitted_agent_spans(&db, owner, None, spans.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::agents::tools::spans::permitted_agent_spans(
+            &db,
+            owner,
+            Some("pulse-discovery"),
+            spans.clone()
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    let grant = chart_agent_grant(&db, id, conn).await;
+
+    assert_eq!(
+        crate::agents::tools::spans::permitted_agent_spans(
+            &db,
+            owner,
+            Some("pulse-discovery"),
+            spans.clone()
+        )
+        .await
+        .unwrap()
+        .len(),
+        1
+    );
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let resume = std::sync::Arc::new(tokio::sync::Notify::new());
+    let service = PulseService::new(PulseRepository::new(db.pool().clone())).with_suggester(
+        std::sync::Arc::new(PausedSuggester {
+            entered: entered.clone(),
+            resume: resume.clone(),
+        }),
+    );
+    let task = tokio::spawn(async move {
+        service
+            .discover(
+                &Actor::user(id),
+                DiscoveryInput {
+                    timezone: "UTC".into(),
+                    refresh: true,
+                    more: false,
+                    prompt: None,
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), entered.notified())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE id=$1")
+        .bind(grant)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    resume.notify_one();
+    assert!(task.await.unwrap().unwrap().suggestions.is_empty());
+    assert!(
+        crate::agents::tools::spans::permitted_agent_spans(
+            &db,
+            owner,
+            Some("pulse-discovery"),
+            spans
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn composite_spending_is_owner_only_and_agent_identity_is_specific() {
+    use super::service::PulseService;
+    use crate::storage::pulse::PulseRepository;
+    let db = database().await;
+    let id = user(&db).await;
+    let conn: uuid::Uuid = sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    let mut p = profile("spotify", "payment", json!({"amount":"number"}));
+    p.connection_id = Some(conn);
+    p.currency = "INR".into();
+    let mut ungranted = p.clone();
+    ungranted.connection_id = Some(uuid::Uuid::new_v4());
+    ungranted.key = "ungranted".into();
+    let catalog = measurement_catalog(&[p, ungranted]);
+    assert!(catalog.iter().any(|m| m.profile.source == "all_sources"));
+    let service = PulseService::new(PulseRepository::new(db.pool().clone()));
+    assert!(
+        service
+            .catalog_for_agent(id, catalog.clone(), "pulse-discovery")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    chart_agent_grant(&db, id, conn).await;
+    let allowed = service
+        .catalog_for_agent(id, catalog.clone(), "pulse-discovery")
+        .await
+        .unwrap();
+    assert!(!allowed.is_empty());
+    assert!(
+        allowed
+            .iter()
+            .all(|m| m.profile.connection_id == Some(conn))
+    );
+    assert!(
+        service
+            .catalog_for_agent(id, catalog, "space-agent")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -373,3 +373,46 @@ async fn maps_upgrade_preserves_annotations_and_repeat_import_identity() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL, PostgreSQL18 and pgvector"]
+async fn goal_upgrade_preserves_ambiguous_history_without_assigning_authority() {
+    let (admin, db, name) = database().await;
+    apply(&db, 0, 20261008000003).await;
+    let (user, _, _, _) = seed(&db).await;
+    let context: Uuid = sqlx::query_scalar("SELECT id FROM user_contexts WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let goal:Uuid=sqlx::query_scalar("INSERT INTO pulse_goals(user_id,title,kind,target,unit,starts_on) VALUES($1,'Keep savings','saving',100,'INR',current_date) RETURNING id").bind(user).fetch_one(db.pool()).await.unwrap();
+    let entry:Uuid=sqlx::query_scalar("INSERT INTO pulse_goal_entries(goal_id,user_id,amount,occurred_on) VALUES($1,$2,10,current_date) RETURNING id").bind(goal).bind(user).fetch_one(db.pool()).await.unwrap();
+    sqlx::query("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) SELECT deployment_id,host_app_id,'ambiguous:'||$1::text,user_id FROM user_contexts WHERE id=$1").bind(context).execute(db.pool()).await.unwrap();
+    db.migrate().await.unwrap();
+    let row = sqlx::query("SELECT user_context_id FROM pulse_goals WHERE id=$1")
+        .bind(goal)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert!(row.get::<Option<Uuid>, _>("user_context_id").is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, f64>("SELECT amount FROM pulse_goal_entries WHERE id=$1")
+            .bind(entry)
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        10.0
+    );
+    assert!(
+        vox_core::storage::pulse::PulseRepository::new(db.pool().clone())
+            .list_goals(user)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    db.pool().close().await;
+    sqlx::query(&format!("DROP DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}

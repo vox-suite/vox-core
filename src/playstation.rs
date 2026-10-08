@@ -108,6 +108,10 @@ impl PlayStationCapture {
             .await?;
         let row=sqlx::query("SELECT c.user_context_id,uc.user_id FROM external_connections c JOIN user_contexts uc ON uc.id=c.user_context_id JOIN integration_definitions i ON i.id=c.integration_id WHERE c.id=$1 AND c.authorization_state='authorized' AND (c.expires_at IS NULL OR c.expires_at>now()) AND 'playstation.game_activity'=ANY(c.authorized_capabilities) AND i.external_key='playstation' AND i.state='enabled' FOR UPDATE OF c").bind(id).fetch_optional(&mut *tx).await?.ok_or(PlayStationError::ReconnectRequired)?;
         let user_id: Uuid = row.get("user_id");
+        sqlx::query("SELECT set_config('vox.connection_context',$1,true)")
+            .bind(row.get::<Uuid, _>("user_context_id").to_string())
+            .execute(&mut *tx)
+            .await?;
         let capture=sqlx::query("SELECT account_id,snapshots,capture_enabled,last_synced_at,next_sync_at,failure_code,generation FROM playstation_accounts WHERE connection_id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or(PlayStationError::ReconnectRequired)?;
         if capture.get::<Uuid, _>("generation") != generation {
             return Err(PlayStationError::ConnectionNotFound);
