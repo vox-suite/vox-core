@@ -2,7 +2,7 @@ use crate::{
     application::pulse::measurements::measurement_catalog,
     db::Db,
     domain::pulse_goals::{GoalDirection, GoalKind, GoalPeriod, GoalSuggestion},
-    identity::UserId,
+    identity::{ResourceOwner, UserId},
     realtime::UserEventHub,
     storage::{pulse::PulseRepository, spaces::SpaceRepository},
 };
@@ -22,10 +22,20 @@ pub struct NoArgs {}
 pub struct ListGoalMeasurements {
     db: Option<Db>,
     user_id: UserId,
+    owner: Option<ResourceOwner>,
 }
 impl ListGoalMeasurements {
     pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+        Self {
+            db,
+            user_id,
+            owner: None,
+        }
+    }
+    pub fn with_owner(mut self, owner: ResourceOwner) -> Self {
+        self.user_id = owner.user_id;
+        self.owner = Some(owner);
+        self
     }
 }
 impl Tool for ListGoalMeasurements {
@@ -46,11 +56,17 @@ impl Tool for ListGoalMeasurements {
         _args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         let db = self.db.as_ref().ok_or(SpaceGraphToolError::NotConfigured)?;
+        verify_native_goal_owner(db, self.user_id, self.owner).await?;
         let profiles = PulseRepository::new(db.pool().clone())
             .profiles(self.user_id.0)
             .await?;
-        let list: Vec<Value> = measurement_catalog(&profiles)
-            .into_iter()
+        let catalog = crate::application::pulse::service::PulseService::new(PulseRepository::new(
+            db.pool().clone(),
+        ))
+        .catalog_for_agent(self.user_id.0, measurement_catalog(&profiles), "general")
+        .await
+        .map_err(|e| SpaceGraphToolError::InvalidInput(e.to_string()))?;
+        let list: Vec<Value> = catalog.into_iter()
             .take(60)
             .map(|m| json!({ "id": m.id, "title": m.title, "unit": m.unit, "description": m.description }))
             .collect();
@@ -83,6 +99,7 @@ pub struct ProposeGoal {
     user_id: UserId,
     space_id: Uuid,
     user_events: Option<UserEventHub>,
+    owner: Option<ResourceOwner>,
 }
 impl ProposeGoal {
     pub fn new(
@@ -96,7 +113,13 @@ impl ProposeGoal {
             user_id,
             space_id,
             user_events,
+            owner: None,
         }
+    }
+    pub fn with_owner(mut self, owner: ResourceOwner) -> Self {
+        self.user_id = owner.user_id;
+        self.owner = Some(owner);
+        self
     }
 }
 impl Tool for ProposeGoal {
@@ -131,6 +154,7 @@ impl Tool for ProposeGoal {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         let db = self.db.as_ref().ok_or(SpaceGraphToolError::NotConfigured)?;
+        verify_native_goal_owner(db, self.user_id, self.owner).await?;
         let invalid = |m: &str| SpaceGraphToolError::InvalidInput(m.into());
         let title: String = args.title.trim().chars().take(120).collect();
         if title.is_empty() {
@@ -178,12 +202,15 @@ impl Tool for ProposeGoal {
                 let profiles = PulseRepository::new(db.pool().clone())
                     .profiles(self.user_id.0)
                     .await?;
-                let m = measurement_catalog(&profiles)
-                    .into_iter()
-                    .find(|m| m.id == id)
-                    .ok_or_else(|| {
-                        invalid("unknown measurement_id; call list_goal_measurements first")
-                    })?;
+                let catalog = crate::application::pulse::service::PulseService::new(
+                    PulseRepository::new(db.pool().clone()),
+                )
+                .catalog_for_agent(self.user_id.0, measurement_catalog(&profiles), "general")
+                .await
+                .map_err(|e| invalid(&e.to_string()))?;
+                let m = catalog.into_iter().find(|m| m.id == id).ok_or_else(|| {
+                    invalid("unknown measurement_id; call list_goal_measurements first")
+                })?;
                 unit = Some(m.unit);
                 measurement_id = Some(id);
             }
@@ -239,4 +266,26 @@ impl Tool for ProposeGoal {
             "note": "Waiting for the user to approve this goal on the node."
         }))
     }
+}
+
+async fn verify_native_goal_owner(
+    db: &Db,
+    user: UserId,
+    owner: Option<ResourceOwner>,
+) -> Result<(), SpaceGraphToolError> {
+    let Some(owner) = owner else {
+        return Err(SpaceGraphToolError::NotConfigured);
+    };
+    let valid: bool = sqlx::query_scalar(&format!(
+        "SELECT COALESCE({}=$2,false)",
+        crate::storage::pulse::NATIVE_CONTEXT
+    ))
+    .bind(user.0)
+    .bind(owner.user_context_id.0)
+    .fetch_one(db.pool())
+    .await?;
+    if !valid || owner.user_id != user {
+        return Err(SpaceGraphToolError::NotConfigured);
+    }
+    Ok(())
 }

@@ -1,3 +1,4 @@
+use crate::storage::pulse::{ALLOWED_SPANS, NATIVE_CONTEXT};
 /**
 * Storage repository for spans and their automatic nesting.
 */
@@ -31,12 +32,47 @@ impl SpanRepository {
     }
 
     pub async fn create(&self, user_id: Uuid, input: NewSpan) -> Result<Span, sqlx::Error> {
+        let context =
+            crate::identity::IdentityService::new(crate::db::Db::from_pool(self.pool.clone()))
+                .resolve_for_user(user_id)
+                .await
+                .map_err(|_| sqlx::Error::RowNotFound)?;
+        self.create_for_owner(context.owner(), input).await
+    }
+
+    pub async fn create_for_owner(
+        &self,
+        owner: crate::identity::ResourceOwner,
+        input: NewSpan,
+    ) -> Result<Span, sqlx::Error> {
+        let user_id = owner.user_id.0;
         let mut tx = self.pool.begin().await?;
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM user_contexts WHERE id=$1 AND user_id=$2 FOR SHARE",
+        )
+        .bind(owner.user_context_id.0)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if let Some(parent) = input.parent_id {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM spans WHERE id=$1 AND user_id=$2 AND user_context_id=$3",
+            )
+            .bind(parent)
+            .bind(user_id)
+            .bind(owner.user_context_id.0)
+            .fetch_one(&mut *tx)
+            .await?;
+        }
+        sqlx::query("SELECT set_config('vox.connection_context',$1,true)")
+            .bind(owner.user_context_id.0.to_string())
+            .execute(&mut *tx)
+            .await?;
         let id = insert(&mut tx, user_id, &input).await?;
         tx.commit().await?;
-        self.get_by_id(user_id, id)
-            .await?
-            .ok_or(sqlx::Error::RowNotFound)
+        let row = sqlx::query(&format!("SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN} WHERE s.id=$1 AND s.user_id=$2 AND s.user_context_id=$3"))
+            .bind(id).bind(user_id).bind(owner.user_context_id.0).fetch_one(&self.pool).await?;
+        Ok(map_span(row))
     }
 
     pub async fn record(&self, user_id: Uuid, input: NewSpan) -> Result<Uuid, sqlx::Error> {
@@ -80,20 +116,55 @@ impl SpanRepository {
     }
 
     pub async fn get_by_id(&self, user_id: Uuid, id: Uuid) -> Result<Option<Span>, sqlx::Error> {
+        self.get_in_context(user_id, id, None).await
+    }
+    pub async fn get_for_owner(
+        &self,
+        owner: crate::identity::ResourceOwner,
+        id: Uuid,
+    ) -> Result<Option<Span>, sqlx::Error> {
+        self.get_in_context(owner.user_id.0, id, Some(owner.user_context_id.0))
+            .await
+    }
+    async fn get_in_context(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        context: Option<Uuid>,
+    ) -> Result<Option<Span>, sqlx::Error> {
         let row = sqlx::query(&format!(
-            "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN} WHERE s.id = $1 AND s.user_id = $2"
+            "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN} WHERE s.id = $1 AND {allowed}",
+            allowed = owner_predicate("$3").replace("$1", "$2")
         ))
         .bind(id)
         .bind(user_id)
+        .bind(context)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(map_span))
     }
 
     pub async fn list(&self, user_id: Uuid, query: &SpanQuery) -> Result<Vec<Span>, sqlx::Error> {
+        self.list_in_context(user_id, query, None).await
+    }
+    pub async fn list_for_owner(
+        &self,
+        owner: crate::identity::ResourceOwner,
+        query: &SpanQuery,
+    ) -> Result<Vec<Span>, sqlx::Error> {
+        self.list_in_context(owner.user_id.0, query, Some(owner.user_context_id.0))
+            .await
+    }
+    async fn list_in_context(
+        &self,
+        user_id: Uuid,
+        query: &SpanQuery,
+        context: Option<Uuid>,
+    ) -> Result<Vec<Span>, sqlx::Error> {
+        let allowed = owner_predicate("$9");
         let rows = sqlx::query(&format!(
             "SELECT {SPAN_COLUMNS} FROM spans s {SPAN_JOIN}
-             WHERE s.user_id = $1
+             WHERE {allowed}
                AND ($2::timestamptz IS NULL OR COALESCE(s.end_at, s.start_at) >= $2)
                AND ($3::timestamptz IS NULL OR s.start_at < $3)
                AND ($4::uuid IS NULL OR EXISTS (
@@ -112,6 +183,7 @@ impl SpanRepository {
         .bind(query.unscheduled)
         .bind(query.limit.unwrap_or(500).clamp(1, 2000))
         .bind(query.schema_id)
+        .bind(context)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(map_span).collect())
@@ -136,20 +208,20 @@ impl SpanRepository {
         let days: Vec<NaiveDate> = bounds.iter().map(|b| b.0).collect();
         let starts: Vec<DateTime<Utc>> = bounds.iter().map(|b| b.1).collect();
         let ends: Vec<DateTime<Utc>> = bounds.iter().map(|b| b.2).collect();
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "SELECT d.day, COALESCE(s.category, '') AS category, count(*)::bigint AS n
              FROM unnest($2::date[], $3::timestamptz[], $4::timestamptz[]) AS d(day, s, e)
              JOIN LATERAL (
-                 SELECT category FROM spans
-                 WHERE user_id = $1 AND start_at IS NOT NULL
+                 SELECT category FROM spans s
+                 WHERE {ALLOWED_SPANS} AND start_at IS NOT NULL
                    AND span_range(start_at, end_at) && tstzrange(d.s, d.e, '[)')
                    AND ($5::uuid IS NULL OR EXISTS (
                         SELECT 1 FROM collection_spans cs
-                        WHERE cs.span_id = spans.id AND cs.collection_id = $5))
+                        WHERE cs.span_id = s.id AND cs.collection_id = $5))
              ) s ON true
              GROUP BY d.day, s.category
-             ORDER BY d.day, n DESC",
-        )
+             ORDER BY d.day, n DESC"
+        ))
         .bind(user_id)
         .bind(&days)
         .bind(&starts)
@@ -191,13 +263,13 @@ impl SpanRepository {
     ) -> Result<Vec<Span>, sqlx::Error> {
         let rows = sqlx::query(&format!(
             "WITH m AS MATERIALIZED (
-                 SELECT id, start_at FROM spans
-                 WHERE user_id = $1 AND start_at IS NOT NULL
+                 SELECT id, start_at FROM spans s
+                 WHERE {ALLOWED_SPANS} AND start_at IS NOT NULL
                    AND span_range(start_at, end_at) && tstzrange($2, $3, '[)')
                    AND ($4::timestamptz IS NULL OR (start_at, id) > ($4, $5))
                    AND ($7::uuid IS NULL OR EXISTS (
                         SELECT 1 FROM collection_spans cs
-                        WHERE cs.span_id = spans.id AND cs.collection_id = $7))
+                        WHERE cs.span_id = s.id AND cs.collection_id = $7))
              ), page AS (
                  SELECT id FROM m ORDER BY start_at, id LIMIT $6
              )
@@ -222,6 +294,24 @@ impl SpanRepository {
         id: Uuid,
         patch: SpanPatch,
     ) -> Result<ConcurrencyOutcome<Span>, sqlx::Error> {
+        self.update_in_context(user_id, id, patch, None).await
+    }
+    pub async fn update_for_owner(
+        &self,
+        owner: crate::identity::ResourceOwner,
+        id: Uuid,
+        patch: SpanPatch,
+    ) -> Result<ConcurrencyOutcome<Span>, sqlx::Error> {
+        self.update_in_context(owner.user_id.0, id, patch, Some(owner.user_context_id.0))
+            .await
+    }
+    async fn update_in_context(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        patch: SpanPatch,
+        context: Option<Uuid>,
+    ) -> Result<ConcurrencyOutcome<Span>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query_as::<
             _,
@@ -232,10 +322,11 @@ impl SpanRepository {
                 Option<chrono::DateTime<chrono::Utc>>,
             ),
         >(
-            "SELECT version, source, start_at, end_at FROM spans WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            &format!("SELECT version, source, start_at, end_at FROM spans s WHERE s.id = $1 AND {allowed} FOR UPDATE OF s", allowed=owner_predicate("$3").replace("$1", "$2")),
         )
         .bind(id)
         .bind(user_id)
+        .bind(context)
         .fetch_optional(&mut *tx)
         .await?;
         let Some((current, source, old_start_at, old_end_at)) = row else {
@@ -303,18 +394,21 @@ impl SpanRepository {
         }
         tx.commit().await?;
 
-        Ok(match self.get_by_id(user_id, id).await? {
+        Ok(match self.get_in_context(user_id, id, context).await? {
             Some(span) => ConcurrencyOutcome::Success(span),
             None => ConcurrencyOutcome::NotFound,
         })
     }
 
     pub async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM spans WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(&format!(
+            "DELETE FROM spans s WHERE s.id=$1 AND {allowed}",
+            allowed = ALLOWED_SPANS.replace("$1", "$2")
+        ))
+        .bind(id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 }
@@ -378,12 +472,12 @@ async fn nest(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "WITH me AS (
-             SELECT id, start_at, COALESCE(end_at, start_at) AS end_at,
+             SELECT id, user_context_id, start_at, COALESCE(end_at, start_at) AS end_at,
                     COALESCE(end_at, start_at) - start_at AS dur
              FROM spans WHERE id = $1 AND start_at IS NOT NULL
          ), parent AS (
              SELECT p.id FROM spans p, me
-             WHERE p.user_id = $2 AND p.id <> me.id AND p.end_at IS NOT NULL
+             WHERE p.user_id = $2 AND p.user_context_id=me.user_context_id AND p.id <> me.id AND p.end_at IS NOT NULL
                AND p.start_at <= me.start_at AND p.end_at >= me.end_at
                AND p.end_at - p.start_at > me.dur
                AND p.end_at - p.start_at <= interval '1 day'
@@ -399,13 +493,13 @@ async fn nest(
 
     sqlx::query(
         "WITH me AS (
-             SELECT id, parent_id, start_at, end_at, end_at - start_at AS dur
+             SELECT id, user_context_id, parent_id, start_at, end_at, end_at - start_at AS dur
              FROM spans WHERE id = $1 AND start_at IS NOT NULL AND end_at IS NOT NULL
                AND end_at - start_at <= interval '1 day'
          )
          UPDATE spans c SET parent_id = me.id
          FROM me
-         WHERE c.user_id = $2 AND c.id <> me.id AND c.start_at IS NOT NULL
+         WHERE c.user_id = $2 AND c.user_context_id=me.user_context_id AND c.id <> me.id AND c.start_at IS NOT NULL
            AND c.start_at >= me.start_at AND COALESCE(c.end_at, c.start_at) <= me.end_at
            AND COALESCE(c.end_at, c.start_at) - c.start_at < me.dur
            AND c.parent_id IS NOT DISTINCT FROM me.parent_id",
@@ -447,4 +541,11 @@ fn map_span(row: PgRow) -> Span {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
+}
+
+fn owner_predicate(parameter: &str) -> String {
+    ALLOWED_SPANS.replace(
+        NATIVE_CONTEXT,
+        &format!("COALESCE({parameter}::uuid,{NATIVE_CONTEXT})"),
+    )
 }

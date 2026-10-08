@@ -54,7 +54,7 @@ impl PulseService {
         let mut grants = actor.grants.clone();
         grants.sort();
         format!(
-            "{kind}:{}:{:x}",
+            "scoped-v1:{kind}:{}:{:x}",
             meta.revision,
             Sha256::digest(format!(
                 "{}:{:?}:{grants:?}",
@@ -141,6 +141,70 @@ impl PulseService {
             .await?;
         Ok(results)
     }
+    // Owner-facing previews use owner authority. Sending connector metadata to
+    // the chart agent additionally requires its explicit capability grant.
+    pub(crate) async fn catalog_for_agent(
+        &self,
+        user: Uuid,
+        catalog: Vec<Measurement>,
+        agent: &str,
+    ) -> Result<Vec<Measurement>, PulseError> {
+        use vox_connections::identity::{
+            DeploymentId, RequestContext, RequestSubject, UserContextId, UserId,
+        };
+        // Fetch account scopes once and effective grants once per context.
+        let scopes: Vec<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT c.id,u.id,u.deployment_id,c.connector_id FROM vox_connections c JOIN user_contexts u ON u.id=c.user_context_id JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE c.user_id=$1 AND u.user_id=$1 AND u.host_user_id IN ($1::text,'vox-account:'||$1::text) AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web' AND c.authorization_state='authorized' AND c.assistant_read AND c.sync_timeline AND c.consented_at IS NOT NULL")
+            .bind(user).fetch_all(&self.repo.pool).await?;
+        let service =
+            vox_connections::capability_grants::CapabilityGrantService::new(self.repo.pool.clone());
+        let mut contexts = HashMap::new();
+        let mut permitted = std::collections::HashSet::new();
+        for (connection, context, deployment, connector) in &scopes {
+            if !contexts.contains_key(context) {
+                let scope = RequestContext {
+                    id: UserContextId(*context),
+                    user_id: UserId(user),
+                    subject: RequestSubject {
+                        deployment_id: DeploymentId(*deployment),
+                    },
+                };
+                let grants = service
+                    .effective_for_agent(&scope, agent)
+                    .await
+                    .map_err(|_| {
+                        PulseError::Invalid("Chart access could not be verified".into())
+                    })?;
+                contexts.insert(*context, grants);
+            }
+            if contexts[context].iter().any(|g| {
+                g.connection_id == *connection
+                    && g.capability_external_key == format!("curated_{connector}.read")
+            }) {
+                permitted.insert(*connection);
+            }
+        }
+        Ok(catalog
+            .into_iter()
+            .filter(|m| {
+                // Composite spending execution cannot yet bind contributor grants.
+                // Keep owner charts available; withhold these from model requests.
+                if m.profile.source == "all_sources" {
+                    return false;
+                }
+                m.profile
+                    .connection_id
+                    .is_none_or(|id| permitted.contains(&id))
+            })
+            .collect())
+    }
+    async fn agent_catalog(
+        &self,
+        user: Uuid,
+        catalog: Vec<Measurement>,
+    ) -> Result<Vec<Measurement>, PulseError> {
+        self.catalog_for_agent(user, catalog, "general").await
+    }
     pub async fn measurements(
         &self,
         actor: &Actor,
@@ -187,6 +251,10 @@ impl PulseService {
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .map(|p| p.chars().take(500).collect::<String>());
+        let inventory = self.inventory(actor, &meta, input.refresh).await?;
+        let mut catalog = self
+            .agent_catalog(actor.user_id, measurement_catalog(&inventory.profiles))
+            .await?;
         let mut existing: Option<DiscoveryResponse> = None;
         if prompt.is_none()
             && let Some(value) = meta.caches.get(&key)
@@ -195,7 +263,9 @@ impl PulseService {
                 .map_err(|_| PulseError::Invalid("Invalid cached suggestions".into()))?;
             cached.suggestions.retain(|s| {
                 let hash = definition_hash(&s.definition);
-                !meta.dismissed.contains(&hash) && !meta.saved_hashes.contains(&hash)
+                !meta.dismissed.contains(&hash)
+                    && !meta.saved_hashes.contains(&hash)
+                    && catalog.iter().any(|m| m.id == s.definition.measurement_id)
             });
             let fresh =
                 serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
@@ -212,8 +282,6 @@ impl PulseService {
         } else {
             existing.take().map(|e| e.suggestions).unwrap_or_default()
         };
-        let inventory = self.inventory(actor, &meta, input.refresh).await?;
-        let catalog = measurement_catalog(&inventory.profiles);
         let mut candidates = vec![];
         let mut llm_ok = false;
         if !catalog.is_empty()
@@ -239,6 +307,10 @@ impl PulseService {
                 candidates = ai;
             }
         }
+        // A model request can outlive a grant or account preference change.
+        catalog = self.agent_catalog(actor.user_id, catalog).await?;
+        let mut kept = kept;
+        kept.retain(|s| catalog.iter().any(|m| m.id == s.definition.measurement_id));
         let mut valid = vec![];
         let mut hashes: std::collections::HashSet<String> = kept
             .iter()
@@ -315,6 +387,12 @@ impl PulseService {
         }
         let mut all = kept;
         all.extend(suggestions);
+        let permitted = self.agent_catalog(actor.user_id, catalog).await?;
+        all.retain(|s| {
+            permitted
+                .iter()
+                .any(|m| m.id == s.definition.measurement_id)
+        });
         let suggestions = all;
         let response = DiscoveryResponse {
             suggestions,
@@ -352,7 +430,9 @@ impl PulseService {
         };
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let inventory = self.inventory(actor, &meta, false).await?;
-        let catalog = measurement_catalog(&inventory.profiles);
+        let mut catalog = self
+            .agent_catalog(actor.user_id, measurement_catalog(&inventory.profiles))
+            .await?;
         input.messages.iter_mut().for_each(|m| {
             m.content = m.content.chars().take(500).collect();
             if m.role != "assistant" {
@@ -370,6 +450,13 @@ impl PulseService {
             tracing::warn!(error = ?e, "pulse compose failed");
             PulseError::Invalid("The assistant could not answer. Try again.".into())
         })?;
+        let refreshed = self.agent_catalog(actor.user_id, catalog.clone()).await?;
+        if refreshed.len() != catalog.len() {
+            return Err(PulseError::Invalid(
+                "Chart access changed; try again".into(),
+            ));
+        }
+        catalog = refreshed;
         let reply: String = out.reply.chars().take(600).collect();
         let title = out.title.map(|t| t.chars().take(120).collect::<String>());
         let Some(mut definition) = out.definition else {
@@ -394,6 +481,15 @@ impl PulseService {
                     )
                     .await?
                     .remove(0);
+                if self
+                    .agent_catalog(actor.user_id, vec![measurement.clone()])
+                    .await?
+                    .is_empty()
+                {
+                    return Err(PulseError::Invalid(
+                        "Chart access changed; try again".into(),
+                    ));
+                }
                 Ok(ComposeResponse {
                     reply,
                     title,

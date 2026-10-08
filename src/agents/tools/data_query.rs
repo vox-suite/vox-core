@@ -1,8 +1,8 @@
 use crate::{
-    application::chart_query::compute_chart_data,
+    application::chart_query::compute_chart_data_for_agent,
     db::Db,
     domain::charts::{Aggregation, GroupBy, QuerySpec},
-    identity::UserId,
+    identity::{ResourceOwner, UserId},
     storage::schemas::SchemaRepository,
 };
 use rig::tool::Tool;
@@ -29,11 +29,20 @@ pub struct FindSchemasArgs {
 pub struct FindSchemas {
     db: Option<Db>,
     user_id: UserId,
+    owner: Option<ResourceOwner>,
 }
 
 impl FindSchemas {
     pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+        Self {
+            db,
+            user_id,
+            owner: None,
+        }
+    }
+    pub fn with_owner(mut self, owner: ResourceOwner) -> Self {
+        self.owner = Some(owner);
+        self
     }
 }
 
@@ -63,9 +72,11 @@ impl Tool for FindSchemas {
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
         let db = self.db.as_ref().ok_or(DataQueryToolError::NotConfigured)?;
-        let repo = SchemaRepository::new(db.pool().clone());
-
-        let all = repo.list_for_user(Some(self.user_id.0)).await?;
+        let owner = self
+            .owner
+            .filter(|o| o.user_id == self.user_id)
+            .ok_or_else(|| DataQueryToolError::InvalidInput("Verified owner required".into()))?;
+        let all = schemas_for_owner(db, owner).await?;
         let q = args.query.to_lowercase();
 
         let filtered: Vec<_> = all
@@ -107,11 +118,20 @@ pub struct QueryUserDataArgs {
 pub struct QueryUserData {
     db: Option<Db>,
     user_id: UserId,
+    owner: Option<ResourceOwner>,
 }
 
 impl QueryUserData {
     pub fn new(db: Option<Db>, user_id: UserId) -> Self {
-        Self { db, user_id }
+        Self {
+            db,
+            user_id,
+            owner: None,
+        }
+    }
+    pub fn with_owner(mut self, owner: ResourceOwner) -> Self {
+        self.owner = Some(owner);
+        self
     }
 }
 
@@ -158,7 +178,13 @@ impl Tool for QueryUserData {
             group_by,
         };
 
-        let points = compute_chart_data(db.pool(), self.user_id.0, &args.schema_ids, &spec).await?;
+        let owner = self
+            .owner
+            .filter(|o| o.user_id == self.user_id)
+            .ok_or_else(|| DataQueryToolError::InvalidInput("Verified owner required".into()))?;
+        let points =
+            compute_chart_data_for_agent(db.pool(), owner, "general", &args.schema_ids, &spec)
+                .await?;
 
         let sum: f64 = points.iter().map(|p| p.value).sum();
         let count = points.len();
@@ -175,4 +201,23 @@ impl Tool for QueryUserData {
             }
         }))
     }
+}
+
+/// Private schema metadata is discoverable only through records this agent can read.
+/// Global declarations remain public, without disclosing another host's private schemas.
+pub(crate) async fn schemas_for_owner(
+    db: &Db,
+    owner: ResourceOwner,
+) -> Result<Vec<crate::domain::schemas::DataSchema>, sqlx::Error> {
+    let connections =
+        crate::storage::span_authority::permitted_connections(db.pool(), owner, Some("general"))
+            .await?;
+    let connections: Vec<String> = connections.into_iter().map(|id| id.to_string()).collect();
+    let allowed = crate::storage::pulse::ALLOWED_SPANS
+        .replace(crate::storage::pulse::NATIVE_CONTEXT, "$2::uuid");
+    let ids: Vec<Uuid> = sqlx::query_scalar(&format!("SELECT DISTINCT s.schema_id FROM spans s JOIN data_schemas ds ON ds.id=s.schema_id WHERE {allowed} AND (ds.user_context_id=$2 OR ds.user_id IS NULL) AND (NOT(s.data ? 'connection_id') OR s.data->>'connection_id'=ANY($3))"))
+        .bind(owner.user_id.0).bind(owner.user_context_id.0).bind(&connections).fetch_all(db.pool()).await?;
+    SchemaRepository::new(db.pool().clone())
+        .list_visible_to_agent(owner, &ids)
+        .await
 }

@@ -240,7 +240,7 @@ async fn gaming_ingestion_retains_unknown_session_times_and_deduplicates() {
     let connection = Uuid::new_v4();
     let now = Utc::now();
     let activity = ObservedActivity {
-        game: vox_connections::providers::playstation::PlayStationGame {
+        game: vox_connections::providers::playstation::PlayStationGameHistory {
             title_id: "game".into(),
             name: "Game".into(),
             platform: "PS5".into(),
@@ -321,7 +321,9 @@ async fn reconnect_same_calendar_preserves_one_annotated_span() {
         end_date: None,
         has_time: true,
     };
-    for connection in [Uuid::new_v4(), Uuid::new_v4()] {
+    // Relinking the curated provider preserves its context-owned account ID.
+    let connection = Uuid::new_v4();
+    for _ in 0..2 {
         let mut tx = db.pool().begin().await.unwrap();
         CoreIngestor { hub: None }
             .calendar(
@@ -559,7 +561,7 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
             .unwrap(),
         0
     );
-    let connection = Uuid::new_v4();
+    let connection:Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(user).fetch_one(db.pool()).await.unwrap();
     for expected in [1, 0] {
         let mut tx = db.pool().begin().await.unwrap();
         assert_eq!(
@@ -603,7 +605,7 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
             .personal_activity(
                 &mut tx,
                 user,
-                Uuid::new_v4(),
+                connection,
                 "spotify",
                 std::slice::from_ref(&activity)
             )
@@ -727,7 +729,11 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
     let history = json!([{"title":"Watched Actual video","products":["YouTube"],"titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","time":"2026-10-01T08:00:00Z"},{"title":"No time","titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}]);
     assert!(
         service
-            .import_youtube_history(user, history.clone(), false)
+            .import_youtube_history(
+                &service.native_scope(user).await.unwrap(),
+                history.clone(),
+                false
+            )
             .await
             .is_err()
     );
@@ -740,13 +746,17 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
         0
     );
     let first = service
-        .import_youtube_history(user, history.clone(), true)
+        .import_youtube_history(
+            &service.native_scope(user).await.unwrap(),
+            history.clone(),
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(first["imported"], 1);
     assert_eq!(first["skipped"], 1);
     let second = service
-        .import_youtube_history(user, history, true)
+        .import_youtube_history(&service.native_scope(user).await.unwrap(), history, true)
         .await
         .unwrap();
     assert_eq!(second["imported"], 0);
@@ -761,4 +771,227 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
         "2026-10-01T08:00:00Z".parse::<DateTime<Utc>>().unwrap()
     );
     assert_eq!(row.get::<Option<DateTime<Utc>>, _>("end_at"), None);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+async fn playstation_markers_label_observed_ranges_without_continuous_gaming() {
+    let db = crate::db::Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let first: DateTime<Utc> = "2025-01-01T12:00:00Z".parse().unwrap();
+    let last: DateTime<Utc> = "2026-10-01T12:00:00Z".parse().unwrap();
+    let game = PlayStationGameHistory {
+        title_id: "game".into(),
+        name: "Game".into(),
+        platform: "PS5".into(),
+        category: "gaming".into(),
+        image_url: Some("https://provider.invalid/cover".into()),
+        first_played_at: Some(first),
+        last_played_at: Some(last),
+        play_duration_seconds: 7200,
+        play_count: 3,
+    };
+    let connection = Uuid::new_v4();
+    for expected in [2, 0] {
+        let mut tx = db.pool().begin().await.unwrap();
+        assert_eq!(
+            CoreIngestor { hub: None }
+                .game_history(&mut tx, user, connection, std::slice::from_ref(&game))
+                .await
+                .unwrap(),
+            expected
+        );
+        tx.commit().await.unwrap();
+    }
+    let rows = sqlx::query(
+        "SELECT title,start_at,end_at,data,notes FROM spans WHERE user_id=$1 ORDER BY start_at",
+    )
+    .bind(user)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<DateTime<Utc>, _>("start_at"), first);
+    assert_eq!(rows[1].get::<DateTime<Utc>, _>("start_at"), last);
+    for row in rows {
+        assert_eq!(row.get::<String, _>("title"), "Game");
+        assert!(row.get::<Option<DateTime<Utc>>, _>("end_at").is_none());
+        let data: serde_json::Value = row.get("data");
+        assert_eq!(data["timing"], "observed_history_range");
+        assert_eq!(data["is_session"], false);
+        assert_eq!(data["total_seconds"], 7200);
+        assert_eq!(data["image_url"], "https://provider.invalid/cover");
+        assert!(!row.get::<String, _>("notes").contains("sessions"));
+    }
+    let mut invalid = game.clone();
+    invalid.last_played_at = Some(first - chrono::Duration::days(1));
+    let mut missing = game.clone();
+    missing.last_played_at = None;
+    let mut tx = db.pool().begin().await.unwrap();
+    assert_eq!(
+        CoreIngestor { hub: None }
+            .game_history(&mut tx, user, connection, &[invalid, missing])
+            .await
+            .unwrap(),
+        0
+    );
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+async fn same_user_host_contexts_keep_imported_history_separate() {
+    let db = crate::db::Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let first = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let second:Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) VALUES($1,$2,$4,$3) RETURNING id").bind(first.subject.deployment_id.0).bind(first.subject.host_app_id.0).bind(user).bind(format!("another-host-{user}")).fetch_one(db.pool()).await.unwrap();
+    let service =
+        FreshConnectionsService::new(db.pool().clone(), None, None, None, None, None).unwrap();
+    let mut second_scope = service.native_scope(user).await.unwrap();
+    second_scope.id = vox_connections::identity::UserContextId(second);
+    let history = json!([{"title":"Watched Video","products":["YouTube"],"titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","time":"2026-01-01T08:00:00Z"}]);
+    for scope in [service.native_scope(user).await.unwrap(), second_scope] {
+        assert_eq!(
+            service
+                .import_youtube_history(&scope, history.clone(), true)
+                .await
+                .unwrap()["imported"],
+            1
+        );
+        assert_eq!(
+            service
+                .import_youtube_history(&scope, history.clone(), true)
+                .await
+                .unwrap()["imported"],
+            0
+        );
+    }
+    let rows = sqlx::query(
+        "SELECT user_context_id,count(*) AS n FROM spans WHERE user_id=$1 GROUP BY user_context_id",
+    )
+    .bind(user)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r.get::<i64, _>("n") == 1));
+    assert!(
+        rows.iter()
+            .any(|r| r.get::<Uuid, _>("user_context_id") == first.id.0)
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.get::<Uuid, _>("user_context_id") == second)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inbound_events WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+async fn reassociation_moves_account_bound_history_atomically_without_duplicates_or_grants() {
+    let db = crate::db::Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let owner = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let second:Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) VALUES($1,$2,$4,$3) RETURNING id").bind(owner.subject.deployment_id.0).bind(owner.subject.host_app_id.0).bind(user).bind(format!("other-{user}")).fetch_one(db.pool()).await.unwrap();
+    let service =
+        FreshConnectionsService::new(db.pool().clone(), None, None, None, None, None).unwrap();
+    let history = json!([{"title":"Watched Video","products":["YouTube"],"titleUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","time":"2026-01-01T08:00:00Z"}]);
+    let imported = service
+        .import_youtube_history(&owner.request_context(), history.clone(), true)
+        .await
+        .unwrap();
+    let connection: Uuid = serde_json::from_value(imported["connection_id"].clone()).unwrap();
+    // An ambiguous migration can retain history in an earlier context while the account is unscoped.
+    sqlx::query("UPDATE vox_connections SET user_context_id=NULL WHERE id=$1")
+        .bind(connection)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE spans SET user_context_id=$2,notes='Keep annotation' WHERE user_id=$1")
+        .bind(user)
+        .bind(second)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE inbound_events SET user_context_id=$2 WHERE user_id=$1")
+        .bind(user)
+        .bind(second)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let before: Uuid = sqlx::query_scalar("SELECT id FROM spans WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    service
+        .reassociate(&owner.request_context(), connection)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .import_youtube_history(&owner.request_context(), history, true)
+            .await
+            .unwrap()["imported"],
+        0
+    );
+    let row: (Uuid, Uuid, String) =
+        sqlx::query_as("SELECT id,user_context_id,notes FROM spans WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(row, (before, owner.id.0, "Keep annotation".into()));
+    let event_context: Uuid =
+        sqlx::query_scalar("SELECT user_context_id FROM inbound_events WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(event_context, owner.id.0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM agent_capability_grants WHERE connection_id=$1"
+        )
+        .bind(connection)
+        .fetch_one(db.pool())
+        .await
+        .unwrap(),
+        0
+    );
 }

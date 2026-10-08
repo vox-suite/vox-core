@@ -19,7 +19,7 @@ pub async fn invoke(State(s): State<AppState>, h: HeaderMap, Json(r): Json<Reque
     let Some(db) = s.db else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match AgentLibrary::new(Some(db), c, r.agent_external_key)
+    match AgentLibrary::new(Some(db), s.connected_apps, c, r.agent_external_key)
         .invoke(r.operation)
         .await
     {

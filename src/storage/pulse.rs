@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub const ALLOWED_SPANS: &str = r#"s.user_id=$1 AND (s.schema_id IS NULL OR EXISTS(SELECT 1 FROM data_schemas ds WHERE ds.id=s.schema_id AND ds.state='active' AND (ds.user_id=$1 OR ds.user_id IS NULL))) AND (NOT(s.data ? 'connection_id') OR EXISTS(SELECT 1 FROM vox_connections c WHERE c.id::text=s.data->>'connection_id' AND c.user_id=$1 AND c.authorization_state='authorized' AND c.assistant_read AND c.sync_timeline AND c.consented_at IS NOT NULL))"#;
+pub(crate) const NATIVE_CONTEXT: &str = r#"(SELECT CASE WHEN count(*)=1 THEN min(id::text)::uuid END FROM (SELECT u.id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.host_user_id IN ($1::text,'vox-account:'||$1::text) AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web') native)"#;
+
+pub const ALLOWED_SPANS: &str = r#"s.user_id=$1 AND s.user_context_id=(SELECT CASE WHEN count(*)=1 THEN min(id::text)::uuid END FROM (SELECT u.id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.host_user_id IN ($1::text,'vox-account:'||$1::text) AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web') native) AND (s.schema_id IS NULL OR EXISTS(SELECT 1 FROM data_schemas ds WHERE ds.id=s.schema_id AND ds.state='active' AND (ds.user_id=$1 OR ds.user_id IS NULL))) AND (NOT(s.data ? 'connection_id') OR EXISTS(SELECT 1 FROM vox_connections c WHERE c.id::text=s.data->>'connection_id' AND c.user_id=$1 AND c.user_context_id=s.user_context_id AND c.authorization_state='authorized' AND c.assistant_read AND c.sync_timeline AND c.consented_at IS NOT NULL) OR EXISTS(SELECT 1 FROM external_connections x WHERE x.id::text=s.data->>'connection_id' AND x.user_context_id=s.user_context_id AND x.authorization_state='authorized' AND (x.expires_at IS NULL OR x.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM vox_connections c WHERE c.id=x.id)))"#;
 pub const ACTUAL_SPANS: &str = r#"s.status='done' AND COALESCE(s.data->>'direction','')<>'due' AND COALESCE(s.data->>'duplicate_of','')=''"#;
 pub const FLAT_DATA: &str = r#"s.data || COALESCE((SELECT jsonb_object_agg('provider_data.'||e.key,e.value) FROM jsonb_each(CASE WHEN jsonb_typeof(s.data->'provider_data')='object' THEN s.data->'provider_data' ELSE '{}'::jsonb END)e),'{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('artist',s.data#>'{provider_data,artists,0,name}'))"#;
 pub const ACTION: &str = "COALESCE(s.data#>>'{provider_data,action}',s.data->>'direction','')";
@@ -40,8 +42,8 @@ impl PulseRepository {
         cursor: Option<Uuid>,
     ) -> Result<PulseMetadata, sqlx::Error> {
         let row=sqlx::query(r#"
- SELECT concat(COALESCE(r.data_revision,0),':',COALESCE(r.discovery_revision,0),':',g.revision) AS revision,
- COALESCE((SELECT jsonb_agg(jsonb_build_object('connector_id',c.connector_id,'last_synced_at',c.last_synced_at,'authorization_state',c.authorization_state,'sync_timeline',c.sync_timeline,'assistant_read',c.assistant_read)) FROM vox_connections c WHERE c.user_id=$1),'[]') AS connections,
+ SELECT concat(COALESCE(r.data_revision,0),':',COALESCE(r.discovery_revision,0),':',g.revision,':scoped-v1') AS revision,
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('connector_id',c.connector_id,'last_synced_at',c.last_synced_at,'authorization_state',c.authorization_state,'sync_timeline',c.sync_timeline,'assistant_read',c.assistant_read)) FROM vox_connections c WHERE c.user_id=$1 AND c.user_context_id=(SELECT CASE WHEN count(*)=1 THEN min(id::text)::uuid END FROM (SELECT u.id FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND u.host_user_id IN ($1::text,'vox-account:'||$1::text) AND u.organization_id IS NULL AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web') native)),'[]') AS connections,
  COALESCE((SELECT jsonb_agg(to_jsonb(q)) FROM (SELECT id,title,definition,created_at FROM pulse_saved_charts WHERE user_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 13)q),'[]') AS charts,
  COALESCE((SELECT jsonb_agg(definition_hash) FROM pulse_saved_charts WHERE user_id=$1),'[]') AS saved_hashes,
  COALESCE((SELECT jsonb_agg(definition_hash) FROM pulse_dismissals WHERE user_id=$1),'[]') AS dismissed,
@@ -88,7 +90,7 @@ impl PulseRepository {
  SELECT *,md5(jsonb_build_array(schema_id,connection_id,source,category,action,timing,currency)::text) AS key FROM raw
  ), summary AS (
  SELECT key,schema_id,connection_id,source,category,action,timing,currency,count(*) AS count,count(start_at) AS dated_count,min(start_at) AS first_at,max(start_at) AS last_at,
- count(*) FILTER(WHERE end_at>start_at AND timing<>'first_to_last_played' AND timing<>'observed_counter_delta') AS known_intervals
+ count(*) FILTER(WHERE end_at>start_at AND timing NOT IN('first_to_last_played','observed_history_range') AND timing<>'observed_counter_delta') AS known_intervals
  FROM keyed GROUP BY key,schema_id,connection_id,source,category,action,timing,currency
  ), recent_fields AS (
  SELECT keyed.key,e.key AS field,CASE WHEN count(DISTINCT jsonb_typeof(e.value))=1 THEN min(jsonb_typeof(e.value)) ELSE 'mixed' END AS kind
@@ -157,7 +159,7 @@ impl PulseRepository {
             .bind(user)
             .execute(&mut *tx)
             .await?;
-        let current:String=sqlx::query_scalar("SELECT concat(r.data_revision,':',r.discovery_revision,':',g.revision) FROM pulse_revisions r CROSS JOIN pulse_global_revision g WHERE r.user_id=$1 AND g.id FOR SHARE OF g").bind(user).fetch_one(&mut *tx).await?;
+        let current:String=sqlx::query_scalar("SELECT concat(r.data_revision,':',r.discovery_revision,':',g.revision,':scoped-v1') FROM pulse_revisions r CROSS JOIN pulse_global_revision g WHERE r.user_id=$1 AND g.id FOR SHARE OF g").bind(user).fetch_one(&mut *tx).await?;
         if current != revision {
             return Err(sqlx::Error::Protocol(
                 "Source data changed; preview again before saving".into(),

@@ -2,11 +2,12 @@ use crate::fresh_connections::{FreshConnectionError, FreshConnectionsService};
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use uuid::Uuid;
+
 #[derive(Clone)]
 pub struct ReadConnectedApp {
     pub service: Option<FreshConnectionsService>,
-    pub user_id: Uuid,
+    pub context: crate::identity::ResolvedUserContext,
+    pub agent: String,
 }
 #[derive(Deserialize)]
 pub struct Args {
@@ -32,7 +33,12 @@ impl Tool for ReadConnectedApp {
         self.service
             .as_ref()
             .ok_or(FreshConnectionError::Unauthorized)?
-            .assistant_read(self.user_id, &args.connector_id, args.limit.unwrap_or(25))
+            .assistant_read(
+                &self.context,
+                &self.agent,
+                &args.connector_id,
+                args.limit.unwrap_or(25),
+            )
             .await
     }
 }

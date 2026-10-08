@@ -107,6 +107,18 @@ impl SchemaRepository {
         Ok(rows.into_iter().map(map_row).collect())
     }
 
+    pub(crate) async fn list_visible_to_agent(
+        &self,
+        owner: crate::identity::ResourceOwner,
+        readable: &[Uuid],
+    ) -> Result<Vec<DataSchema>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT ON (namespace,name) id,user_id,owner_scope,namespace,name,version,description,json_schema,color_token,icon_token,state,created_at,updated_at FROM data_schemas WHERE state='active' AND (user_id IS NULL OR (user_id=$1 AND user_context_id=$2 AND id=ANY($3))) ORDER BY namespace,name,user_id NULLS LAST,version DESC",
+        ).bind(owner.user_id.0).bind(owner.user_context_id.0).bind(readable)
+            .fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(map_row).collect())
+    }
+
     pub async fn get_by_ids(
         &self,
         user_id: Option<Uuid>,

@@ -364,10 +364,10 @@ impl StatusService {
             "SELECT e.user_id, e.provider_reference, uc.id AS context_id, \
                     uc.deployment_id, uc.host_app_id, uc.organization_id, uc.host_user_id \
              FROM executions e \
-             JOIN retired_external_connections c ON c.id = e.connection_id \
+             JOIN external_connections c ON c.id = e.connection_id \
                AND c.user_context_id = e.user_context_id \
              JOIN user_contexts uc ON uc.id = e.user_context_id AND uc.user_id = e.user_id \
-             JOIN retired_integration_definitions i ON i.id = c.integration_id \
+             JOIN integration_definitions i ON i.id = c.integration_id \
                AND i.deployment_id = uc.deployment_id AND i.state = 'enabled' \
              WHERE e.id = $1 AND i.external_key = $2 AND c.external_account_hash = $3
              FOR UPDATE OF e FOR SHARE OF c, i",

@@ -1,3 +1,4 @@
+use crate::storage::pulse::ALLOWED_SPANS;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -16,6 +17,48 @@ pub async fn compute_chart_data(
     schema_ids: &[Uuid],
     query_spec: &QuerySpec,
 ) -> Result<Vec<ChartDataPoint>, sqlx::Error> {
+    compute_chart_data_scoped(pool, user_id, schema_ids, query_spec, None, None).await
+}
+
+pub(crate) async fn compute_chart_data_for_agent(
+    pool: &PgPool,
+    owner: crate::identity::ResourceOwner,
+    agent: &str,
+    schema_ids: &[Uuid],
+    query_spec: &QuerySpec,
+) -> Result<Vec<ChartDataPoint>, sqlx::Error> {
+    let ids =
+        crate::storage::span_authority::permitted_connections(pool, owner, Some(agent)).await?;
+    let ids: Vec<String> = ids.into_iter().map(|id| id.to_string()).collect();
+    compute_chart_data_scoped(
+        pool,
+        owner.user_id.0,
+        schema_ids,
+        query_spec,
+        Some(owner.user_context_id.0),
+        Some(&ids),
+    )
+    .await
+}
+
+async fn compute_chart_data_scoped(
+    pool: &PgPool,
+    user_id: Uuid,
+    schema_ids: &[Uuid],
+    query_spec: &QuerySpec,
+    context: Option<Uuid>,
+    connections: Option<&[String]>,
+) -> Result<Vec<ChartDataPoint>, sqlx::Error> {
+    let base = ALLOWED_SPANS.replace(
+        crate::storage::pulse::NATIVE_CONTEXT,
+        &format!(
+            "COALESCE($5::uuid,{})",
+            crate::storage::pulse::NATIVE_CONTEXT
+        ),
+    );
+    let allowed = format!(
+        "{base} AND ($6::text[] IS NULL OR NOT(s.data ? 'connection_id') OR s.data->>'connection_id'=ANY($6))"
+    );
     if schema_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -48,12 +91,12 @@ pub async fn compute_chart_data(
                             THEN (data->>$3)::numeric
                             ELSE NULL
                         END AS val_num
-                    FROM spans
-                    WHERE user_id = $1
+                    FROM spans s
+                    WHERE {allowed}
                       AND schema_id = ANY($2)
                 )
                 SELECT
-                    to_char(date_trunc('{date_part}', COALESCE(start_at, created_at)), '{date_fmt}') AS label,
+                    to_char(date_trunc('{date_part}', COALESCE(start_at, created_at)), $4) AS label,
                     ({agg_expr})::float8 AS value
                 FROM extracted
                 GROUP BY date_trunc('{date_part}', COALESCE(start_at, created_at))
@@ -65,6 +108,9 @@ pub async fn compute_chart_data(
                 .bind(user_id)
                 .bind(schema_ids)
                 .bind(&query_spec.metric_field)
+                .bind(date_fmt)
+                .bind(context)
+                .bind(connections)
                 .fetch_all(pool)
                 .await?;
 
@@ -91,8 +137,8 @@ pub async fn compute_chart_data(
                             THEN (data->>$3)::numeric
                             ELSE NULL
                         END AS val_num
-                    FROM spans
-                    WHERE user_id = $1
+                    FROM spans s
+                    WHERE {allowed}
                       AND schema_id = ANY($2)
                 )
                 SELECT
@@ -110,6 +156,8 @@ pub async fn compute_chart_data(
                 .bind(schema_ids)
                 .bind(&query_spec.metric_field)
                 .bind(field_name)
+                .bind(context)
+                .bind(connections)
                 .fetch_all(pool)
                 .await?;
 

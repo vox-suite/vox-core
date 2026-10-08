@@ -74,22 +74,20 @@ pub async fn extract_actor(
             .as_deref()
             .or(claims.email.as_deref())
             .unwrap_or("Vox User");
-        let known = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
-        )
-        .bind(user_id)
-        .fetch_one(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if !known {
+        let known: i64 = sqlx::query_scalar("SELECT count(*) FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id AND h.deployment_id=d.id WHERE u.user_id=$1 AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web' AND u.organization_id IS NULL AND u.host_user_id IN ($1::text,'vox-account:' || $1::text)")
+            .bind(user_id).fetch_one(&pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        if known > 1 {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if known == 0 {
             let mut tx = pool
                 .begin()
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             sqlx::query(
                 "INSERT INTO users (id, status, display_name) \
-                 VALUES ($1, 'active', $2) \
-                 ON CONFLICT (id) DO NOTHING",
+             VALUES ($1, 'active', $2) \
+             ON CONFLICT (id) DO NOTHING",
             )
             .bind(user_id)
             .bind(display_name)
@@ -97,26 +95,27 @@ pub async fn extract_actor(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             sqlx::query(
-                "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
-                 SELECT d.id, h.id, $1::text, $2::uuid \
-                 FROM platform_deployments d \
-                 JOIN host_apps h ON h.deployment_id = d.id \
-                 WHERE d.external_key = 'vox.standalone.deployment' \
-                   AND h.external_key = 'vox.standalone.web' \
-                 ON CONFLICT (user_id) DO NOTHING",
-            )
-            .bind(user_id.to_string())
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
+             SELECT d.id, h.id, $1::text, $2::uuid \
+             FROM platform_deployments d \
+             JOIN host_apps h ON h.deployment_id = d.id \
+             WHERE d.external_key = 'vox.standalone.deployment' \
+               AND h.external_key = 'vox.standalone.web' \
+               AND NOT EXISTS (SELECT 1 FROM user_contexts u WHERE u.user_id=$2 AND u.deployment_id=d.id AND u.host_app_id=h.id AND u.organization_id IS NULL AND u.host_user_id IN ($1::text,'vox-account:' || $1::text)) \
+             ON CONFLICT (deployment_id,host_app_id,host_user_id) WHERE organization_id IS NULL DO NOTHING",
+        )
+        .bind(user_id.to_string())
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let has_context = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM user_contexts WHERE user_id = $1)",
-            )
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            "SELECT count(*)=1 FROM user_contexts u JOIN platform_deployments d ON d.id=u.deployment_id JOIN host_apps h ON h.id=u.host_app_id WHERE u.user_id=$1 AND d.external_key='vox.standalone.deployment' AND h.external_key='vox.standalone.web' AND u.organization_id IS NULL AND u.host_user_id IN ($1::text,'vox-account:' || $1::text)",
+        )
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             if !has_context {
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }

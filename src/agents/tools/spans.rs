@@ -195,8 +195,8 @@ impl Tool for CreateSpan {
         };
 
         let span = SpanRepository::new(db.pool().clone())
-            .create(
-                user_id,
+            .create_for_owner(
+                self.owner,
                 NewSpan {
                     title: title.to_owned(),
                     notes: args.notes.unwrap_or_default(),
@@ -234,11 +234,20 @@ pub struct ListSpansArgs {
 pub struct ListSpans {
     db: Option<Db>,
     owner: ResourceOwner,
+    agent: Option<String>,
 }
 
 impl ListSpans {
     pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
-        Self { db, owner }
+        Self {
+            db,
+            owner,
+            agent: None,
+        }
+    }
+    pub fn with_agent(mut self, agent: &str) -> Self {
+        self.agent = Some(agent.into());
+        self
     }
 }
 
@@ -290,8 +299,9 @@ impl Tool for ListSpans {
             limit: Some(args.limit.unwrap_or(30).clamp(1, 100)),
         };
         let spans = SpanRepository::new(db.pool().clone())
-            .list(self.owner.user_id.0, &query)
+            .list_for_owner(self.owner, &query)
             .await?;
+        let spans = permitted_agent_spans(db, self.owner, self.agent.as_deref(), spans).await?;
         Ok(json!({ "spans": spans.iter().map(summary).collect::<Vec<_>>() }))
     }
 }
@@ -305,11 +315,20 @@ pub struct GetSpanArgs {
 pub struct GetSpan {
     db: Option<Db>,
     owner: ResourceOwner,
+    agent: Option<String>,
 }
 
 impl GetSpan {
     pub fn new(db: Option<Db>, owner: ResourceOwner) -> Self {
-        Self { db, owner }
+        Self {
+            db,
+            owner,
+            agent: None,
+        }
+    }
+    pub fn with_agent(mut self, agent: &str) -> Self {
+        self.agent = Some(agent.into());
+        self
     }
 }
 
@@ -341,8 +360,12 @@ impl Tool for GetSpan {
         let db = self.db.as_ref().ok_or(SpanToolError::NotConfigured)?;
         let id = parse_uuid("span_id", &args.span_id)?;
         let span = SpanRepository::new(db.pool().clone())
-            .get_by_id(self.owner.user_id.0, id)
+            .get_for_owner(self.owner, id)
             .await?
+            .ok_or_else(|| SpanToolError::NotFound(id.to_string()))?;
+        let span = permitted_agent_spans(db, self.owner, self.agent.as_deref(), vec![span])
+            .await?
+            .pop()
             .ok_or_else(|| SpanToolError::NotFound(id.to_string()))?;
         Ok(serde_json::to_value(span).unwrap_or(Value::Null))
     }
@@ -365,6 +388,7 @@ pub struct UpdateSpan {
     db: Option<Db>,
     owner: ResourceOwner,
     user_events: UserEventHub,
+    agent: Option<String>,
 }
 
 impl UpdateSpan {
@@ -373,7 +397,12 @@ impl UpdateSpan {
             db,
             owner,
             user_events,
+            agent: None,
         }
+    }
+    pub fn with_agent(mut self, agent: &str) -> Self {
+        self.agent = Some(agent.into());
+        self
     }
 }
 
@@ -423,8 +452,18 @@ impl Tool for UpdateSpan {
             execution_result: args.execution_result,
             ..Default::default()
         };
+        let existing = SpanRepository::new(db.pool().clone())
+            .get_for_owner(self.owner, id)
+            .await?
+            .ok_or_else(|| SpanToolError::NotFound(id.to_string()))?;
+        if permitted_agent_spans(db, self.owner, self.agent.as_deref(), vec![existing])
+            .await?
+            .is_empty()
+        {
+            return Err(SpanToolError::NotFound(id.to_string()));
+        }
         match SpanRepository::new(db.pool().clone())
-            .update(self.owner.user_id.0, id, patch)
+            .update_for_owner(self.owner, id, patch)
             .await?
         {
             crate::domain::ConcurrencyOutcome::Success(span) => {
@@ -437,4 +476,38 @@ impl Tool for UpdateSpan {
             _ => Err(SpanToolError::NotFound(id.to_string())),
         }
     }
+}
+
+pub(crate) async fn permitted_agent_spans(
+    db: &Db,
+    owner: ResourceOwner,
+    agent: Option<&str>,
+    spans: Vec<Span>,
+) -> Result<Vec<Span>, SpanToolError> {
+    let permitted =
+        crate::storage::span_authority::permitted_connections(db.pool(), owner, agent).await?;
+    let ids: Vec<Uuid> = spans.iter().map(|s| s.id).collect();
+    let scoped: std::collections::HashSet<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM spans WHERE id=ANY($1) AND user_context_id=$2 AND user_id=$3",
+    )
+    .bind(&ids)
+    .bind(owner.user_context_id.0)
+    .bind(owner.user_id.0)
+    .fetch_all(db.pool())
+    .await?
+    .into_iter()
+    .collect();
+    Ok(spans
+        .into_iter()
+        .filter(|s| {
+            scoped.contains(&s.id)
+                && match s.data.get("connection_id") {
+                    None => true,
+                    Some(raw) => raw
+                        .as_str()
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                        .is_some_and(|id| permitted.contains(&id)),
+                }
+        })
+        .collect())
 }

@@ -151,15 +151,18 @@ impl IdentityService {
         &self,
         user_id: Uuid,
     ) -> Result<ResolvedUserContext, IdentityError> {
-        let existing = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Option<Uuid>, String)>(
+        let mut existing = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Option<Uuid>, String)>(
             "SELECT id, user_id, deployment_id, host_app_id, organization_id, host_user_id \
-             FROM user_contexts WHERE user_id = $1 LIMIT 1",
+             FROM user_contexts WHERE user_id=$1 AND host_user_id IN ($1::text,'vox-account:' || $1::text) AND organization_id IS NULL AND deployment_id IN (SELECT id FROM platform_deployments WHERE external_key='vox.standalone.deployment') AND host_app_id IN (SELECT id FROM host_apps WHERE external_key='vox.standalone.web')",
         )
         .bind(user_id)
-        .fetch_optional(self.db.pool())
+        .fetch_all(self.db.pool())
         .await?;
 
-        if let Some((ctx_id, uid, dep_id, app_id, org_id, host_uid)) = existing {
+        if existing.len() > 1 {
+            return Err(IdentityError::InvalidContext);
+        }
+        if let Some((ctx_id, uid, dep_id, app_id, org_id, host_uid)) = existing.pop() {
             return Ok(ResolvedUserContext {
                 id: UserContextId(ctx_id),
                 user_id: UserId(uid),
@@ -187,7 +190,7 @@ impl IdentityService {
         let (context_id, uid) = sqlx::query_as::<_, (Uuid, Uuid)>(
             "INSERT INTO user_contexts (deployment_id, host_app_id, host_user_id, user_id) \
              VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_id) DO UPDATE \
+             ON CONFLICT (deployment_id,host_app_id,host_user_id) WHERE organization_id IS NULL DO UPDATE \
              SET host_user_id = EXCLUDED.host_user_id \
              RETURNING id, user_id",
         )

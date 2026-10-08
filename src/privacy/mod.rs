@@ -498,7 +498,7 @@ impl PrivacyService {
             for c in &cfg.connections {
                 // Find integration definition id by key
                 let integration_id = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM retired_integration_definitions WHERE deployment_id=$1 AND external_key = $2 LIMIT 1",
+                    "SELECT id FROM integration_definitions WHERE deployment_id=$1 AND external_key = $2 LIMIT 1",
                 )
                 .bind(context.subject.deployment_id.0)
                 .bind(&c.integration_key)
@@ -507,7 +507,7 @@ impl PrivacyService {
 
                 let remote_extension_id = if integration_id.is_none() {
                     sqlx::query_scalar::<_, Uuid>(
-                        "SELECT id FROM retired_remote_extensions WHERE user_context_id=$1 \
+                        "SELECT id FROM remote_extensions WHERE user_context_id=$1 \
                          AND external_key=$2 AND lifecycle_state<>'removed' LIMIT 1",
                     )
                     .bind(context.id.0)
@@ -525,7 +525,7 @@ impl PrivacyService {
 
                     let inserted = sqlx::query(
                         r#"
-                        INSERT INTO retired_external_connections (
+                        INSERT INTO external_connections (
                             user_context_id, integration_id, remote_extension_id,
                             external_account_hash, account_display_id,
                             credential_custody, authorization_state, authorized_capabilities, created_at, updated_at
@@ -595,7 +595,7 @@ impl PrivacyService {
             if let Some(ext_id_str) = details.get("remote_extension_id").and_then(|v| v.as_str()) {
                 if let Ok(ext_id) = Uuid::parse_str(ext_id_str) {
                     sqlx::query_scalar::<_, String>(
-                        "SELECT lifecycle_state FROM retired_remote_extensions WHERE id = $1",
+                        "SELECT lifecycle_state FROM remote_extensions WHERE id = $1",
                     )
                     .bind(ext_id)
                     .fetch_optional(self.db.pool())
@@ -651,7 +651,7 @@ impl PrivacyService {
 
         // 2. Integration declarations (declarations only - no secrets)
         let int_rows = sqlx::query(
-            "SELECT external_key, display_name, protocol FROM retired_integration_definitions WHERE deployment_id=$1 AND state='enabled'",
+            "SELECT external_key, display_name, protocol FROM integration_definitions WHERE deployment_id=$1 AND state='enabled'",
         )
         .bind(context.subject.deployment_id.0)
         .fetch_all(self.db.pool())
@@ -672,9 +672,9 @@ impl PrivacyService {
             r#"
             SELECT COALESCE(i.external_key,e.external_key) AS external_key,
                    c.account_display_id, c.credential_custody
-            FROM retired_external_connections c
-            LEFT JOIN retired_integration_definitions i ON i.id = c.integration_id
-            LEFT JOIN retired_remote_extensions e ON e.id = c.remote_extension_id
+            FROM external_connections c
+            LEFT JOIN integration_definitions i ON i.id = c.integration_id
+            LEFT JOIN remote_extensions e ON e.id = c.remote_extension_id
             WHERE c.user_context_id = $1
             "#,
         )
@@ -732,11 +732,11 @@ impl PrivacyService {
             SELECT a.external_key AS agent_key,
                    COALESCE(i.external_key,e.external_key) AS integration_key,
                    g.capability_external_key AS capability_key, g.state
-            FROM retired_agent_capability_grants g
+            FROM agent_capability_grants g
             JOIN agent_definitions a ON a.id = g.agent_definition_id
-            JOIN retired_external_connections conn ON conn.id = g.connection_id
-            LEFT JOIN retired_integration_definitions i ON i.id = conn.integration_id
-            LEFT JOIN retired_remote_extensions e ON e.id = conn.remote_extension_id
+            JOIN external_connections conn ON conn.id = g.connection_id
+            LEFT JOIN integration_definitions i ON i.id = conn.integration_id
+            LEFT JOIN remote_extensions e ON e.id = conn.remote_extension_id
             WHERE g.user_context_id = $1
             "#,
         )

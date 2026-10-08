@@ -12,6 +12,9 @@ pub struct Db {
 }
 
 impl Db {
+    pub(crate) fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
     pub async fn connect(database_url: &str) -> Result<Self, sqlx::Error> {
         Self::connect_with_pool(
             database_url,

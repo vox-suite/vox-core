@@ -449,7 +449,9 @@ impl PulseService {
         };
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let inventory = self.inventory(actor, &meta, false).await?;
-        let catalog = measurement_catalog(&inventory.profiles);
+        let catalog = self
+            .agent_catalog(actor.user_id, measurement_catalog(&inventory.profiles))
+            .await?;
         let timezone = input.timezone.clone();
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -462,6 +464,10 @@ impl PulseService {
         .await
         .map_err(|_| PulseError::Busy)?
         .map_err(|_| PulseError::Invalid("The assistant could not answer. Try again.".into()))?;
+        let refreshed = self.agent_catalog(actor.user_id, catalog.clone()).await?;
+        if refreshed.len() != catalog.len() {
+            return Err(PulseError::Invalid("Goal access changed; try again".into()));
+        }
         let reply: String = out.reply.chars().take(600).collect();
         let Some(raw) = out.draft else {
             return Ok(GoalComposeResponse {
@@ -470,6 +476,15 @@ impl PulseService {
                 preview: None,
             });
         };
+        if raw
+            .measurement_id
+            .as_ref()
+            .is_some_and(|id| !refreshed.iter().any(|m| &m.id == id))
+        {
+            return Err(PulseError::Invalid(
+                "Goal measurement is unavailable".into(),
+            ));
+        }
         let draft = draft_from_suggestion(raw, &timezone);
         match self.validate_draft(actor, draft).await {
             Ok(draft) => {

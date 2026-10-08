@@ -7,7 +7,6 @@ COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY migrations ./migrations
 COPY contracts ./contracts
-COPY defaults ./defaults
 COPY services ./services
 COPY src ./src
 
