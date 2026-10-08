@@ -419,6 +419,27 @@ mod tests {
         );
         // Exercises the exact assembly used by the API binary, including both
         // public OAuth callbacks and authenticated account operations.
-        let _router = build_api_router(state);
+        let router = build_api_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::new();
+        let live = client
+            .get(format!("http://{address}/health/live"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(live.status(), reqwest::StatusCode::OK);
+        let reassociate = client
+            .post(format!(
+                "http://{address}/v1/me/connections/{}/reassociate",
+                uuid::Uuid::nil()
+            ))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(reassociate.status(), reqwest::StatusCode::UNAUTHORIZED);
     }
 }
