@@ -346,10 +346,6 @@ pub fn build_api_router(state: ApiState) -> Router {
             "/v1/connectors/{connector}/callback",
             get(crate::routes::connections::connector_callback),
         )
-        .route(
-            "/v1/me/connections/{id}/reassociate",
-            post(crate::routes::connections::reassociate_connection),
-        )
         .with_state(state.connections.clone());
 
     let protected_routes = span_routes
@@ -386,4 +382,43 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(google_callback_route)
         .merge(protected_routes)
         .layer(crate::cors::layer())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use vox_core::{config::Config, db::Db, http::AppState, memory::MemoryService};
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn production_api_router_assembles_without_overlapping_routes() {
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+        let config = Config::from_values(|name| match name {
+            "DATABASE_URL" => Some(database_url.clone()),
+            "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => Some("test-only".into()),
+            _ => None,
+        })
+        .unwrap();
+        let db = Db::connect(&database_url).await.unwrap();
+        let memory = MemoryService::new(db.clone(), None);
+        let state = ApiState::new(
+            AppState::new(true),
+            db.clone(),
+            vox_core::realtime::DeviceHub::new(),
+            memory,
+            vox_core::realtime::UserEventHub::new(),
+            &config,
+            None,
+            None,
+            Arc::new(vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config)),
+            Arc::new(vox_core::agents::space_architect::GeminiSpaceArchitect::new(&config)),
+            Arc::new(vox_core::agents::space_runtime::SpaceRuntime::new(
+                db, &config, None,
+            )),
+        );
+        // Exercises the exact assembly used by the API binary, including both
+        // public OAuth callbacks and authenticated account operations.
+        let _router = build_api_router(state);
+    }
 }
