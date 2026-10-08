@@ -73,6 +73,73 @@ fn manual_definition_rejects_invalid_timezone_and_unknown_metric() {
     assert!(validate_definition(&d, &[]).is_err());
 }
 
+struct FixtureSuggester;
+#[async_trait::async_trait]
+impl crate::agents::chart_suggester::SuggestingCharts for FixtureSuggester {
+    async fn suggest(
+        &self,
+        _: crate::agents::chart_suggester::ChartSuggestionPrompt,
+    ) -> Result<Vec<crate::agents::chart_suggester::ChartSuggestion>, crate::agents::AgentError>
+    {
+        Ok(vec![])
+    }
+    async fn suggest_pulse(
+        &self,
+        catalog: Vec<Measurement>,
+        timezone: String,
+        _: crate::agents::chart_suggester::PulseAsk,
+    ) -> Result<Vec<PulseCandidate>, crate::agents::AgentError> {
+        Ok(catalog
+            .into_iter()
+            .map(|m| PulseCandidate {
+                title: m.title.clone(),
+                reason: "Fixture".into(),
+                definition: PulseDefinition {
+                    version: 2,
+                    measurement_id: m.id,
+                    bucket: m.buckets.first().cloned(),
+                    dimension: m.default_dimension,
+                    period_days: 30,
+                    offset_days: 0,
+                    timezone: timezone.clone(),
+                    chart_type: ChartType::Bar,
+                },
+            })
+            .collect())
+    }
+}
+async fn chart_agent_grant(
+    db: &crate::db::Db,
+    user: uuid::Uuid,
+    connection: uuid::Uuid,
+) -> uuid::Uuid {
+    let context = crate::identity::IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let agent:uuid::Uuid=sqlx::query_scalar("INSERT INTO agent_definitions(deployment_id,owner_user_context_id,external_key,purpose,requested_capability_categories) VALUES($1,$2,'pulse-discovery','Chart suggestions',ARRAY['curated_spotify.read']) RETURNING id").bind(context.subject.deployment_id.0).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO deployment_agent_selections(deployment_id,agent_definition_id) VALUES($1,$2)",
+    )
+    .bind(context.subject.deployment_id.0)
+    .bind(agent)
+    .execute(db.pool())
+    .await
+    .unwrap();
+    vox_connections::capability_grants::CapabilityGrantService::new(db.pool().clone())
+        .grant(
+            &context.request_context(),
+            vox_connections::capability_grants::CreateGrantRequest {
+                agent_external_key: "pulse-discovery".into(),
+                connection_id: connection,
+                capability_external_key: "curated_spotify.read".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+}
+
 async fn database() -> crate::db::Db {
     let url = std::env::var("TEST_DATABASE_URL").expect("disposable TEST_DATABASE_URL");
     let db = crate::db::Db::connect(&url).await.unwrap();
@@ -120,7 +187,7 @@ async fn revisions_advance_on_edit_delete_and_revocation() {
             .unwrap();
     assert_eq!(after, before + 2);
     sqlx::query(
-        "INSERT INTO vox_connections(user_id,connector_id,consented_at) VALUES($1,'spotify',now())",
+        "INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now())",
     )
     .bind(id)
     .execute(db.pool())
@@ -150,7 +217,7 @@ async fn revisions_advance_on_edit_delete_and_revocation() {
 async fn profiles_include_unschematized_spans_but_exclude_revoked_sources_and_plans() {
     let db = database().await;
     let id = user(&db).await;
-    let connection:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,connector_id,consented_at,assistant_read) VALUES($1,'spotify',now(),false) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    let connection:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at,assistant_read) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now(),false) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
     for (source, status, data) in [
         ("user", "done", json!({"amount":100,"currency":"INR"})),
         ("user", "planned", json!({"amount":999,"currency":"INR"})),
@@ -262,9 +329,10 @@ async fn discovery_save_cache_and_revocation_are_scoped() {
     let db = database().await;
     let id = user(&db).await;
     let other = user(&db).await;
-    let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,connector_id,consented_at) VALUES($1,'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
     sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at,data) VALUES($1,'Song','done','spotify','music',now(),$2)").bind(id).bind(json!({"connection_id":conn,"provider_data":{"action":"listen"}})).execute(db.pool()).await.unwrap();
-    let service = PulseService::new(PulseRepository::new(db.pool().clone()));
+    let service = PulseService::new(PulseRepository::new(db.pool().clone()))
+        .with_suggester(std::sync::Arc::new(FixtureSuggester));
     let actor = Actor::user(id);
     let input = DiscoveryInput {
         timezone: "Asia/Kolkata".into(),
@@ -272,7 +340,25 @@ async fn discovery_save_cache_and_revocation_are_scoped() {
         more: false,
         prompt: None,
     };
-    let first = service.discover(&actor, input.clone()).await.unwrap();
+    assert!(
+        service
+            .discover(&actor, input.clone())
+            .await
+            .unwrap()
+            .suggestions
+            .is_empty()
+    );
+    let grant = chart_agent_grant(&db, id, conn).await;
+    let first = service
+        .discover(
+            &actor,
+            DiscoveryInput {
+                refresh: true,
+                ..input.clone()
+            },
+        )
+        .await
+        .unwrap();
     assert!(!first.suggestions.is_empty());
     let second = service.discover(&actor, input.clone()).await.unwrap();
     assert_eq!(second.computed_at, first.computed_at);
@@ -303,6 +389,19 @@ async fn discovery_save_cache_and_revocation_are_scoped() {
         .await
         .unwrap();
     assert!(other_canvas.charts.is_empty());
+    sqlx::query("UPDATE agent_capability_grants SET state='revoked',revoked_at=now() WHERE id=$1")
+        .bind(grant)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    assert!(
+        service
+            .discover(&actor, input.clone())
+            .await
+            .unwrap()
+            .suggestions
+            .is_empty()
+    );
     sqlx::query("UPDATE vox_connections SET assistant_read=false WHERE id=$1")
         .bind(conn)
         .execute(db.pool())
@@ -387,7 +486,8 @@ async fn cached_chart_changes_after_edit_and_delete_and_conflicting_save_is_reje
     let id = user(&db).await;
     let actor = Actor::user(id);
     let span:uuid::Uuid=sqlx::query_scalar("INSERT INTO spans(user_id,title,status,source,category,start_at,data) VALUES($1,'Expense','done','user','expense',now(),'{\"amount\":100,\"currency\":\"INR\"}') RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
-    let service = PulseService::new(PulseRepository::new(db.pool().clone()));
+    let service = PulseService::new(PulseRepository::new(db.pool().clone()))
+        .with_suggester(std::sync::Arc::new(FixtureSuggester));
     let m = service
         .measurements(&actor, "Asia/Kolkata")
         .await
@@ -581,10 +681,11 @@ async fn gameplay_totals_and_deltas_are_distinct_and_subscriptions_are_projectio
     let id = user(&db).await;
     let now = chrono::Utc::now();
     for data in [
-        json!({"game":"Game","total_seconds":7200,"timing":"first_to_last_played"}),
+        json!({"game":"Game","title_id":"game","total_seconds":7200,"timing":"observed_history_range"}),
+        json!({"game":"Game","title_id":"game","total_seconds":7200,"timing":"observed_history_range"}),
         json!({"game":"Game","duration_seconds":1800,"timing":"observed_counter_delta","observation_start":now-chrono::Duration::days(1),"observation_end":now}),
     ] {
-        sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at,data) VALUES($1,'Game','done','playstation','gaming',CASE WHEN $2->>'timing'='first_to_last_played' THEN now()-interval '1000 days' ELSE NULL END,$2)").bind(id).bind(data).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at,data) VALUES($1,'Game','done','playstation','gaming',CASE WHEN $2->>'timing'='observed_history_range' THEN now()-interval '1000 days' ELSE NULL END,$2)").bind(id).bind(data).execute(db.pool()).await.unwrap();
     }
     for (title, amount, interval, active) in [
         ("Annual", 1200, "yearly", true),
@@ -683,7 +784,7 @@ async fn lifetime_gameplay_sums_games_when_grouped_by_platform() {
 async fn connected_and_imported_activity_have_distinct_measurement_identity() {
     let db = database().await;
     let id = user(&db).await;
-    let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,connector_id,consented_at) VALUES($1,'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
+    let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,(SELECT id FROM user_contexts WHERE user_id=$1),'spotify',now()) RETURNING id").bind(id).fetch_one(db.pool()).await.unwrap();
     for data in [
         json!({"provider_data":{"action":"listen"}}),
         json!({"connection_id":conn,"provider_data":{"action":"listen"}}),
@@ -707,7 +808,8 @@ async fn old_high_count_sources_do_not_hide_recent_suggestions() {
         sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at) SELECT $1,'Old','done','user',$2,now()-interval '1000 days' FROM generate_series(1,10)").bind(id).bind(format!("old{index}")).execute(db.pool()).await.unwrap();
     }
     sqlx::query("INSERT INTO spans(user_id,title,status,source,category,start_at) VALUES($1,'Recent','done','user','recent',now())").bind(id).execute(db.pool()).await.unwrap();
-    let service = PulseService::new(PulseRepository::new(db.pool().clone()));
+    let service = PulseService::new(PulseRepository::new(db.pool().clone()))
+        .with_suggester(std::sync::Arc::new(FixtureSuggester));
     let response = service
         .discover(
             &Actor::user(id),
@@ -795,4 +897,31 @@ async fn deleting_a_user_cascades_pulse_revisions_without_recreating_the_owner()
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL"]
+async fn native_pulse_excludes_other_host_context_facts_and_accounts() {
+    let db = database().await;
+    let id = user(&db).await;
+    let native: uuid::Uuid = sqlx::query_scalar("SELECT id FROM user_contexts WHERE user_id=$1")
+        .bind(id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let other:uuid::Uuid=sqlx::query_scalar("INSERT INTO user_contexts(deployment_id,host_app_id,host_user_id,user_id) SELECT deployment_id,host_app_id,'different-host-subject',user_id FROM user_contexts WHERE id=$1 RETURNING id").bind(native).fetch_one(db.pool()).await.unwrap();
+    for (context, title) in [(native, "Visible"), (other, "Private")] {
+        let conn:uuid::Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,$2,'spotify',now()) RETURNING id").bind(id).bind(context).fetch_one(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO spans(user_id,user_context_id,title,status,source,category,start_at,data) VALUES($1,$2,$3,'done','spotify','listening',now(),$4)").bind(id).bind(context).bind(title).bind(json!({"connection_id":conn,"provider_data":{"action":"listen"}})).execute(db.pool()).await.unwrap();
+    }
+    let repo = crate::storage::pulse::PulseRepository::new(db.pool().clone());
+    let inventory = repo.inventory(id).await.unwrap();
+    assert_eq!(inventory.record_count, 1);
+    assert_eq!(repo.metadata(id, None).await.unwrap().connections.len(), 1);
+    sqlx::query("UPDATE vox_connections SET assistant_read=false WHERE user_context_id=$1")
+        .bind(native)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(repo.inventory(id).await.unwrap().record_count, 0);
 }

@@ -403,7 +403,7 @@ impl ExpediaLodgingService {
         let owns_booking = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM executions e \
              JOIN action_proposals p ON p.id = e.proposal_id \
-             WHERE e.user_id = $1 AND p.user_id = $1 AND p.connection_id = $2 \
+             WHERE e.user_id = $1 AND p.user_id = $1 AND e.user_context_id = $5 AND p.user_context_id = $5 AND p.connection_id = $2 \
              AND p.capability = $3 \
              AND e.state = 'succeeded' AND e.provider_reference = $4)",
         )
@@ -411,21 +411,17 @@ impl ExpediaLodgingService {
         .bind(connection_id)
         .bind(EXPEDIA_CAPABILITY_LODGING_BOOK)
         .bind(itinerary_id)
+        .bind(context.id.0)
         .fetch_one(self.db.pool())
         .await?;
         if !owns_booking {
             return Err(ExpediaLodgingError::ProposalNotFound);
         }
 
-        let resp = self.client.cancel_booking(itinerary_id, reason).await?;
-
-        Ok(ExpediaCancellationResult {
-            itinerary_id: resp.itinerary_id,
-            cancellation_reference: resp.confirmation_reference,
-            refund_amount_minor: resp.refund_amount_minor.unwrap_or(0),
-            penalty_amount_minor: resp.cancellation_penalty_minor.unwrap_or(0),
-            currency: resp.price_currency,
-        })
+        // The legacy signature cannot bind a disclosed cancellation penalty to
+        // an exact, single-use approval. Fail closed until that contract exists.
+        let _ = reason;
+        Err(ExpediaLodgingError::NotApproved)
     }
 
     /// Authoritatively reconciles an uncertain execution outcome using affiliate_reference_id.
@@ -435,14 +431,13 @@ impl ExpediaLodgingService {
         affiliate_reference_id: &str,
         now: DateTime<Utc>,
     ) -> Result<ExpediaBookingOutcome, ExpediaLodgingError> {
-        let opt_resp = self.client.retrieve_booking(affiliate_reference_id).await?;
-
         // Locate execution in database
         let row_opt = sqlx::query(
-            "SELECT id, state FROM executions WHERE idempotency_key = $1 AND user_id = $2",
+            "SELECT id, state FROM executions WHERE idempotency_key = $1 AND user_id = $2 AND user_context_id = $3",
         )
         .bind(affiliate_reference_id)
         .bind(context.user_id.0)
+        .bind(context.id.0)
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -454,6 +449,7 @@ impl ExpediaLodgingService {
 
         let execution_id: Uuid = row.get("id");
 
+        let opt_resp = self.client.retrieve_booking(affiliate_reference_id).await?;
         if let Some(resp) = opt_resp {
             let evidence = json!({
                 "itinerary_id": resp.itinerary_id,

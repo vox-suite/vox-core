@@ -52,7 +52,7 @@ impl PulseService {
         let mut grants = actor.grants.clone();
         grants.sort();
         format!(
-            "{kind}:{}:{:x}",
+            "scoped-v1:{kind}:{}:{:x}",
             meta.revision,
             Sha256::digest(format!(
                 "{}:{:?}:{grants:?}",
@@ -139,6 +139,52 @@ impl PulseService {
             .await?;
         Ok(results)
     }
+    // Owner-facing previews use owner authority. Sending connector metadata to
+    // the chart agent additionally requires its explicit capability grant.
+    async fn agent_catalog(
+        &self,
+        user: uuid::Uuid,
+        catalog: Vec<Measurement>,
+    ) -> Result<Vec<Measurement>, PulseError> {
+        use vox_connections::identity::{
+            DeploymentId, RequestContext, RequestSubject, UserContextId, UserId,
+        };
+        let grants =
+            vox_connections::capability_grants::CapabilityGrantService::new(self.repo.pool.clone());
+        let mut permitted = Vec::new();
+        for measurement in catalog {
+            let Some(connection) = measurement.profile.connection_id else {
+                permitted.push(measurement);
+                continue;
+            };
+            let scope:Option<(uuid::Uuid,uuid::Uuid,String)>=sqlx::query_as("SELECT u.id,u.deployment_id,c.connector_id FROM vox_connections c JOIN user_contexts u ON u.id=c.user_context_id WHERE c.id=$1 AND c.user_id=$2 AND u.user_id=$2 AND c.authorization_state='authorized' AND c.assistant_read AND c.sync_timeline AND c.consented_at IS NOT NULL")
+                .bind(connection).bind(user).fetch_optional(&self.repo.pool).await?;
+            let Some((context, deployment, connector)) = scope else {
+                continue;
+            };
+            let context = RequestContext {
+                id: UserContextId(context),
+                user_id: UserId(user),
+                subject: RequestSubject {
+                    deployment_id: DeploymentId(deployment),
+                },
+            };
+            if grants
+                .effective_for_tool(
+                    &context,
+                    "pulse-discovery",
+                    connection,
+                    &format!("curated_{connector}.read"),
+                )
+                .await
+                .map_err(|_| PulseError::Invalid("Chart access could not be verified".into()))?
+                .is_some()
+            {
+                permitted.push(measurement);
+            }
+        }
+        Ok(permitted)
+    }
     pub async fn measurements(
         &self,
         actor: &Actor,
@@ -185,6 +231,10 @@ impl PulseService {
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .map(|p| p.chars().take(500).collect::<String>());
+        let inventory = self.inventory(actor, &meta, input.refresh).await?;
+        let mut catalog = self
+            .agent_catalog(actor.user_id, measurement_catalog(&inventory.profiles))
+            .await?;
         let mut existing: Option<DiscoveryResponse> = None;
         if prompt.is_none()
             && let Some(value) = meta.caches.get(&key)
@@ -193,7 +243,9 @@ impl PulseService {
                 .map_err(|_| PulseError::Invalid("Invalid cached suggestions".into()))?;
             cached.suggestions.retain(|s| {
                 let hash = definition_hash(&s.definition);
-                !meta.dismissed.contains(&hash) && !meta.saved_hashes.contains(&hash)
+                !meta.dismissed.contains(&hash)
+                    && !meta.saved_hashes.contains(&hash)
+                    && catalog.iter().any(|m| m.id == s.definition.measurement_id)
             });
             let fresh =
                 serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
@@ -210,8 +262,6 @@ impl PulseService {
         } else {
             existing.take().map(|e| e.suggestions).unwrap_or_default()
         };
-        let inventory = self.inventory(actor, &meta, input.refresh).await?;
-        let catalog = measurement_catalog(&inventory.profiles);
         let mut candidates = vec![];
         let mut llm_ok = false;
         if !catalog.is_empty()
@@ -237,6 +287,10 @@ impl PulseService {
                 candidates = ai;
             }
         }
+        // A model request can outlive a grant or account preference change.
+        catalog = self.agent_catalog(actor.user_id, catalog).await?;
+        let mut kept = kept;
+        kept.retain(|s| catalog.iter().any(|m| m.id == s.definition.measurement_id));
         let mut valid = vec![];
         let mut hashes: std::collections::HashSet<String> = kept
             .iter()
@@ -350,7 +404,9 @@ impl PulseService {
         };
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let inventory = self.inventory(actor, &meta, false).await?;
-        let catalog = measurement_catalog(&inventory.profiles);
+        let mut catalog = self
+            .agent_catalog(actor.user_id, measurement_catalog(&inventory.profiles))
+            .await?;
         input.messages.iter_mut().for_each(|m| {
             m.content = m.content.chars().take(500).collect();
             if m.role != "assistant" {
@@ -365,6 +421,13 @@ impl PulseService {
         .await
         .map_err(|_| PulseError::Busy)?
         .map_err(|_| PulseError::Invalid("The assistant could not answer. Try again.".into()))?;
+        let refreshed = self.agent_catalog(actor.user_id, catalog.clone()).await?;
+        if refreshed.len() != catalog.len() {
+            return Err(PulseError::Invalid(
+                "Chart access changed; try again".into(),
+            ));
+        }
+        catalog = refreshed;
         let reply: String = out.reply.chars().take(600).collect();
         let title = out.title.map(|t| t.chars().take(120).collect::<String>());
         let Some(mut definition) = out.definition else {

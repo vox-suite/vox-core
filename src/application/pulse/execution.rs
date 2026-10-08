@@ -63,9 +63,9 @@ async fn execute_inner(
  CASE WHEN jsonb_typeof(flat->(r->>'field'))='number' THEN (flat->>(r->>'field'))::numeric END AS num
  FROM base b JOIN requests ON r->>'source'=b.source AND r->>'category'=b.category AND COALESCE(r->>'schema_id','')=COALESCE(b.schema_id::text,'') AND COALESCE(r->>'connection_id','')=COALESCE(b.flat->>'connection_id','') AND r->>'action'=b.action AND r->>'timing'=b.timing AND r->>'currency'=b.currency
  WHERE (r->>'kind'='recurring_cost_projection' AND flat->>'active'='true')
- OR (r->>'kind'<>'recurring_cost_projection' AND ( (b.source='playstation' AND b.timing='first_to_last_played')
+ OR (r->>'kind'<>'recurring_cost_projection' AND ( (b.source='playstation' AND b.timing IN('first_to_last_played','observed_history_range'))
  OR (b.timing='observed_counter_delta' AND b.observed_start>=(r->>'from')::timestamptz AND b.observed_end<=(r->>'to')::timestamptz)
- OR (b.timing NOT IN('observed_counter_delta','first_to_last_played') AND COALESCE(b.start_at,b.observed_end)>=(r->>'from')::timestamptz AND COALESCE(b.start_at,b.observed_end)<=(r->>'to')::timestamptz)
+ OR (b.timing NOT IN('observed_counter_delta','first_to_last_played','observed_history_range') AND COALESCE(b.start_at,b.observed_end)>=(r->>'from')::timestamptz AND COALESCE(b.start_at,b.observed_end)<=(r->>'to')::timestamptz)
  OR (r->>'kind'='known_interval_duration' AND b.end_at>(r->>'from')::timestamptz AND b.start_at<(r->>'to')::timestamptz)))
  ), regular AS (
  SELECT (r->>'index')::int AS index,
@@ -81,9 +81,9 @@ async fn execute_inner(
  EXTRACT(epoch FROM LEAST(end_at,(r->>'to')::timestamptz,(t.local_at+CASE r->>'bucket' WHEN 'week' THEN interval '1 week' WHEN 'month' THEN interval '1 month' ELSE interval '1 day' END) AT TIME ZONE(r->>'timezone'))-GREATEST(start_at,(r->>'from')::timestamptz,t.local_at AT TIME ZONE(r->>'timezone'))) * (r->>'scale')::numeric AS val,
  'known_interval_duration'::text AS kind,timing,id::text AS entity
  FROM matched CROSS JOIN LATERAL generate_series(date_trunc(COALESCE(r->>'bucket','day'),GREATEST(start_at,(r->>'from')::timestamptz) AT TIME ZONE(r->>'timezone')),date_trunc(COALESCE(r->>'bucket','day'),(LEAST(end_at,(r->>'to')::timestamptz)-interval '1 microsecond') AT TIME ZONE(r->>'timezone')),CASE r->>'bucket' WHEN 'week' THEN interval '1 week' WHEN 'month' THEN interval '1 month' ELSE interval '1 day' END)t(local_at)
- WHERE r->>'kind'='known_interval_duration' AND end_at>start_at AND timing NOT IN('observed_counter_delta','first_to_last_played')
+ WHERE r->>'kind'='known_interval_duration' AND end_at>start_at AND timing NOT IN('observed_counter_delta','first_to_last_played','observed_history_range')
  ), values AS (SELECT * FROM regular UNION ALL SELECT * FROM intervals),
- deduped AS (SELECT * FROM values WHERE timing<>'first_to_last_played' UNION ALL SELECT index,label,max(val) AS val,min(kind) AS kind,timing,entity FROM values WHERE timing='first_to_last_played' GROUP BY index,label,timing,entity),
+ deduped AS (SELECT * FROM values WHERE timing NOT IN('first_to_last_played','observed_history_range') UNION ALL SELECT index,label,max(val) AS val,min(kind) AS kind,timing,entity FROM values WHERE timing IN('first_to_last_played','observed_history_range') GROUP BY index,label,timing,entity),
  totals AS (SELECT index,label,CASE WHEN min(kind)='numeric_average' THEN avg(val) ELSE sum(val) END::float8 AS value FROM deduped WHERE val IS NOT NULL GROUP BY index,label),
  ranked AS (SELECT *,row_number() OVER(PARTITION BY index ORDER BY value DESC,label) AS rank FROM totals),
  points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY label) AS points FROM ranked WHERE rank<=CASE WHEN (SELECT r->>'bucket' FROM requests WHERE (r->>'index')::int=ranked.index) IS NULL THEN 20 ELSE 366 END GROUP BY index)

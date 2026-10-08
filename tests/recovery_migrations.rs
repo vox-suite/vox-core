@@ -242,3 +242,134 @@ async fn curated_upgrade_preserves_credentials_and_import_identity_on_repeat_syn
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL, PostgreSQL 18 and pgvector"]
+async fn explicit_account_merge_preserves_contexts_grants_and_ciphertext() {
+    let (admin, db, name) = database().await;
+    db.migrate().await.unwrap();
+    let (old, connection, grant, _) = seed(&db).await;
+    let (new, _, _, _) = seed(&db).await;
+    let context: Uuid = sqlx::query_scalar("SELECT id FROM user_contexts WHERE user_id=$1")
+        .bind(old)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let cipher = vox_connections::crypto::CredentialCipher::from_hex_key(&"ab".repeat(32))
+        .unwrap()
+        .seal(format!("{old}:spotify").as_bytes(), "surviving-token")
+        .unwrap();
+    let account:Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at,access_ciphertext) VALUES($1,$2,'spotify',now(),$3) RETURNING id").bind(old).bind(context).bind(&cipher).fetch_one(db.pool()).await.unwrap();
+    let mut tx = db.pool().begin().await.unwrap();
+    assert_eq!(
+        vox_core::account_linking::unify_by_verified_email(&mut tx, old, "same@example.com")
+            .await
+            .unwrap(),
+        old
+    );
+    sqlx::query("SELECT merge_user_accounts($1,$2)")
+        .bind(old)
+        .bind(new)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let row=sqlx::query("SELECT user_context_id,user_id,credential_user_id,access_ciphertext FROM vox_connections WHERE id=$1").bind(account).fetch_one(db.pool()).await.unwrap();
+    assert_eq!(row.get::<Uuid, _>("user_context_id"), context);
+    assert_eq!(row.get::<Uuid, _>("user_id"), new);
+    assert_eq!(row.get::<Uuid, _>("credential_user_id"), old);
+    assert_eq!(row.get::<Vec<u8>, _>("access_ciphertext"), cipher);
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT user_context_id FROM agent_capability_grants WHERE id=$1 AND connection_id=$2"
+        )
+        .bind(grant)
+        .bind(connection)
+        .fetch_one(db.pool())
+        .await
+        .unwrap(),
+        context
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM user_contexts WHERE user_id=$1")
+            .bind(new)
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        2
+    );
+    db.pool().close().await;
+    sqlx::query(&format!("DROP DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable TEST_DATABASE_URL, PostgreSQL 18 and pgvector"]
+async fn maps_upgrade_preserves_annotations_and_repeat_import_identity() {
+    let (admin, db, name) = database().await;
+    apply(&db, 0, 20261006000004).await;
+    let (user, _, _, _) = seed(&db).await;
+    let context = IdentityService::new(db.clone())
+        .resolve_for_user(user)
+        .await
+        .unwrap();
+    let account:Uuid=sqlx::query_scalar("INSERT INTO vox_connections(user_id,user_context_id,connector_id,consented_at) VALUES($1,$2,'maps_timeline',now()) RETURNING id").bind(user).bind(context.id.0).fetch_one(db.pool()).await.unwrap();
+    let source = "takeout:12.90000,77.60000:2026-01-01T08:00:00+00:00";
+    let event:Uuid=sqlx::query_scalar("INSERT INTO inbound_events(user_id,source_kind,source_id,external_event_id,payload_hash,event_type,occurred_at,payload,processed_at) VALUES($1,'google_maps',$2,$3,'old-hash','place.visited','2026-01-01T08:00:00Z',$4,now()) RETURNING id").bind(user).bind(format!("{user}:google_maps")).bind(source).bind(serde_json::json!({"activity":{"connection_id":account}})).fetch_one(db.pool()).await.unwrap();
+    let span:Uuid=sqlx::query_scalar("INSERT INTO spans(user_id,title,notes,source,source_ref,status,start_at,data,source_event_id) VALUES($1,'Visit','Keep annotation','google_maps',$2,'done','2026-01-01T08:00:00Z',$3,$4) RETURNING id").bind(user).bind(format!("google_maps:{source}")).bind(serde_json::json!({"connection_id":account})).bind(event).fetch_one(db.pool()).await.unwrap();
+    db.migrate().await.unwrap();
+    let service = vox_core::fresh_connections::FreshConnectionsService::new(
+        db.pool().clone(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let history = serde_json::json!([{"startTime":"2026-01-01T08:00:00Z","endTime":"2026-01-01T09:00:00Z","visit":{"topCandidate":{"placeLocation":{"latLng":"geo:12.9,77.6"}}}}]);
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .import_maps_timeline(
+                    &service.native_scope(user).await.unwrap(),
+                    history.clone(),
+                    true
+                )
+                .await
+                .unwrap()["imported"],
+            0
+        );
+    }
+    let row = sqlx::query("SELECT id,notes,source_event_id FROM spans WHERE user_id=$1")
+        .bind(user)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(row.get::<Uuid, _>("id"), span);
+    assert_eq!(row.get::<String, _>("notes"), "Keep annotation");
+    assert_eq!(row.get::<Uuid, _>("source_event_id"), event);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM spans WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inbound_events WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        1
+    );
+    db.pool().close().await;
+    sqlx::query(&format!("DROP DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
