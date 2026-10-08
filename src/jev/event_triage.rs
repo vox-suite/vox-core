@@ -50,8 +50,8 @@ impl EventTriager {
                 "What immediate handling does this event require?",
                 vec![
                     ("ignore", Some("Routine telemetry, duplicate, ping, heartbeat, or benign event requiring no user action")),
-                    ("store_record", Some("Passive personal metric, vitals, location breadcrumb, log, or telemetry to validate and record")),
-                    ("plan_action", Some("Important change or event requiring notification, outbound call, or reactive task planning")),
+                    ("store_record", Some("Something that already happened and should be recorded as structured data: a completed card, bank or UPI payment, a received payment, a refund, a vital, a location breadcrumb, a log or telemetry")),
+                    ("plan_action", Some("Something still to be done: a bill or payment that is DUE, a failed payment, a security alert, an invitation or a deadline that needs a reminder, notification, outbound call or task. Never use this for a payment that already completed")),
                 ],
             ),
         );

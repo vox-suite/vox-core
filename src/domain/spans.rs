@@ -1,7 +1,7 @@
 /**
 * Domain model for spans: anything that occupies time, past, present, or planned.
 */
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -151,6 +151,51 @@ pub struct SpanQuery {
     #[serde(default)]
     pub unscheduled: bool,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct SpanDaysQuery {
+    pub from_day: NaiveDate,
+    pub to_day: NaiveDate,
+    pub timezone: String,
+    pub collection_id: Option<Uuid>,
+    pub if_revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct SpanCategoryCount {
+    pub category: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct SpanDaySummary {
+    pub day: NaiveDate,
+    pub count: i64,
+    pub categories: Vec<SpanCategoryCount>,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct SpanDays {
+    pub revision: i64,
+    pub unchanged: bool,
+    pub days: Vec<SpanDaySummary>,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct SpanDayQuery {
+    pub day: NaiveDate,
+    pub timezone: String,
+    pub collection_id: Option<Uuid>,
+    pub cursor: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct SpanDayPage {
+    pub revision: i64,
+    pub items: Vec<Span>,
+    pub next_cursor: Option<String>,
 }
 
 pub(crate) fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>

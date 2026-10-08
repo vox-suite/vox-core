@@ -38,6 +38,14 @@ fn measurement(
         .take(10)
         .map(|(k, _)| k.clone())
         .collect();
+    let mut dimensions = dimensions;
+    if matches!(
+        p.source.as_str(),
+        "google_maps" | "google_calendar" | "swiggy" | "zomato"
+    ) && !dimensions.iter().any(|d| d == "title")
+    {
+        dimensions.push("title".into());
+    }
     let default_dimension = if is_counter && dimensions.iter().any(|d| d == "game") {
         Some("game".into())
     } else {
@@ -69,8 +77,194 @@ fn measurement(
         default_dimension,
     }
 }
+struct NumericRule {
+    financial: bool,
+    kind: MeasurementKind,
+    unit: String,
+    scale: f64,
+    label: Option<String>,
+}
+fn name_tokens(field: &str) -> Vec<String> {
+    field
+        .rsplit('.')
+        .next()
+        .unwrap_or(field)
+        .to_lowercase()
+        .split(['_', '-', ' '])
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+/// Decides whether a numeric field is a sensible measurement, and how to sum it and label its unit.
+/// Schema hints win over name heuristics; ids, coordinates and cumulative counters are skipped.
+fn numeric_rule(field: &str, ty: &str, p: &SourceProfile) -> Option<NumericRule> {
+    if ty != "number" {
+        return None;
+    }
+    let hint = p.field_hints.get(field);
+    if hint.is_some_and(|h| h.ignore) {
+        return None;
+    }
+    let tokens = name_tokens(field);
+    let has = |words: &[&str]| tokens.iter().any(|t| words.contains(&t.as_str()));
+    let financial = has(&[
+        "amount", "cost", "price", "spent", "spend", "fee", "fees", "tip",
+    ]);
+    const SKIP: &[&str] = &[
+        "id",
+        "ids",
+        "index",
+        "idx",
+        "version",
+        "epoch",
+        "timestamp",
+        "ts",
+        "offset",
+        "lat",
+        "lng",
+        "lon",
+        "latitude",
+        "longitude",
+        "year",
+        "month",
+        "day",
+        "zip",
+        "pin",
+        "pincode",
+        "phone",
+        "port",
+        "eta",
+        "lifetime",
+        "cumulative",
+        "rank",
+        "position",
+        "seq",
+        "sequence",
+        "page",
+    ];
+    let declared = hint.is_some_and(|h| h.aggregation.is_some() || h.unit.is_some());
+    if !declared && (has(SKIP) || (has(&["total"]) && !financial)) {
+        return None;
+    }
+    let averaged = match hint.and_then(|h| h.aggregation.as_deref()) {
+        Some("avg" | "average" | "mean") => true,
+        Some(_) => false,
+        None => has(&[
+            "weight",
+            "score",
+            "rating",
+            "rate",
+            "ratio",
+            "percent",
+            "pct",
+            "temperature",
+            "temp",
+            "bpm",
+            "pace",
+            "speed",
+            "avg",
+            "average",
+            "level",
+            "mood",
+            "glucose",
+        ]),
+    };
+    let last = tokens.last().map(String::as_str).unwrap_or("");
+    let (unit, scale) = if let Some(unit) = hint.and_then(|h| h.unit.clone()) {
+        (unit, 1.0)
+    } else {
+        match last {
+            "seconds" | "secs" | "sec" => ("hours".to_string(), 1.0 / 3600.0),
+            "minutes" | "mins" | "min" => ("hours".to_string(), 1.0 / 60.0),
+            "ms" | "millis" | "milliseconds" => ("hours".to_string(), 1.0 / 3_600_000.0),
+            "hours" | "hrs" | "hr" => ("hours".to_string(), 1.0),
+            "km" | "kg" | "mi" | "miles" | "kcal" | "bpm" | "cm" | "kb" | "mb" | "gb" => {
+                (last.to_string(), 1.0)
+            }
+            _ => (tokens.join(" "), 1.0),
+        }
+    };
+    Some(NumericRule {
+        financial,
+        kind: if averaged {
+            MeasurementKind::NumericAverage
+        } else {
+            MeasurementKind::NumericSum
+        },
+        unit,
+        scale,
+        label: hint.and_then(|h| h.label.clone()),
+    })
+}
+/// One "All spending" measurement per currency, summing completed money-out across
+/// categories. Subscription plans stay separate, as do refunds and credits.
+fn spending_measurements(profiles: &[SourceProfile]) -> Vec<Measurement> {
+    let mut by_currency: std::collections::BTreeMap<&str, Vec<&SourceProfile>> =
+        std::collections::BTreeMap::new();
+    for p in profiles {
+        let money_field = ["amount", "total_amount"]
+            .iter()
+            .any(|f| p.fields.get(*f).is_some_and(|t| t == "number"));
+        if !p.currency.is_empty()
+            && money_field
+            && p.dated_count > 0
+            && !p.category.to_lowercase().contains("subscription")
+            && !matches!(
+                p.action.as_str(),
+                "credit" | "refund" | "income" | "info" | "due"
+            )
+        {
+            by_currency.entry(p.currency.as_str()).or_default().push(p);
+        }
+    }
+    by_currency
+        .into_iter()
+        .map(|(currency, members)| {
+            let mut fields = std::collections::BTreeMap::from([("amount".to_string(), "number".to_string())]);
+            if members.iter().any(|p| p.fields.contains_key("merchant")) {
+                fields.insert("merchant".into(), "string".into());
+            }
+            let profile = SourceProfile {
+                key: format!("spending:{currency}"),
+                schema_id: None,
+                connection_id: None,
+                source: "all_sources".into(),
+                category: "spending".into(),
+                action: String::new(),
+                timing: String::new(),
+                currency: currency.to_string(),
+                count: members.iter().map(|p| p.count).sum(),
+                dated_count: members.iter().map(|p| p.dated_count).sum(),
+                first_at: members.iter().filter_map(|p| p.first_at).min(),
+                last_at: members.iter().filter_map(|p| p.last_at).max(),
+                known_intervals: 0,
+                fields,
+                field_hints: Default::default(),
+                samples: vec![],
+            };
+            let mut m = measurement(
+                &profile,
+                MeasurementKind::SpendingTotal,
+                Some("amount"),
+                format!("All spending ({currency})"),
+                currency,
+                "recorded",
+                1.0,
+                "Every completed payment with an amount in this currency: expenses, bills and card transactions. Subscription plans are tracked separately; refunds and credits are excluded.",
+            );
+            m.dimensions = ["category", "merchant", "source", "title"]
+                .iter()
+                .filter(|d| **d != "merchant" || profile.fields.contains_key("merchant"))
+                .map(|d| d.to_string())
+                .collect();
+            m.default_dimension = Some("category".into());
+            m
+        })
+        .collect()
+}
+
 pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
-    let mut out = vec![];
+    let mut out = spending_measurements(profiles);
     for p in profiles {
         if p.count == 0 {
             continue;
@@ -81,6 +275,9 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
             ("youtube", "playlist_addition") => "YouTube playlist additions".to_string(),
             ("youtube", "like") => "YouTube likes".to_string(),
             ("playstation", _) => "Recorded gaming updates".to_string(),
+            ("google_maps", _) => "Places visited".to_string(),
+            ("google_calendar", _) => "Calendar events".to_string(),
+            ("swiggy" | "zomato", _) => "Food orders".to_string(),
             _ => format!("{} entries", p.category.replace('_', " ")),
         };
         if p.dated_count > 0 && p.source != "playstation" {
@@ -143,76 +340,82 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
         } else if p.source != "youtube" && p.source != "spotify" {
             let is_subscription = p.category.to_lowercase().contains("subscription");
             for (field, ty) in &p.fields {
-                if ty != "number"
-                    || !matches!(
-                        field.as_str(),
-                        "amount"
-                            | "total_amount"
-                            | "cost"
-                            | "price"
-                            | "distance_km"
-                            | "steps"
-                            | "calories"
-                            | "weight"
-                            | "score"
-                    )
-                {
+                let Some(rule) = numeric_rule(field, ty, p) else {
                     continue;
-                }
-                let financial =
-                    matches!(field.as_str(), "amount" | "total_amount" | "cost" | "price");
+                };
+                let financial = rule.financial;
                 if financial && p.currency.is_empty() {
                     continue;
                 }
-                if is_subscription && financial {
-                    if p.fields.contains_key("billing_interval")
-                        || p.fields.contains_key("interval")
-                    {
-                        let mut m = measurement(
-                            p,
-                            MeasurementKind::RecurringCostProjection,
-                            Some(field),
-                            format!("Monthly subscription cost ({})", p.currency),
-                            &p.currency,
-                            "projected",
-                            1.0,
-                            "Normalizes explicit active subscriptions to monthly cost. This is a projection, not actual payments.",
-                        );
-                        m.buckets.clear();
-                        m.default_dimension = Some("title".into());
-                        m.dimensions.push("title".into());
-                        out.push(m);
-                    }
+                // Plans with a billing interval become a monthly projection; without one the
+                // charges themselves are charted below.
+                if is_subscription
+                    && financial
+                    && (p.fields.contains_key("billing_interval")
+                        || p.fields.contains_key("interval"))
+                {
+                    let mut m = measurement(
+                        p,
+                        MeasurementKind::RecurringCostProjection,
+                        Some(field),
+                        format!("Monthly subscription cost ({})", p.currency),
+                        &p.currency,
+                        "projected",
+                        1.0,
+                        "Normalizes explicit active subscriptions to monthly cost. This is a projection, not actual payments.",
+                    );
+                    m.buckets.clear();
+                    m.default_dimension = Some("title".into());
+                    m.dimensions.push("title".into());
+                    out.push(m);
                     continue;
                 }
                 if p.dated_count == 0 {
                     continue;
                 }
-                let kind = if matches!(field.as_str(), "weight" | "score") {
-                    MeasurementKind::NumericAverage
-                } else {
-                    MeasurementKind::NumericSum
-                };
+                let kind = rule.kind;
                 let unit = if financial {
                     p.currency.as_str()
                 } else {
-                    field.as_str()
+                    rule.unit.as_str()
                 };
                 let name = if financial {
                     format!(
                         "{} {} ({})",
                         p.category.replace('_', " "),
-                        if matches!(p.action.as_str(), "credit" | "refund" | "income") {
-                            p.action.as_str()
-                        } else {
-                            "spending"
+                        match p.action.as_str() {
+                            "credit" | "refund" | "income" => p.action.as_str(),
+                            // OTP messages record attempts, which are not confirmed spending.
+                            "info" => "authorization attempts",
+                            _ => "spending",
                         },
                         p.currency
                     )
                 } else {
-                    format!("{} {}", p.category.replace('_', " "), field)
+                    rule.label.clone().unwrap_or_else(|| {
+                        let mut words = name_tokens(field);
+                        let timed = matches!(
+                            words.last().map(String::as_str),
+                            Some(
+                                "seconds"
+                                    | "secs"
+                                    | "sec"
+                                    | "minutes"
+                                    | "mins"
+                                    | "min"
+                                    | "ms"
+                                    | "millis"
+                                    | "milliseconds"
+                            )
+                        );
+                        if rule.unit == "hours" && timed {
+                            *words.last_mut().unwrap() = "hours".into();
+                        }
+                        format!("{} {}", p.category.replace('_', " "), words.join(" "))
+                    })
                 };
-                out.push(measurement(p,kind,Some(field),name,unit,"recorded",1.0,"Uses recorded numeric values and event dates. Currency groups are kept separate; refunds keep their signed values."));
+                let scale = if financial { 1.0 } else { rule.scale };
+                out.push(measurement(p,kind,Some(field),name,unit,"recorded",scale,"Uses recorded numeric values and event dates. Currency groups are kept separate; refunds keep their signed values."));
             }
             if p.known_intervals > 0 && !is_subscription {
                 out.push(measurement(
@@ -228,6 +431,7 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
             }
         }
     }
+    out.sort_by_key(|m| std::cmp::Reverse(m.profile.count));
     out
 }
 pub fn validate_definition(
@@ -235,7 +439,7 @@ pub fn validate_definition(
     catalog: &[Measurement],
 ) -> Result<Measurement, String> {
     if d.version != 2
-        || !(1..=365).contains(&d.period_days)
+        || !(1..=3650).contains(&d.period_days)
         || d.offset_days > 730
         || d.timezone.parse::<chrono_tz::Tz>().is_err()
     {
@@ -246,6 +450,13 @@ pub fn validate_definition(
         .find(|m| m.id == d.measurement_id)
         .ok_or("Measurement is unavailable or its source access has changed")?
         .clone();
+    if d.period_days > 365 && d.bucket == Some(Bucket::Day) {
+        return Err("Use weeks or months for periods longer than a year".into());
+    }
+    if d.top_n.is_some_and(|n| !(1..=20).contains(&n)) || (d.top_n.is_some() && d.bucket.is_some())
+    {
+        return Err("Top-N applies to category charts, from 1 to 20".into());
+    }
     match (&d.bucket, &d.dimension) {
         (Some(bucket), None) if m.buckets.contains(bucket) => {}
         (None, Some(field)) if m.dimensions.contains(field) => {}

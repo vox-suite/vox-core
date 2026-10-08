@@ -31,7 +31,10 @@ use crate::{
         records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name, list_schemas},
         sms::{get_consent, grant_consent, revoke_consent, submit_batch},
-        spans::{create_span, delete_span, get_span, list_spans, update_span},
+        spans::{
+            create_span, delete_span, get_span, list_span_day, list_span_days, list_spans,
+            update_span,
+        },
         voice::{VoiceSocketState, voice_socket},
     },
     state::ApiState,
@@ -45,6 +48,8 @@ pub fn build_api_router(state: ApiState) -> Router {
     let span_routes = Router::new()
         .route("/v1/spans", post(create_span))
         .route("/v1/spans/list", post(list_spans))
+        .route("/v1/spans/days", post(list_span_days))
+        .route("/v1/spans/day", post(list_span_day))
         .route("/v1/spans/{id}", post(get_span))
         .route("/v1/spans/{id}/update", post(update_span))
         .route("/v1/spans/{id}/delete", post(delete_span))
@@ -187,12 +192,32 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
         .route("/v1/me/pulse/compose", post(crate::routes::pulse::compose))
+        .route(
+            "/v1/me/pulse/goals",
+            get(crate::routes::pulse::list_goals).post(crate::routes::pulse::create_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/compose",
+            post(crate::routes::pulse::compose_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/{id}",
+            axum::routing::delete(crate::routes::pulse::delete_goal),
+        )
+        .route(
+            "/v1/me/pulse/goals/{id}/entries",
+            post(crate::routes::pulse::add_goal_entry),
+        )
         .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
+        .route(
+            "/v1/me/pulse/charts/{id}",
+            axum::routing::delete(crate::routes::pulse::delete_chart),
+        )
         .route(
             "/v1/me/pulse/dismissals",
             post(crate::routes::pulse::dismiss),
         )
-        .with_state(pulse_service);
+        .with_state(pulse_service.clone());
     let chart_routes = Router::new()
         .route("/v1/me/charts/suggest", post(suggest_charts))
         .route(
@@ -210,6 +235,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         architect: state.space_architect.clone(),
         runtime: state.space_runtime.clone(),
         user_events: state.user_events.clone(),
+        pulse: pulse_service.clone(),
     };
     let space_routes = Router::new()
         .route(
@@ -235,6 +261,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/me/spaces/{id}/nodes/{node_id}",
             patch(crate::routes::spaces::update_space_node),
+        )
+        .route(
+            "/v1/me/spaces/{id}/nodes/{node_id}/goal",
+            post(crate::routes::spaces::approve_node_goal),
         )
         .with_state(space_api_state);
 

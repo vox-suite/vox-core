@@ -29,3 +29,4 @@ pub enum ConcurrencyOutcome<T> {
 }
 
 pub mod pulse;
+pub mod pulse_goals;

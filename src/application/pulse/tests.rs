@@ -53,6 +53,7 @@ fn playstation_deltas_cannot_be_bucketed_by_day() {
         dimension: None,
         period_days: 30,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
     };
@@ -67,6 +68,7 @@ fn manual_definition_rejects_invalid_timezone_and_unknown_metric() {
         dimension: None,
         period_days: 30,
         offset_days: 0,
+        top_n: None,
         timezone: "invalid".into(),
         chart_type: ChartType::Line,
     };
@@ -276,6 +278,7 @@ async fn previews_count_plays_without_numeric_fields_and_keep_currency_separate(
                     dimension: None,
                     period_days: 30,
                     offset_days: 0,
+                    top_n: None,
                     timezone: "Asia/Kolkata".into(),
                     chart_type: ChartType::Bar,
                 },
@@ -451,6 +454,7 @@ async fn known_intervals_split_at_local_midnight_and_undated_entries_stay_unknow
         dimension: None,
         period_days: 7,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Line,
     };
@@ -502,6 +506,7 @@ async fn cached_chart_changes_after_edit_and_delete_and_conflicting_save_is_reje
         dimension: None,
         period_days: 7,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
     };
@@ -586,6 +591,7 @@ fn financial_pie_is_rejected_because_refunds_can_be_signed() {
         dimension: Some("merchant".into()),
         period_days: 30,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Pie,
     };
@@ -621,6 +627,7 @@ async fn six_chart_database_budget_and_fixture_performance() {
                 dimension: dimension.map(str::to_owned),
                 period_days: period,
                 offset_days: 0,
+                top_n: None,
                 timezone: "Asia/Kolkata".into(),
                 chart_type: ChartType::Bar,
             };
@@ -714,6 +721,7 @@ async fn gameplay_totals_and_deltas_are_distinct_and_subscriptions_are_projectio
                 dimension: m.default_dimension.clone(),
                 period_days: 30,
                 offset_days: 0,
+                top_n: None,
                 timezone: "Asia/Kolkata".into(),
                 chart_type: ChartType::Bar,
             };
@@ -771,6 +779,7 @@ async fn lifetime_gameplay_sums_games_when_grouped_by_platform() {
         dimension: Some("platform".into()),
         period_days: 30,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
     };
@@ -854,6 +863,7 @@ async fn concurrent_forced_loads_share_the_same_computed_result_across_services(
         dimension: None,
         period_days: 30,
         offset_days: 0,
+        top_n: None,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
     };

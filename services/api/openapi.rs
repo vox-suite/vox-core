@@ -18,6 +18,8 @@ use utoipa::OpenApi;
     crate::routes::connections::cancel_setup,
     crate::routes::auth::mint_web_token,
     crate::routes::spans::list_spans,
+    crate::routes::spans::list_span_days,
+    crate::routes::spans::list_span_day,
     crate::routes::spans::create_span,
     crate::routes::spans::get_span,
     crate::routes::spans::update_span,
@@ -37,7 +39,13 @@ use utoipa::OpenApi;
     crate::routes::pulse::discover,
     crate::routes::pulse::preview,
     crate::routes::pulse::compose,
+    crate::routes::pulse::list_goals,
+    crate::routes::pulse::create_goal,
+    crate::routes::pulse::delete_goal,
+    crate::routes::pulse::add_goal_entry,
+    crate::routes::pulse::compose_goal,
     crate::routes::pulse::save,
+    crate::routes::pulse::delete_chart,
     crate::routes::pulse::dismiss,
     crate::routes::charts::suggest_charts,
     crate::routes::charts::create_chart_board,
@@ -51,7 +59,8 @@ use utoipa::OpenApi;
     crate::routes::spaces::send_space_chat,
     crate::routes::spaces::commit_space,
     crate::routes::spaces::list_space_messages,
-    crate::routes::spaces::update_space_node
+    crate::routes::spaces::update_space_node,
+    crate::routes::spaces::approve_node_goal
 ))]
 struct ApiDoc;
 

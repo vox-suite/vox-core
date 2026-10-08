@@ -4,6 +4,7 @@ use crate::{
         tools::{
             data_query::{FindSchemas, QueryUserData},
             google_maps::{GetRoute, SearchPlaces},
+            space_goals::{ListGoalMeasurements, ProposeGoal},
             space_graph::{AddEdge, AddNode, RemoveNode, SpawnBranch, UpdateNode},
             spans::{GetSpan, ListSpans},
             web_search::WebSearch,
@@ -136,7 +137,8 @@ impl SpaceRuntime {
              4. Use web_search or search_places to research viable options/destinations/alternatives. Add 'option' nodes with pros, cons, costs, and travel times.\n\
              5. Connect nodes using add_edge to form a clean, flowing DAG directed toward a conclusion.\n\
              6. When options are evaluated, synthesize a 'plan' or 'decision' node with concrete steps.\n\
-             7. If the user sends a steer message, adapt the graph accordingly, updating or removing affected nodes.",
+             7. If the user sends a steer message, adapt the graph accordingly, updating or removing affected nodes.\n\
+             8. When the plan has a measurable personal or financial target (saving an amount by a date, keeping spending or time under a limit), call propose_goal on the node it belongs to. Use list_goal_measurements first for goals tracked from the user's data. You only propose: the user approves each goal on its node, so say so in your summary and never claim a goal exists.",
             space.title, space.intent, spec.mission, spec.look_for, spec.done_when
         );
 
@@ -213,6 +215,13 @@ impl SpaceRuntime {
                 max_children,
                 self.user_events.clone(),
             ))
+            .tool(ProposeGoal::new(
+                Some(self.db.clone()),
+                user_id,
+                space_id,
+                self.user_events.clone(),
+            ))
+            .tool(ListGoalMeasurements::new(Some(self.db.clone()), user_id))
             .tool(FindSchemas::new(Some(self.db.clone()), user_id))
             .tool(QueryUserData::new(Some(self.db.clone()), user_id))
             .tool(ListSpans::new(Some(self.db.clone()), owner))

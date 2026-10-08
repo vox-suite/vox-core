@@ -17,6 +17,8 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+mod goals;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PulseError {
     #[error("{0}")]
@@ -102,7 +104,7 @@ impl PulseService {
             actor,
             meta,
             &format!(
-                "results:{}:{:x}",
+                "results2:{}:{:x}",
                 inputs
                     .iter()
                     .map(|(d, _)| Utc::now()
@@ -270,7 +272,7 @@ impl PulseService {
             let ranked = tokio::time::timeout(
                 std::time::Duration::from_secs(180),
                 suggester.suggest_pulse(
-                    catalog.iter().take(40).cloned().collect(),
+                    catalog.iter().take(60).cloned().collect(),
                     input.timezone.clone(),
                     crate::agents::chart_suggester::PulseAsk {
                         instruction: prompt.clone(),
@@ -416,11 +418,14 @@ impl PulseService {
         let timezone = input.timezone.clone();
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            suggester.compose_pulse(catalog.iter().take(40).cloned().collect(), input),
+            suggester.compose_pulse(catalog.iter().take(60).cloned().collect(), input),
         )
         .await
         .map_err(|_| PulseError::Busy)?
-        .map_err(|_| PulseError::Invalid("The assistant could not answer. Try again.".into()))?;
+        .map_err(|e| {
+            tracing::warn!(error = ?e, "pulse compose failed");
+            PulseError::Invalid("The assistant could not answer. Try again.".into())
+        })?;
         let refreshed = self.agent_catalog(actor.user_id, catalog.clone()).await?;
         if refreshed.len() != catalog.len() {
             return Err(PulseError::Invalid(
@@ -518,6 +523,9 @@ impl PulseService {
                 sqlx::Error::Protocol(message) => PulseError::Conflict(message),
                 other => PulseError::Database(other),
             })
+    }
+    pub async fn delete_chart(&self, actor: &Actor, id: uuid::Uuid) -> Result<bool, PulseError> {
+        Ok(self.repo.delete_chart(actor.user_id, id).await?)
     }
     pub async fn dismiss(
         &self,

@@ -18,6 +18,20 @@ pub enum MeasurementKind {
     NumericAverage,
     KnownIntervalDuration,
     RecurringCostProjection,
+    /// Completed money-out across categories in one currency, excluding subscription plans.
+    SpendingTotal,
+}
+/// Optional per-field hints declared by a data schema (`x-unit`, `x-aggregation`, `title`, `x-measure`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FieldHint {
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub aggregation: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub ignore: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceProfile {
@@ -35,6 +49,8 @@ pub struct SourceProfile {
     pub last_at: Option<DateTime<Utc>>,
     pub known_intervals: i64,
     pub fields: BTreeMap<String, String>,
+    #[serde(default)]
+    pub field_hints: BTreeMap<String, FieldHint>,
     pub samples: Vec<serde_json::Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -63,6 +79,9 @@ pub struct PulseDefinition {
     /// Shift the window back by this many days, e.g. period 7 + offset 7 is the previous 7 days.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub offset_days: u16,
+    /// Keep only the largest N groups of a category chart (1-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_n: Option<u8>,
     pub timezone: String,
     pub chart_type: ChartType,
 }

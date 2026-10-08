@@ -1622,6 +1622,15 @@
             "format": "int64",
             "type": "integer"
           },
+          "field_hints": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldHint"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "fields": {
             "additionalProperties": {
               "type": "string"
@@ -1753,6 +1762,15 @@
           },
           "timezone": {
             "type": "string"
+          },
+          "top_n": {
+            "description": "Keep only the largest N groups of a category chart (1-20).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "version": {
             "format": "int32",
@@ -1956,7 +1974,8 @@
           "numeric_sum",
           "numeric_average",
           "known_interval_duration",
-          "recurring_cost_projection"
+          "recurring_cost_projection",
+          "spending_total"
         ],
         "type": "string"
       },
@@ -2147,6 +2166,334 @@
         },
         "required": [
           "reply"
+        ],
+        "type": "object"
+      },
+      "FieldHint": {
+        "description": "Optional per-field hints declared by a data schema (`x-unit`, `x-aggregation`, `title`, `x-measure`).",
+        "properties": {
+          "aggregation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ignore": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "GoalKind": {
+        "enum": [
+          "metric",
+          "saving"
+        ],
+        "type": "string"
+      },
+      "GoalDirection": {
+        "enum": [
+          "at_least",
+          "at_most"
+        ],
+        "type": "string"
+      },
+      "GoalPeriod": {
+        "enum": [
+          "week",
+          "month"
+        ],
+        "type": "string"
+      },
+      "GoalDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "deadline": {
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "definition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PulseDefinition"
+              }
+            ]
+          },
+          "direction": {
+            "$ref": "#/components/schemas/GoalDirection"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GoalKind"
+          },
+          "period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GoalPeriod"
+              }
+            ]
+          },
+          "target": {
+            "format": "double",
+            "type": "number"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "title",
+          "kind",
+          "direction",
+          "target",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "GoalView": {
+        "properties": {
+          "current": {
+            "format": "double",
+            "type": "number"
+          },
+          "days_left": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deadline": {
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direction": {
+            "$ref": "#/components/schemas/GoalDirection"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GoalKind"
+          },
+          "per_week_needed": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GoalPeriod"
+              }
+            ]
+          },
+          "period_ends_on": {
+            "description": "End of the current week or month for recurring goals.",
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projected_on": {
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remaining": {
+            "format": "double",
+            "type": "number"
+          },
+          "starts_on": {
+            "format": "date",
+            "type": "string"
+          },
+          "status": {
+            "description": "done, ahead, on_track, behind, in_progress, within_limit, over_limit or unavailable.",
+            "type": "string"
+          },
+          "target": {
+            "format": "double",
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "direction",
+          "target",
+          "unit",
+          "current",
+          "percent",
+          "status",
+          "remaining",
+          "starts_on"
+        ],
+        "type": "object"
+      },
+      "AddGoalEntryInput": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "GoalComposeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GoalDraft"
+              }
+            ]
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ComposeMessage"
+            },
+            "type": "array"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "GoalComposeResponse": {
+        "properties": {
+          "draft": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GoalDraft"
+              }
+            ]
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GoalView"
+              }
+            ]
+          },
+          "reply": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reply"
+        ],
+        "type": "object"
+      },
+      "ApproveNodeGoalInput": {
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "ApproveNodeGoalResponse": {
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/GoalView"
+          },
+          "node": {
+            "$ref": "#/components/schemas/SpaceNode"
+          }
+        },
+        "required": [
+          "goal",
+          "node"
         ],
         "type": "object"
       }
@@ -3702,6 +4049,56 @@
         ]
       }
     },
+    "/v1/me/spaces/{id}/nodes/{node_id}/goal": {
+      "post": {
+        "operationId": "approve_node_goal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveNodeGoalInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveNodeGoalResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "spaces"
+        ]
+      }
+    },
     "/v1/records": {
       "post": {
         "responses": {
@@ -4221,6 +4618,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/goals": {
+      "get": {
+        "operationId": "list_goals",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoalView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      },
+      "post": {
+        "operationId": "create_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalView"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/goals/compose": {
+      "post": {
+        "operationId": "compose_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalComposeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalComposeResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/goals/{id}": {
+      "delete": {
+        "operationId": "delete_goal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/goals/{id}/entries": {
+      "post": {
+        "operationId": "add_goal_entry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddGoalEntryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalView"
                 }
               }
             },

@@ -13,6 +13,7 @@ pub async fn dedupe_or_settle(
 ) -> Result<(), sqlx::Error> {
     let direction = data.get("direction").and_then(Value::as_str);
     let is_due = direction == Some("due");
+    let authorization_only = data.get("authorization_only").and_then(Value::as_bool) == Some(true);
     let reference = data.get("reference").and_then(Value::as_str);
     let account_hint = data.get("account_hint").and_then(Value::as_str);
     let merchant = data.get("merchant").and_then(Value::as_str);
@@ -24,7 +25,30 @@ pub async fn dedupe_or_settle(
         .map(|v| v.with_timezone(&Utc))
         .unwrap_or_else(Utc::now);
 
-    let fp = fingerprint(is_due, reference, account_hint, merchant, amount, effective);
+    // An authorization attempt is deduped against other attempts only, never against
+    // the confirmed debit. Without enough detail to tell attempts apart, keep each one.
+    if authorization_only
+        && (amount.is_none()
+            || (reference.is_none_or(|r| r.len() < 4)
+                && account_hint.is_none()
+                && merchant.is_none()))
+    {
+        return Ok(());
+    }
+    let fp = fingerprint(
+        if authorization_only {
+            "auth"
+        } else if is_due {
+            "due"
+        } else {
+            "money"
+        },
+        reference,
+        account_hint,
+        merchant,
+        amount,
+        effective,
+    );
     let lock_key = i64::from_le_bytes(Sha256::digest(&fp)[0..8].try_into().unwrap());
 
     let mut tx = pool.begin().await?;
@@ -94,7 +118,7 @@ pub async fn dedupe_or_settle(
 }
 
 fn fingerprint(
-    is_due: bool,
+    kind: &str,
     reference: Option<&str>,
     account_hint: Option<&str>,
     merchant: Option<&str>,
@@ -111,7 +135,6 @@ fn fingerprint(
     };
     let day = effective.with_timezone(&Kolkata).date_naive();
     let amount = amount.map(|a| format!("{a:.2}")).unwrap_or_default();
-    let kind = if is_due { "due" } else { "money" };
     hex::encode(Sha256::digest(format!("{kind}|{who}|{amount}|{day}")))
 }
 

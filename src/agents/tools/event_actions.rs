@@ -49,6 +49,35 @@ pub struct RecordTaskArgs {
     pub category: Option<String>,
     pub start_at: Option<String>,
     pub due_at: Option<String>,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub already_paid: Option<bool>,
+}
+
+/// Maps the model's free text onto the fixed set of categories used across Vox.
+fn canonical_category(raw: Option<&str>) -> &'static str {
+    let lower = raw.unwrap_or("").to_lowercase();
+    if lower.contains("subscri") {
+        "subscription"
+    } else if lower.contains("bill") {
+        "bill"
+    } else if ["expens", "spend", "purchase", "payment", "paid"]
+        .iter()
+        .any(|k| lower.contains(k))
+    {
+        "expense"
+    } else if lower.contains("deliver") {
+        "delivery"
+    } else if lower.contains("appoint") || lower.contains("meeting") {
+        "appointment"
+    } else if lower.contains("todo") {
+        "todo"
+    } else {
+        "task"
+    }
 }
 
 #[derive(Clone)]
@@ -77,8 +106,12 @@ impl Tool for RecordTask {
     type Error = EventActionError;
 
     fn description(&self) -> String {
-        "Add a planned to-do or reminder item to the user's timeline, for example a bill due date \
-         or a delivery to expect. Always created as 'planned'. Check list_spans first to avoid duplicates."
+        "Add a to-do or reminder item to the user's timeline, for example a bill due date or a \
+         delivery to expect. Items are 'planned' unless already_paid is true. For anything with a \
+         money amount, always give amount and currency (e.g. INR) so it can be tracked: use \
+         category 'bill' for a bill that is due, 'subscription' for a recurring plan, 'expense' \
+         for a payment that already happened (and set already_paid true). Check list_spans first \
+         to avoid duplicates."
             .to_owned()
     }
 
@@ -88,7 +121,10 @@ impl Tool for RecordTask {
             "properties": {
                 "title": { "type": "string", "description": "Short title in your own words" },
                 "notes": { "type": "string", "description": "Brief details in your own words" },
-                "category": { "type": "string", "description": "e.g. bill, delivery, appointment, todo" },
+                "category": { "type": "string", "enum": ["bill", "subscription", "expense", "delivery", "appointment", "todo"] },
+                "amount": { "type": "number", "description": "Money amount, if any" },
+                "currency": { "type": "string", "description": "ISO currency code, e.g. INR" },
+                "already_paid": { "type": "boolean", "description": "true when the payment already happened" },
                 "start_at": { "type": "string", "description": "ISO 8601 with offset" },
                 "due_at": { "type": "string", "description": "Deadline, ISO 8601 with offset" }
             },
@@ -109,12 +145,25 @@ impl Tool for RecordTask {
             ));
         }
         let notes = sanitize(args.notes.as_deref().unwrap_or(""), 1000);
-        let category = args
-            .category
-            .as_deref()
-            .map(|value| sanitize(value, 40))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "task".to_string());
+        let category = canonical_category(args.category.as_deref()).to_string();
+        let money = args
+            .amount
+            .filter(|a| a.is_finite() && *a > 0.0 && *a < 1e12)
+            .zip(
+                args.currency
+                    .as_deref()
+                    .map(|c| c.trim().to_uppercase())
+                    .filter(|c| {
+                        (2..=4).contains(&c.len()) && c.chars().all(|ch| ch.is_ascii_alphabetic())
+                    }),
+            );
+        let paid = money.is_some() && args.already_paid == Some(true);
+        let mut data = json!({ "origin": "event_agent", "event_source": self.source_kind });
+        if let Some((amount, currency)) = &money {
+            data["amount"] = json!(amount);
+            data["currency"] = json!(currency);
+            data["direction"] = json!(if paid { "debit" } else { "due" });
+        }
         let digest = hex::encode(Sha256::digest(title.to_lowercase()));
         let span = NewSpan {
             title,
@@ -122,10 +171,15 @@ impl Tool for RecordTask {
             category: Some(category),
             source: Some("event_agent".to_string()),
             source_ref: Some(format!("{}:{}", self.event_id, &digest[..12])),
-            status: Some(SpanStatus::Planned),
-            start_at: parse_time("start_at", args.start_at.as_deref())?,
+            status: Some(if paid {
+                SpanStatus::Done
+            } else {
+                SpanStatus::Planned
+            }),
+            start_at: parse_time("start_at", args.start_at.as_deref())?
+                .or_else(|| paid.then(chrono::Utc::now)),
             due_at: parse_time("due_at", args.due_at.as_deref())?,
-            data: Some(json!({ "origin": "event_agent", "event_source": self.source_kind })),
+            data: Some(data),
             ..Default::default()
         };
         let id = SpanRepository::new(self.db.pool().clone())
