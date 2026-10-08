@@ -397,7 +397,20 @@ impl EventHandler {
         };
         let mut data = data.clone();
         if authorization_only && let Some(fields) = data.as_object_mut() {
-            fields.insert("direction".into(), serde_json::json!("info"));
+            let identifiable = fields
+                .get("amount")
+                .and_then(Value::as_f64)
+                .is_some_and(|a| a > 0.0)
+                && ["merchant", "account_hint", "reference"].iter().any(|k| {
+                    fields
+                        .get(*k)
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v.len() >= 3)
+                });
+            fields.insert(
+                "direction".into(),
+                serde_json::json!(if identifiable { "debit" } else { "info" }),
+            );
             fields.insert(
                 "status".into(),
                 serde_json::json!("authorization_requested"),

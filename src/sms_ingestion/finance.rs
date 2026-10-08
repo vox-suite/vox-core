@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Kolkata;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 pub async fn dedupe_or_settle(
@@ -85,6 +85,57 @@ pub async fn dedupe_or_settle(
         return Ok(());
     }
 
+    if direction == Some("debit")
+        && let Some(amount) = amount
+    {
+        let candidates = sqlx::query(
+            "SELECT id, data FROM spans WHERE user_id = $1 AND source = 'sms' AND id <> $2 \
+               AND COALESCE(data->>'direction','') = 'debit' \
+               AND COALESCE(data->>'authorization_only' = 'true', false) <> $3 \
+               AND data ? 'amount' \
+               AND round((data->>'amount')::numeric, 2) = round($4::numeric, 2) \
+               AND (start_at AT TIME ZONE 'Asia/Kolkata')::date = $5::date \
+             ORDER BY created_at",
+        )
+        .bind(user_id)
+        .bind(span_id)
+        .bind(authorization_only)
+        .bind(amount)
+        .bind(effective.with_timezone(&Kolkata).date_naive())
+        .fetch_all(&mut *tx)
+        .await?;
+        let twin = candidates.iter().find(|row| {
+            let other: Value = row.get("data");
+            same_payee(
+                account_hint,
+                merchant,
+                other.get("account_hint").and_then(Value::as_str),
+                other.get("merchant").and_then(Value::as_str),
+            )
+        });
+        if let Some(twin) = twin {
+            let twin_id: Uuid = twin.get("id");
+            if authorization_only {
+                sqlx::query("DELETE FROM spans WHERE id = $1")
+                    .bind(span_id)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+            sqlx::query("DELETE FROM spans WHERE id = $1")
+                .bind(twin_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "UPDATE spans SET data = data || jsonb_build_object('confirmed_after_authorization', true) WHERE id = $1",
+            )
+            .bind(span_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
     sqlx::query(
         "UPDATE spans SET data = data || jsonb_build_object('fingerprint', $2::text) WHERE id = $1",
     )
@@ -136,6 +187,27 @@ fn fingerprint(
     let day = effective.with_timezone(&Kolkata).date_naive();
     let amount = amount.map(|a| format!("{a:.2}")).unwrap_or_default();
     hex::encode(Sha256::digest(format!("{kind}|{who}|{amount}|{day}")))
+}
+
+fn same_payee(
+    account: Option<&str>,
+    merchant: Option<&str>,
+    other_account: Option<&str>,
+    other_merchant: Option<&str>,
+) -> bool {
+    if let (Some(a), Some(b)) = (account, other_account)
+        && !a.is_empty()
+        && a == b
+    {
+        return true;
+    }
+    match (merchant, other_merchant) {
+        (Some(a), Some(b)) => {
+            let (a, b) = (normalize_merchant(a), normalize_merchant(b));
+            a.len() >= 4 && b.len() >= 4 && (a.contains(&b) || b.contains(&a))
+        }
+        _ => false,
+    }
 }
 
 fn normalize_merchant(merchant: &str) -> String {

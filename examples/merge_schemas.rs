@@ -24,7 +24,11 @@ const MAPPING: &[(&str, &str, &[&str])] = &[
             "credit_card_payment",
         ],
     ),
-    ("finance", "card_payment", &["credit_card_transaction"]),
+    (
+        "finance",
+        "card_payment",
+        &["credit_card_transaction", "card_authorization_otp"],
+    ),
     ("finance", "bill_due", &["credit_card_statement"]),
     ("finance", "bank_debit", &["bank_transaction"]),
     (
