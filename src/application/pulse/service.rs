@@ -461,6 +461,9 @@ impl PulseService {
                 other => PulseError::Database(other),
             })
     }
+    pub async fn delete_chart(&self, actor: &Actor, id: uuid::Uuid) -> Result<bool, PulseError> {
+        Ok(self.repo.delete_chart(actor.user_id, id).await?)
+    }
     pub async fn dismiss(
         &self,
         actor: &Actor,

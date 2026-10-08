@@ -1,6 +1,6 @@
 use axum::{
     Extension, Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -93,6 +93,18 @@ pub async fn save(
         StatusCode::CREATED,
         Json(service.save(&actor, input).await?),
     ))
+}
+#[utoipa::path(delete,path="/v1/me/pulse/charts/{id}",tag="pulse",params(("id"=Uuid,Path)),responses((status=204),(status=404)))]
+pub async fn delete_chart(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, PulseApiError> {
+    Ok(if service.delete_chart(&actor, id).await? {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 #[utoipa::path(post,path="/v1/me/pulse/dismissals",tag="pulse",request_body=PulseDefinition,responses((status=204)))]
 pub async fn dismiss(

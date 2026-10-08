@@ -210,6 +210,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
         .route(
+            "/v1/me/pulse/charts/{id}",
+            axum::routing::delete(crate::routes::pulse::delete_chart),
+        )
+        .route(
             "/v1/me/pulse/dismissals",
             post(crate::routes::pulse::dismiss),
         )

@@ -129,6 +129,14 @@ impl PulseRepository {
  INSERT INTO pulse_cache(user_id,cache_key,payload,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 second') ON CONFLICT(user_id,cache_key) DO UPDATE SET payload=EXCLUDED.payload,expires_at=EXCLUDED.expires_at,created_at=now()"#).bind(user).bind(key).bind(payload).bind(seconds).execute(&self.pool).await?;
         Ok(())
     }
+    pub async fn delete_chart(&self, user: Uuid, id: Uuid) -> Result<bool, sqlx::Error> {
+        let done = sqlx::query("DELETE FROM pulse_saved_charts WHERE user_id=$1 AND id=$2")
+            .bind(user)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() > 0)
+    }
     pub async fn dismiss(&self, user: Uuid, hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO pulse_dismissals(user_id,definition_hash) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(user).bind(hash).execute(&self.pool).await?;
         Ok(())

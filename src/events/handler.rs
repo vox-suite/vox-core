@@ -20,6 +20,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const BATCH_CONCURRENCY: usize = 4;
+const STALE_EVENT_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct EventHandler {
@@ -120,6 +121,12 @@ impl EventHandler {
             triage.action = EventTriageAction::StoreRecord;
         }
 
+        if triage.action == EventTriageAction::PlanAction
+            && Utc::now() - occurred_at > chrono::Duration::hours(STALE_EVENT_HOURS)
+        {
+            triage.action = EventTriageAction::StoreRecord;
+        }
+
         tracing::info!(
             event_id = %event_id.0,
             action = ?triage.action,
@@ -180,6 +187,30 @@ impl EventHandler {
         };
 
         match classification {
+            SchemaClassificationResult::Existing { schema, .. } if source_kind == "sms" => {
+                let Some(extractor) = &self.schema_extractor else {
+                    self.mark_failed(event_id, "schema_extractor_not_configured")
+                        .await?;
+                    return Ok(());
+                };
+                let mut candidates = classifier
+                    .load_user_schemas(user_id.0)
+                    .await
+                    .unwrap_or_default();
+                candidates.retain(|s| s.id != schema.id);
+                candidates.insert(0, schema);
+                self.run_system_two(
+                    event_id,
+                    user_id.0,
+                    &event_type,
+                    &payload,
+                    occurred_at,
+                    extractor.as_ref(),
+                    candidates,
+                    &span_source,
+                )
+                .await?;
+            }
             SchemaClassificationResult::Existing { schema, confidence } => {
                 if let Err(err) = validate_data_against_schema(&schema.json_schema, &payload) {
                     self.mark_failed(event_id, &format!("validation_failed: {err}"))

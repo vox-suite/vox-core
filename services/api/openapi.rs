@@ -44,6 +44,7 @@ use utoipa::OpenApi;
     crate::routes::pulse::add_goal_entry,
     crate::routes::pulse::compose_goal,
     crate::routes::pulse::save,
+    crate::routes::pulse::delete_chart,
     crate::routes::pulse::dismiss,
     crate::routes::charts::suggest_charts,
     crate::routes::charts::create_chart_board,

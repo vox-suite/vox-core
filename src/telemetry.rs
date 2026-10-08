@@ -91,13 +91,24 @@ pub fn init(service_name: &'static str) -> Option<SdkTracerProvider> {
             .with_tracer(provider.tracer("vox-core"))
             .with_filter(filter_fn(is_agent_span))
     });
+    // Agent spans stay out of console logs: with content tracing on they
+    // carry prompts and replies, which belong only in Langfuse.
+    let console_filter = LevelFilter::INFO.and(filter_fn(|metadata| !is_agent_span(metadata)));
+    let json_logs = std::env::var("LOG_FORMAT").is_ok_and(|v| v == "json")
+        || std::env::var_os("RAILWAY_ENVIRONMENT_ID").is_some();
+    let console = if json_logs {
+        tracing_subscriber::fmt::layer()
+            .json()
+            .flatten_event(true)
+            .with_filter(console_filter)
+            .boxed()
+    } else {
+        tracing_subscriber::fmt::layer()
+            .with_filter(console_filter)
+            .boxed()
+    };
     tracing_subscriber::registry()
-        // Agent spans stay out of console logs: with content tracing on they
-        // carry prompts and replies, which belong only in Langfuse.
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_filter(LevelFilter::INFO.and(filter_fn(|metadata| !is_agent_span(metadata)))),
-        )
+        .with(console)
         .with(traces)
         .init();
 
