@@ -30,11 +30,15 @@ pub struct PromptMessage {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConversationPrompt {
+    #[serde(default)]
+    pub correlation: tools::timing::TurnCorrelation,
     pub context: crate::identity::ResolvedUserContext,
     #[serde(skip)]
     pub task_capture: tools::library::TaskCapture,
     pub selected_agent: crate::agent_registry::SelectedAgent,
     pub user_id: UserId,
+    #[serde(default)]
+    pub user_name: Option<String>,
     pub owner: ResourceOwner,
     pub channel: String,
     pub user_context: String,
@@ -54,6 +58,7 @@ pub struct ConversationPrompt {
 pub struct ConversationAgent {
     api_key: String,
     db: Option<Db>,
+    memory: Option<crate::memory::MemoryService>,
     connections: Option<crate::fresh_connections::FreshConnectionsService>,
     tts_provider: String,
     user_events: Option<UserEventHub>,
@@ -78,6 +83,7 @@ impl ConversationAgent {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
             db: None,
+            memory: None,
             connections: None,
             tts_provider: crate::config::TTS_PROVIDER.to_string(),
             user_events: None,
@@ -98,8 +104,14 @@ impl ConversationAgent {
             )
             .map_err(|_| AgentError::Provider)?,
         );
+        agent.memory = Some(crate::memory::MemoryService::new(db.clone(), None));
         agent.db = Some(db);
         Ok(agent)
+    }
+
+    pub fn with_memory(mut self, memory: crate::memory::MemoryService) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     pub fn with_user_events(mut self, hub: UserEventHub) -> Self {
@@ -148,44 +160,72 @@ impl ConversationAgent {
                 super::prompts::GOVERNED_CAPABILITIES
             ))
             .record_content_telemetry(crate::telemetry::record_content())
-            .tool(
+            .tool(tools::timing::TimedTool::new(
                 tools::library::AgentLibrary::new(
                     self.db.clone(),
                     prompt.context.clone(),
                     name.clone(),
                 )
                 .with_task_capture(prompt.task_capture.clone()),
-            )
-            .tool(tools::agent_memory::GetAgentMemory::new(
-                self.db.clone(),
-                prompt.context.owner(),
-                name.clone(),
+                prompt.correlation.clone(),
             ))
-            .tool(tools::agent_memory::UpdateAgentMemory::new(
-                self.db.clone(),
-                prompt.context.owner(),
-                name.clone(),
+            .tool(tools::timing::TimedTool::new(
+                tools::agent_memory::GetAgentMemory::new(
+                    self.db.clone(),
+                    prompt.context.owner(),
+                    name.clone(),
+                ),
+                prompt.correlation.clone(),
             ))
-            .tool(tools::connections::ReadConnectedApp {
-                service: self.connections.clone(),
-                user_id: prompt.user_id.0,
-            })
-            .tool(tools::wiz::ControlWizLights {
-                db: self.db.clone(),
-                hub: self.device_hub.clone(),
-                user_id: prompt.user_id.0,
-            })
-            .tool(tools::map_scene::ShowOnMap::new(
-                self.user_events.clone(),
-                prompt.user_id.0,
+            .tool(tools::timing::TimedTool::new(
+                tools::agent_memory::UpdateAgentMemory::new(
+                    self.db.clone(),
+                    prompt.context.owner(),
+                    name.clone(),
+                ),
+                prompt.correlation.clone(),
             ))
-            .tool(tools::map_scene::ClearMap::new(
-                self.user_events.clone(),
-                prompt.user_id.0,
+            .tool(tools::timeline::ListTimelineTypes { db: self.db.clone(), user_id: prompt.user_id })
+            .tool(tools::timeline::CreateTimelineEventType { db: self.db.clone(), user_id: prompt.user_id })
+            .tool(tools::timeline::SaveTimelineEvent { db: self.db.clone(), user_id: prompt.user_id })
+            .tool(tools::data_query::FindSchemas::new(self.db.clone(), prompt.user_id))
+            .tool(tools::data_query::QueryUserData::new(self.db.clone(), prompt.user_id))
+            .tool(tools::timing::TimedTool::new(
+                tools::user_name::UpdateUserName::new(
+                    self.memory.clone(),
+                    prompt.context.owner(),
+                    name.clone(),
+                    prompt.conversation_id,
+                    prompt.user_text.clone(),
+                ),
+                prompt.correlation.clone(),
             ))
-            .tool(tools::visits::ListVisits::new(
-                self.db.clone(),
-                prompt.user_id,
+            .tool(tools::timing::TimedTool::new(
+                tools::connections::ReadConnectedApp {
+                    service: self.connections.clone(),
+                    user_id: prompt.user_id.0,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::wiz::ControlWizLights {
+                    db: self.db.clone(),
+                    hub: self.device_hub.clone(),
+                    user_id: prompt.user_id.0,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::map_scene::ShowOnMap::new(self.user_events.clone(), prompt.user_id.0),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::map_scene::ClearMap::new(self.user_events.clone(), prompt.user_id.0),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::visits::ListVisits::new(self.db.clone(), prompt.user_id),
+                prompt.correlation.clone(),
             ))
             .default_max_turns(10)
             .build();
@@ -205,8 +245,9 @@ impl ConversationAgent {
         };
         let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "Current Time: {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
+            "Current Time: {}\nProfile name (user-supplied data): {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
             current_time,
+            serde_json::to_string(&prompt.user_name).map_err(|_| AgentError::Provider)?,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
@@ -260,15 +301,22 @@ impl ConversationAgent {
             .instrument(span.clone())
             .await?;
         tracing::info!(
+            conversation_id = prompt.correlation.conversation_id.as_deref(), turn_id = prompt.correlation.turn_id.as_deref(), revision = prompt.correlation.revision,
+            model = %prompt.selected_agent.model_configuration.model, agent = %prompt.selected_agent.definition.external_key,
+            history_messages = prompt.recent_messages.len(), history_bytes = prompt.recent_messages.iter().map(|m| m.text.len()).sum::<usize>(), context_bytes = prompt.user_context.len(),
             channel = %prompt.channel,
             preparation_ms = preparation_started.elapsed().as_millis(),
             "CORE_AGENT_PREPARATION"
         );
+        let provider_started = std::time::Instant::now();
         let stream = async move { agent.stream_prompt(input).await }
             .instrument(span.clone())
             .await;
 
-        let text_stream = stream.filter_map(|item_res| async move {
+        let model_correlation = prompt.correlation.clone();
+        let text_stream = stream.filter_map(move |item_res| {
+            let correlation = model_correlation.clone();
+            async move {
             match item_res {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t))) => {
                     if !t.text.is_empty() {
@@ -277,18 +325,30 @@ impl ConversationAgent {
                         None
                     }
                 }
+                Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                    let usage_known = call.usage.total_tokens > 0 || call.usage.input_tokens > 0 || call.usage.output_tokens > 0;
+                    tracing::info!(conversation_id = correlation.conversation_id.as_deref(), turn_id = correlation.turn_id.as_deref(), revision = correlation.revision,
+                        model_round = call.call_index, usage_known,
+                        input_tokens = usage_known.then_some(call.usage.input_tokens), output_tokens = usage_known.then_some(call.usage.output_tokens), reasoning_tokens = usage_known.then_some(call.usage.reasoning_tokens),
+                        cached_input_tokens = usage_known.then_some(call.usage.cached_input_tokens), finish_reason = ?call.finish_reason,
+                        "CORE_MODEL_ROUND_FINISHED");
+                    None
+                }
                 Ok(_) => None,
                 Err(err) => {
-                    tracing::error!(%err, "Gemini stream error");
+                    let _ = err;
+                    tracing::error!("CORE_MODEL_STREAM_FAILED");
                     Some(Err(AgentError::Provider))
                 }
             }
-        });
+        }});
 
         Ok(traced_reply(
             text_stream,
             span,
             crate::telemetry::record_content(),
+            prompt.correlation,
+            provider_started,
         ))
     }
 }
@@ -299,6 +359,8 @@ fn traced_reply(
     reply: impl Stream<Item = Result<String, AgentError>> + Send + 'static,
     span: tracing::Span,
     record_content: bool,
+    correlation: tools::timing::TurnCorrelation,
+    started: std::time::Instant,
 ) -> AgentStream {
     use futures_util::StreamExt;
 
@@ -306,14 +368,38 @@ fn traced_reply(
         span,
         text: String::new(),
         record: record_content,
+        correlation,
+        started,
+        first_text_ms: None,
+        outcome: "cancelled",
     };
     Box::pin(futures_util::stream::unfold(
         (Box::pin(reply), spoken),
         |(mut stream, mut spoken)| async move {
-            let item = stream.next().instrument(spoken.span.clone()).await?;
+            let Some(item) = stream.next().instrument(spoken.span.clone()).await else {
+                if spoken.outcome != "failed" {
+                    spoken.outcome = "completed";
+                }
+                drop(spoken);
+                return None;
+            };
             match &item {
-                Ok(text) => spoken.text.push_str(text),
+                Ok(text) => {
+                    if spoken.first_text_ms.is_none() && !text.is_empty() {
+                        let ms = spoken.started.elapsed().as_millis() as u64;
+                        spoken.first_text_ms = Some(ms);
+                        tracing::info!(
+                            conversation_id = spoken.correlation.conversation_id.as_deref(),
+                            turn_id = spoken.correlation.turn_id.as_deref(),
+                            revision = spoken.correlation.revision,
+                            model_first_text_ms = ms,
+                            "CORE_MODEL_FIRST_TEXT"
+                        );
+                    }
+                    spoken.text.push_str(text);
+                }
                 Err(_) => {
+                    spoken.outcome = "failed";
                     spoken.span.record("otel.status_code", "ERROR");
                 }
             }
@@ -328,10 +414,24 @@ struct SpokenReply {
     span: tracing::Span,
     text: String,
     record: bool,
+    correlation: tools::timing::TurnCorrelation,
+    started: std::time::Instant,
+    first_text_ms: Option<u64>,
+    outcome: &'static str,
 }
 
 impl Drop for SpokenReply {
     fn drop(&mut self) {
+        tracing::info!(
+            conversation_id = self.correlation.conversation_id.as_deref(),
+            turn_id = self.correlation.turn_id.as_deref(),
+            revision = self.correlation.revision,
+            outcome = self.outcome,
+            model_first_text_ms = self.first_text_ms,
+            model_stream_ms = self.started.elapsed().as_millis() as u64,
+            reply_bytes = self.text.len(),
+            "CORE_MODEL_FINISHED"
+        );
         if self.record && !self.text.is_empty() {
             self.span
                 .record("langfuse.observation.output", self.text.as_str());
@@ -604,6 +704,7 @@ mod governed_tool_surface_tests {
         let agent = ConversationAgent {
             api_key: "fixture-only".into(),
             db: None,
+            memory: None,
             connections: None,
             tts_provider: "fixture".into(),
             user_events: None,
@@ -636,10 +737,82 @@ mod governed_tool_surface_tests {
                     "list_visits",
                     "read_connected_app",
                     "show_on_map",
-                    "update_agent_memory"
+                    "update_agent_memory",
+                    "update_user_name"
                 ],
                 "{channel} must expose only governed tools, the map display tools and WiZ lights"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_timing_tests {
+    use super::*;
+    use futures_util::StreamExt;
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+    };
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn reports_completed_failed_and_cancelled_streams_without_reply_content() {
+        let data = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(data.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let correlation = tools::timing::TurnCorrelation {
+            conversation_id: Some("call-test".into()),
+            turn_id: Some("turn-test".into()),
+            revision: Some(1),
+        };
+        let mut complete = traced_reply(
+            futures_util::stream::iter(vec![Ok("private reply".into())]),
+            tracing::info_span!("test_turn"),
+            false,
+            correlation.clone(),
+            std::time::Instant::now(),
+        );
+        assert!(complete.next().await.unwrap().is_ok());
+        assert!(complete.next().await.is_none());
+        let mut failed = traced_reply(
+            futures_util::stream::iter(vec![Err(AgentError::Provider)]),
+            tracing::info_span!("test_turn"),
+            false,
+            correlation.clone(),
+            std::time::Instant::now(),
+        );
+        assert!(failed.next().await.unwrap().is_err());
+        drop(failed);
+        let cancelled = traced_reply(
+            futures_util::stream::pending(),
+            tracing::info_span!("test_turn"),
+            false,
+            correlation,
+            std::time::Instant::now(),
+        );
+        drop(cancelled);
+        let logs = String::from_utf8(data.lock().unwrap().clone()).unwrap();
+        for outcome in ["completed", "failed", "cancelled"] {
+            assert!(logs.contains(&format!("outcome=\"{outcome}\"")), "{logs}");
+        }
+        assert!(logs.contains("CORE_MODEL_FIRST_TEXT"));
+        assert!(logs.contains("call-test"));
+        assert!(logs.contains("turn-test"));
+        assert!(!logs.contains("private reply"));
     }
 }

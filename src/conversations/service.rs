@@ -12,7 +12,6 @@ use crate::{
     memory::MemoryService,
 };
 use futures_util::{FutureExt, Stream, StreamExt, stream};
-use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{pin::Pin, sync::Arc};
 use uuid::Uuid;
@@ -22,33 +21,6 @@ type OpeningTask =
 
 pub type ConversationTextStream =
     Pin<Box<dyn Stream<Item = Result<String, ConversationError>> + Send>>;
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub enum VerificationState {
-    AwaitingName {
-        original_user_id: UserId,
-        #[serde(default)]
-        original_text: String,
-        original_user_name: String,
-    },
-    AwaitingPhoneConfirm {
-        original_user_id: UserId,
-        #[serde(default)]
-        original_text: String,
-        candidate_user_id: UserId,
-        candidate_name: String,
-        #[serde(default)]
-        digits: String,
-    },
-}
-
-pub enum VoiceVerificationOutcome {
-    Intercept(String),
-    Continue {
-        active_user_id: UserId,
-        needs_onboarding: bool,
-    },
-}
 
 #[derive(Clone)]
 pub struct ConversationService {
@@ -107,7 +79,7 @@ impl ConversationService {
     pub async fn respond(
         &self,
         context: ResolvedUserContext,
-        mut request: RespondRequest,
+        request: RespondRequest,
     ) -> Result<RespondResponse, ConversationError> {
         let selected_agent = self
             .selected_agent(&context, &request.agent_external_key)
@@ -129,22 +101,12 @@ impl ConversationService {
             );
             return Err(ConversationError::Invalid);
         }
-        let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
             tracing::warn!(turn_id = ?request.turn_id, revision = ?request.revision, "CONVERSATION_INVALID: stale revision");
             return Err(ConversationError::Invalid);
         }
 
-        if let Some(init_ctx) = &request.initiation_context
-            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:")
-        {
-            let wa_name_clean = wa_name.trim();
-            if !wa_name_clean.is_empty() {
-                let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
-            }
-        }
-
-        let (conversation_id, mut active_user_id) = self
+        let (conversation_id, active_user_id) = self
             .resolve_conversation(
                 owner,
                 &request.identity.channel,
@@ -160,43 +122,9 @@ impl ConversationService {
         let prior_messages = prior_messages_res?;
         let known_name = known_name_res?;
 
-        let outcome = self
-            .process_voice_verification(
-                active_user_id,
-                conversation_id,
-                &mut request,
-                &prior_messages,
-                known_name,
-            )
-            .await?;
-
-        let needs_onboarding = match outcome {
-            VoiceVerificationOutcome::Intercept(reply) => {
-                if !self.is_current(owner, &request).await {
-                    return Err(ConversationError::Invalid);
-                }
-                self.append_message(conversation_id, "user", request.text.trim())
-                    .await?;
-                self.append_message(conversation_id, "assistant", &reply)
-                    .await?;
-                return Ok(RespondResponse {
-                    conversation_id,
-                    text: reply,
-                    task: None,
-                });
-            }
-            VoiceVerificationOutcome::Continue {
-                active_user_id: resolved_uid,
-                needs_onboarding,
-            } => {
-                active_user_id = resolved_uid;
-                needs_onboarding
-            }
-        };
-        // A channel verification must not rebind the authenticated host context or actor.
-        if active_user_id != context.user_id {
-            return Err(ConversationError::Invalid);
-        }
+        let needs_onboarding = known_name
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty());
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -227,19 +155,31 @@ impl ConversationService {
         }
         let active_owner = context.owner();
         let saved_request = request.clone();
+        let projection_started = std::time::Instant::now();
         let user_context = self
             .memory
             .load(context.owner(), &selected_agent.definition.external_key)
             .await?;
+        tracing::info!(
+            projection_ms = projection_started.elapsed().as_millis() as u64,
+            context_bytes = user_context.len(),
+            "CORE_CONTEXT_PROJECTION"
+        );
         let task_capture = crate::agents::tools::library::TaskCapture::default();
         let task_context = context.clone();
         let text = self
             .agent
             .respond(ConversationPrompt {
+                correlation: crate::agents::tools::timing::TurnCorrelation {
+                    conversation_id: Some(request.external_conversation_id.clone()),
+                    turn_id: request.turn_id.clone(),
+                    revision: request.revision,
+                },
                 task_capture: task_capture.clone(),
                 context,
                 selected_agent,
                 user_id: active_user_id,
+                user_name: known_name.clone(),
                 owner: active_owner,
                 channel: request.identity.channel.clone(),
                 user_context,
@@ -277,7 +217,7 @@ impl ConversationService {
     pub async fn respond_stream(
         &self,
         context: ResolvedUserContext,
-        mut request: RespondRequest,
+        request: RespondRequest,
     ) -> Result<ConversationTextStream, ConversationError> {
         let phase_started = std::time::Instant::now();
         let selected_agent = self
@@ -289,6 +229,11 @@ impl ConversationService {
         self.wait_for_opening(owner, &request.identity, &request.external_conversation_id)
             .await?;
         let opening_wait_ms = opening_started.elapsed().as_millis() as u64;
+        tracing::info!(
+            agent_select_ms,
+            opening_wait_ms,
+            "CORE_AGENT_AND_OPENING_PREPARATION"
+        );
         if request.identity.channel.trim().is_empty()
             || request.identity.external_id.trim().is_empty()
             || request.external_conversation_id.trim().is_empty()
@@ -310,22 +255,12 @@ impl ConversationService {
         }
         let request_started = std::time::Instant::now();
         let identity_resolved = std::time::Instant::now();
-        let user_id = owner.user_id;
         if !self.register_final(owner, &request).await {
             tracing::warn!(turn_id = ?request.turn_id, revision = ?request.revision, "CONVERSATION_INVALID: stale revision");
             return Err(ConversationError::Invalid);
         }
 
-        if let Some(init_ctx) = &request.initiation_context
-            && let Some(wa_name) = init_ctx.strip_prefix("whatsapp_name:")
-        {
-            let wa_name_clean = wa_name.trim();
-            if !wa_name_clean.is_empty() {
-                let _ = self.memory.set_user_name(user_id, wa_name_clean).await;
-            }
-        }
-
-        let (conversation_id, mut active_user_id) = self
+        let (conversation_id, active_user_id) = self
             .resolve_conversation(
                 owner,
                 &request.identity.channel,
@@ -343,55 +278,25 @@ impl ConversationService {
         let known_name = known_name_res?;
         let history_loaded = std::time::Instant::now();
 
-        let verification_started = std::time::Instant::now();
-        let outcome = self
-            .process_voice_verification(
-                active_user_id,
-                conversation_id,
-                &mut request,
-                &prior_messages,
-                known_name,
-            )
-            .await?;
-
+        let needs_onboarding = known_name
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty());
         tracing::info!(
             agent_select_ms,
             opening_wait_ms,
-            identity_ms = identity_resolved
-                .duration_since(request_started)
+            conversation_ms = conversation_resolved
+                .duration_since(identity_resolved)
                 .as_millis(),
-            history_ms = history_loaded
+            history_messages = prior_messages.len(),
+            history_bytes = prior_messages
+                .iter()
+                .map(|message| message.text.len())
+                .sum::<usize>(),
+            history_and_name_ms = history_loaded
                 .duration_since(conversation_resolved)
                 .as_millis(),
-            verification_ms = verification_started.elapsed().as_millis(),
-            intercepted = matches!(&outcome, VoiceVerificationOutcome::Intercept(_)),
             "CORE_TURN_PREPARATION"
         );
-        let needs_onboarding = match outcome {
-            VoiceVerificationOutcome::Intercept(reply) => {
-                if !self.is_current(owner, &request).await {
-                    return Err(ConversationError::Invalid);
-                }
-                self.append_message(conversation_id, "user", request.text.trim())
-                    .await?;
-                self.append_message(conversation_id, "assistant", &reply)
-                    .await?;
-                let chunks = vec![Ok(reply)];
-                return Ok(Box::pin(futures_util::stream::iter(chunks)));
-            }
-            VoiceVerificationOutcome::Continue {
-                active_user_id: resolved_uid,
-                needs_onboarding,
-            } => {
-                active_user_id = resolved_uid;
-                needs_onboarding
-            }
-        };
-        let verification_finished = std::time::Instant::now();
-        // A channel verification must not rebind the authenticated host context or actor.
-        if active_user_id != context.user_id {
-            return Err(ConversationError::Invalid);
-        }
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
             && (request.text.trim() == "The call just connected. Greet the user."
@@ -415,12 +320,9 @@ impl ConversationService {
             tracing::info!(
                 conversation_id = %conversation_id.0,
                 external_conversation_id = %request.external_conversation_id,
-                identity_ms = identity_resolved.duration_since(request_started).as_millis(),
                 conversation_ms = conversation_resolved.duration_since(identity_resolved).as_millis(),
-                history_ms = history_loaded.duration_since(conversation_resolved).as_millis(),
-                user_message_ms = verification_started.duration_since(history_loaded).as_millis(),
-                verification_ms = verification_finished.duration_since(verification_started).as_millis(),
-                name_ms = name_loaded.duration_since(verification_finished).as_millis(),
+                history_and_name_ms = history_loaded.duration_since(conversation_resolved).as_millis(),
+                name_ms = name_loaded.duration_since(history_loaded).as_millis(),
                 assistant_message_ms = name_loaded.elapsed().as_millis(),
                 total_ms = request_started.elapsed().as_millis(),
                 "CORE_GREETING_METRICS"
@@ -447,20 +349,32 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         let active_owner = context.owner();
+        let projection_started = std::time::Instant::now();
         let user_context = self
             .memory
             .load(context.owner(), &selected_agent.definition.external_key)
             .await?;
 
+        tracing::info!(
+            projection_ms = projection_started.elapsed().as_millis() as u64,
+            context_bytes = user_context.len(),
+            "CORE_CONTEXT_PROJECTION"
+        );
         let saved_request = request.clone();
         let agent = self.agent.clone();
         let model_stream = stream::once(async move {
             agent
                 .respond_stream(ConversationPrompt {
+                    correlation: crate::agents::tools::timing::TurnCorrelation {
+                        conversation_id: Some(request.external_conversation_id.clone()),
+                        turn_id: request.turn_id.clone(),
+                        revision: request.revision,
+                    },
                     task_capture: Default::default(),
                     context,
                     selected_agent,
                     user_id: active_user_id,
+                    user_name: known_name.clone(),
                     owner: active_owner,
                     channel: request.identity.channel,
                     user_context,
@@ -583,6 +497,8 @@ impl ConversationService {
         let owner = context.owner();
         // A channel identity is presentation data, never a cache authority key.
         let name = self.memory.get_user_name(owner.user_id).await?;
+        let name_ms = started.elapsed().as_millis() as u64;
+        let conversation_started = std::time::Instant::now();
         self.resolve_conversation(
             owner,
             &request.identity.channel,
@@ -590,6 +506,7 @@ impl ConversationService {
             &request.agent_external_key,
         )
         .await?;
+        let conversation_ms = conversation_started.elapsed().as_millis() as u64;
         let name = name
             .as_deref()
             .map(str::trim)
@@ -629,7 +546,7 @@ impl ConversationService {
         tracing::info!(
             user_id = %owner.user_id.0,
             channel = %channel,
-            cache_hit = name.is_some(),
+            name_known = name.is_some(), name_ms, conversation_ms,
             total_ms = started.elapsed().as_millis(),
             "CORE_CACHED_GREETING_METRICS"
         );
@@ -669,43 +586,6 @@ impl ConversationService {
         tx.commit().await?;
         tracing::info!(external_conversation_id = %request.external_conversation_id, total_ms = started.elapsed().as_millis(), "CORE_OPENING_INITIALIZED");
         Ok(())
-    }
-
-    async fn process_voice_verification(
-        &self,
-        user_id: UserId,
-        _conversation_id: ConversationId,
-        request: &mut RespondRequest,
-        prior_messages: &[PromptMessage],
-        known_name: Option<String>,
-    ) -> Result<VoiceVerificationOutcome, ConversationError> {
-        let has_name = known_name
-            .as_deref()
-            .is_some_and(|name| !name.trim().is_empty());
-        if !has_name && let Some(name) = extract_name_from_text(&request.text) {
-            let memory = self.memory.clone();
-            let name_to_save = name.clone();
-            tokio::spawn(async move {
-                if let Err(e) = memory.set_user_name(user_id, &name_to_save).await {
-                    tracing::warn!(%e, "Failed to persist user name in background");
-                }
-            });
-            if prior_messages.is_empty() {
-                return Ok(VoiceVerificationOutcome::Intercept(format!(
-                    "Nice to meet you {}! How can I help you today?",
-                    name
-                )));
-            } else {
-                return Ok(VoiceVerificationOutcome::Continue {
-                    active_user_id: user_id,
-                    needs_onboarding: false,
-                });
-            }
-        }
-        Ok(VoiceVerificationOutcome::Continue {
-            active_user_id: user_id,
-            needs_onboarding: !has_name,
-        })
     }
 
     pub async fn complete(
@@ -883,126 +763,4 @@ impl ConversationService {
         tx.commit().await?;
         Ok(())
     }
-}
-
-pub fn extract_name_from_text(text: &str) -> Option<String> {
-    let t = text.trim();
-    let lower = t.to_ascii_lowercase();
-
-    let mut cleaned_lower = lower.as_str();
-    let mut cleaned_orig = t;
-    for greeting in &[
-        "hi,",
-        "hi",
-        "hello,",
-        "hello",
-        "hey,",
-        "hey",
-        "good morning,",
-        "good morning",
-        "good evening,",
-        "good evening",
-        "good afternoon,",
-        "good afternoon",
-    ] {
-        if let Some(rest) = cleaned_lower.strip_prefix(greeting) {
-            let offset = t.len() - rest.trim_start().len();
-            cleaned_orig = t[offset..].trim_start();
-            cleaned_lower = rest.trim_start();
-            break;
-        }
-    }
-
-    let prefixes = [
-        "my name is ",
-        "name is ",
-        "i am ",
-        "i'm ",
-        "call me ",
-        "this is ",
-        "it's ",
-        "it is ",
-    ];
-
-    for prefix in prefixes {
-        if cleaned_lower.starts_with(prefix) {
-            let candidate = cleaned_orig[prefix.len()..]
-                .trim()
-                .trim_end_matches(['.', '!', '?']);
-            let word_count = candidate.split_whitespace().count();
-            if !candidate.is_empty()
-                && (1..=3).contains(&word_count)
-                && !candidate.contains(['\n', '\r', '\t', '{', '}', '[', ']'])
-            {
-                return Some(candidate.to_string());
-            }
-        }
-    }
-
-    let trimmed = cleaned_orig.trim().trim_end_matches(['.', '!', '?']);
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
-    if !words.is_empty()
-        && words.len() <= 2
-        && trimmed.len() <= 30
-        && words
-            .iter()
-            .all(|w| w.chars().next().is_some_and(|c| c.is_alphabetic()))
-    {
-        let lower_single = trimmed.to_ascii_lowercase();
-        let non_names = [
-            "yes",
-            "no",
-            "nope",
-            "yeah",
-            "yup",
-            "ok",
-            "okay",
-            "sure",
-            "thanks",
-            "thank you",
-            "hello",
-            "hi",
-            "bye",
-            "goodbye",
-            "who is this",
-            "what is this",
-            "help",
-            "who are you",
-            "there",
-            "hello there",
-            "hey there",
-            "hi there",
-        ];
-        if !non_names.contains(&lower_single.as_str()) {
-            return Some(trimmed.to_string());
-        }
-    }
-
-    None
-}
-
-#[allow(dead_code)]
-fn accumulate_phone(previous: &str, incoming: &str) -> String {
-    if incoming.len() >= 10 || previous.len() + incoming.len() > 15 {
-        incoming.to_string()
-    } else {
-        format!("{previous}{incoming}")
-    }
-}
-
-#[allow(dead_code)]
-fn explicit_name(text: &str) -> Option<String> {
-    let lower = text.trim().to_lowercase();
-    if !["my name is ", "i am ", "i'm ", "call me "]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
-    {
-        return None;
-    }
-    extract_name_from_text(text).filter(|name| {
-        name.split_whitespace().count() <= 4
-            && name
-                .chars()
-                .all(|c| c.is_alphabetic() || matches!(c, ' ' | '-' | '\''))
-    })
 }

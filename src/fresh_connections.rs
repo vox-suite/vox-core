@@ -31,7 +31,7 @@ impl TimelineIngestor for CoreIngestor {
             "maps_timeline" => "google_maps",
             other => other,
         };
-        let category = match connector {
+        let _category = match connector {
             "spotify" => "music",
             "youtube" => "video",
             "google_maps" => "visit",
@@ -71,7 +71,7 @@ impl TimelineIngestor for CoreIngestor {
                 ));
             }
             let source_ref = format!("{connector}:{}", item.source_id);
-            let payload = json!({
+            let mut payload = json!({
                 "connection_id": connection_id,
                 "source_id": item.source_id,
                 "provider_data": item.provider_data,
@@ -82,7 +82,7 @@ impl TimelineIngestor for CoreIngestor {
                 "title": item.title, "occurred_at": item.occurred_at,
                 "ended_at": item.ended_at, "activity": payload,
             });
-            let event_id: Uuid = sqlx::query_scalar(
+            let _event_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO inbound_events (user_id,source_kind,source_id,external_event_id,payload_hash,event_type,occurred_at,payload,processed_at) \
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()) \
                  ON CONFLICT (source_kind,source_id,external_event_id) DO UPDATE SET payload=EXCLUDED.payload,payload_hash=EXCLUDED.payload_hash,occurred_at=EXCLUDED.occurred_at RETURNING id"
@@ -91,18 +91,65 @@ impl TimelineIngestor for CoreIngestor {
                 .bind(format!("{:x}", Sha256::digest(serde_json::to_vec(&event_payload).map_err(|_| FreshConnectionError::Invalid("Invalid activity payload".into()))?)))
                 .bind(event_type).bind(item.occurred_at).bind(event_payload)
                 .fetch_one(&mut **tx).await?;
-            let inserted: bool = sqlx::query_scalar(
-                "INSERT INTO spans (user_id,title,category,source,source_ref,status,start_at,end_at,execution_type,data,source_event_id) \
-                 VALUES ($1,$2,$3,$4,$5,'done',$6,$7,'manual_human',$8,$9) \
-                 ON CONFLICT (user_id,source,source_ref) DO UPDATE SET \
-                 title=EXCLUDED.title,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at, \
-                 data=spans.data || EXCLUDED.data,source_event_id=EXCLUDED.source_event_id,version=spans.version+1,updated_at=now() \
-                 WHERE (spans.title,spans.start_at,spans.end_at,spans.data || EXCLUDED.data,spans.source_event_id) \
-                 IS DISTINCT FROM (EXCLUDED.title,EXCLUDED.start_at,EXCLUDED.end_at,spans.data,EXCLUDED.source_event_id) RETURNING (xmax=0)"
-            ).bind(user_id).bind(&title).bind(category).bind(connector).bind(source_ref)
-                .bind(item.occurred_at).bind(item.ended_at).bind(payload).bind(event_id)
-                .fetch_optional(&mut **tx).await?.unwrap_or(false);
-            created += usize::from(inserted);
+            let type_val = match event_type {
+                "music.listened" => "music", "place.visited" => "visit", "video.watched" => "video_watch",
+                "video.liked" => "video_like", "video.playlist_added" => "video_playlist_addition", _ => "personal",
+            };
+            if connector == "spotify" {
+                payload["track"] = json!(item.title);
+                let artists = item.provider_data["artists"].as_array().map(|artists| artists.iter().filter_map(|artist| artist["name"].as_str()).collect::<Vec<_>>().join(", "));
+                payload["artist"] = json!(artists);
+                payload["album"] = item.provider_data["album"]["name"].clone();
+            }
+            if connector == "google_maps" { payload["place_name"] = json!(item.title); }
+            if let Some(channel) = item.provider_data["channel"].as_str() { payload["channel"] = json!(channel); }
+            validate_content(tx,type_val,&payload).await?;
+            let event_row = sqlx::query(
+                "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
+                 SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
+                 FROM timeline_event_types et WHERE et.value = $8 AND et.owner_user_id IS NULL AND et.version = 1 AND et.state='published' \
+                 ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET \
+                 title = EXCLUDED.title, summary = EXCLUDED.summary, occurred_at = EXCLUDED.occurred_at, ended_at = EXCLUDED.ended_at, \
+                 content = timeline_events.content || EXCLUDED.content, revision = timeline_events.revision + 1, updated_at = now() \
+                 RETURNING id, (xmax = 0) AS inserted",
+            )
+            .bind(user_id)
+            .bind(&title)
+            .bind(&title)
+            .bind(item.occurred_at)
+            .bind(item.ended_at)
+            .bind(&payload)
+            .bind(&source_ref)
+            .bind(type_val)
+            .fetch_one(&mut **tx)
+            .await?;
+
+            let timeline_id: Uuid = event_row.get("id");
+            let is_inserted: bool = event_row.get("inserted");
+
+            sqlx::query(
+                "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(timeline_id)
+            .bind(user_id)
+            .bind(connector)
+            .bind(&item.source_id)
+            .bind(&source_ref)
+            .bind(&payload)
+            .execute(&mut **tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO pulse_invalidations (user_id, reason, range_start, range_end) \
+                 VALUES ($1, 'connection_sync', $2, $2)",
+            )
+            .bind(user_id)
+            .bind(item.occurred_at)
+            .execute(&mut **tx)
+            .await?;
+
+            created += usize::from(is_inserted);
         }
         notify(tx, user_id).await?;
         Ok(created)
@@ -124,7 +171,7 @@ impl TimelineIngestor for CoreIngestor {
         for event in events {
             let source_ref = format!("{account_id}:primary:{}", event.id);
             seen_ids.insert(source_ref.clone());
-            let span_status = if event.status == "cancelled" {
+            let _span_status = if event.status == "cancelled" {
                 "cancelled"
             } else if event.end <= now {
                 "done"
@@ -146,7 +193,7 @@ impl TimelineIngestor for CoreIngestor {
                 "account_id": account_id,
             });
 
-            let event_id: Uuid = sqlx::query_scalar(
+            let _event_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload, processed_at) \
                  VALUES ($1, 'google_calendar', $2, $3, $4, 'calendar.event_synced', $5, $6, now()) \
                  ON CONFLICT (source_kind, source_id, external_event_id) DO UPDATE SET occurred_at = EXCLUDED.occurred_at, payload = EXCLUDED.payload RETURNING id"
@@ -160,52 +207,67 @@ impl TimelineIngestor for CoreIngestor {
             .fetch_one(&mut **tx)
             .await?;
 
-            let existing_id = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM spans WHERE user_id = $1 AND source = 'google_calendar' AND source_ref = $2"
+            let dedupe_key = format!("google_calendar:{}", event.id);
+            let record_state = if event.status == "cancelled" {
+                "retracted"
+            } else {
+                "active"
+            };
+
+            validate_content(tx,"appointment",&payload).await?;
+            let event_row = sqlx::query(
+                "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, source_timezone, content, record_state, confidence, dedupe_key) \
+                 SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, $7, $8, 1.0, $9 \
+                 FROM timeline_event_types et WHERE et.value = 'appointment' AND et.owner_user_id IS NULL AND et.version = 1 AND et.state='published' \
+                 ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET \
+                 title = EXCLUDED.title, summary = EXCLUDED.summary, occurred_at = EXCLUDED.occurred_at, ended_at = EXCLUDED.ended_at, \
+                 source_timezone = EXCLUDED.source_timezone, content = timeline_events.content || EXCLUDED.content, \
+                 record_state = EXCLUDED.record_state, revision = timeline_events.revision + 1, updated_at = now() \
+                 RETURNING id, (xmax = 0) AS inserted",
             )
             .bind(user_id)
-            .bind(&source_ref)
-            .fetch_optional(&mut **tx)
+            .bind(&event.summary)
+            .bind(&event.summary)
+            .bind(event.start)
+            .bind(Some(event.end))
+            .bind(&event.time_zone)
+            .bind(&payload)
+            .bind(record_state)
+            .bind(&dedupe_key)
+            .fetch_one(&mut **tx)
             .await?;
 
-            if let Some(id) = existing_id {
-                if event.status == "cancelled" && !event.has_time {
-                    sqlx::query("UPDATE spans SET status='cancelled',version=version+1,updated_at=now() WHERE id=$1 AND status<>'cancelled'").bind(id).execute(&mut **tx).await?;
-                    continue;
-                }
-                sqlx::query(
-                    "UPDATE spans SET title = $1, start_at = $2, end_at = $3, status = $4, data = data || $5, source_event_id = $6, version = version + 1, updated_at = now() WHERE id = $7 AND (title, start_at, end_at, status, data || $5) IS DISTINCT FROM ($1, $2, $3, $4, data)"
-                )
-                .bind(&event.summary)
-                .bind(event.start)
-                .bind(event.end)
-                .bind(span_status)
-                .bind(&payload)
-                .bind(event_id)
-                .bind(id)
-                .execute(&mut **tx)
-                .await?;
-            } else if event.status != "cancelled" {
-                sqlx::query(
-                    "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, data, source_event_id, version, created_at, updated_at) \
-                     VALUES ($1, $2, '', 'calendar', 'google_calendar', $3, $4, $5, $6, $7, $8, 1, now(), now())"
-                )
-                .bind(user_id)
-                .bind(&event.summary)
-                .bind(&source_ref)
-                .bind(span_status)
-                .bind(event.start)
-                .bind(event.end)
-                .bind(&payload)
-                .bind(event_id)
-                .execute(&mut **tx)
-                .await?;
-                created_or_updated += 1;
-            }
+            let timeline_id: Uuid = event_row.get("id");
+            let is_inserted: bool = event_row.get("inserted");
+
+            sqlx::query(
+                "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
+                 VALUES ($1, $2, 'google_calendar', $3, $4, $5)",
+            )
+            .bind(timeline_id)
+            .bind(user_id)
+            .bind(&event.id)
+            .bind(&source_ref)
+            .bind(&payload)
+            .execute(&mut **tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO pulse_invalidations (user_id, reason, range_start, range_end) \
+                 VALUES ($1, 'connection_sync', $2, $2)",
+            )
+            .bind(user_id)
+            .bind(event.start)
+            .execute(&mut **tx)
+            .await?;
+
+            created_or_updated += usize::from(is_inserted);
         }
 
-        let existing_calendar_spans = sqlx::query(
-            "SELECT id, source_ref FROM spans WHERE user_id = $1 AND source = 'google_calendar' AND start_at >= $2 AND start_at < $3 AND status <> 'cancelled' AND data->>'account_id'=$4"
+        let existing_calendar_events = sqlx::query(
+            "SELECT id, dedupe_key FROM timeline_events \
+             WHERE user_id = $1 AND occurred_at >= $2 AND occurred_at < $3 AND record_state <> 'retracted' \
+               AND content->>'account_id' = $4 AND dedupe_key LIKE 'google_calendar:%'",
         )
         .bind(user_id)
         .bind(time_min)
@@ -214,16 +276,18 @@ impl TimelineIngestor for CoreIngestor {
         .fetch_all(&mut **tx)
         .await?;
 
-        for r in existing_calendar_spans {
+        for r in existing_calendar_events {
             let id: Uuid = r.get("id");
-            let source_ref: Option<String> = r.get("source_ref");
-            if let Some(sref) = source_ref
-                && !seen_ids.contains(&sref)
-            {
-                sqlx::query("UPDATE spans SET status = 'cancelled', version = version + 1, updated_at = now() WHERE id = $1")
+            let dkey: Option<String> = r.get("dedupe_key");
+            if let Some(dk) = dkey {
+                let calendar_ref = dk.strip_prefix("google_calendar:").unwrap_or(&dk);
+                let sref = format!("{account_id}:primary:{calendar_ref}");
+                if !seen_ids.contains(&sref) {
+                    sqlx::query("UPDATE timeline_events SET record_state = 'retracted', revision = revision + 1, updated_at = now() WHERE id = $1")
                         .bind(id)
                         .execute(&mut **tx)
                         .await?;
+                }
             }
         }
 
@@ -253,7 +317,7 @@ impl TimelineIngestor for CoreIngestor {
                     "connection_id": connection_id,
                 });
 
-                let event_id: Uuid = sqlx::query_scalar(
+                let _event_id: Uuid = sqlx::query_scalar(
                     "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload, processed_at) \
                      VALUES ($1, 'playstation', $2, $3, $4, 'gaming.playtime_observed', $5, $6, now()) \
                      ON CONFLICT (source_kind, source_id, external_event_id) DO UPDATE SET external_event_id = EXCLUDED.external_event_id RETURNING id"
@@ -290,31 +354,51 @@ impl TimelineIngestor for CoreIngestor {
                     "connection_id": connection_id,
                 });
 
-                let existing = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2"
+                validate_content(tx,"gaming",&span_data).await?;
+                let event_row = sqlx::query(
+                    "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
+                     SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
+                     FROM timeline_event_types et WHERE et.value = 'gaming' AND et.owner_user_id IS NULL AND et.version = 1 AND et.state='published' \
+                     ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET \
+                     title = EXCLUDED.title, summary = EXCLUDED.summary, occurred_at = EXCLUDED.occurred_at, ended_at = EXCLUDED.ended_at, \
+                     content = timeline_events.content || EXCLUDED.content, revision = timeline_events.revision + 1, updated_at = now() \
+                     RETURNING id, (xmax = 0) AS inserted",
                 )
                 .bind(user_id)
+                .bind(&title)
+                .bind(&notes)
+                .bind(act.observation_end)
+                .bind(None::<DateTime<Utc>>)
+                .bind(&span_data)
                 .bind(&act.source_ref)
-                .fetch_optional(&mut **tx)
+                .fetch_one(&mut **tx)
                 .await?;
 
-                if existing.is_none() {
-                    sqlx::query(
-                        "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, source_event_id, version, created_at, updated_at) \
-                         VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, $6, 'manual_human', $7, $8, 1, now(), now())"
-                    )
-                    .bind(user_id)
-                    .bind(title)
-                    .bind(notes)
-                    .bind(&act.source_ref)
-                    .bind(Option::<DateTime<Utc>>::None)
-                    .bind(Option::<DateTime<Utc>>::None)
-                    .bind(span_data)
-                    .bind(event_id)
-                    .execute(&mut **tx)
-                    .await?;
-                    spans_created += 1;
-                }
+                let timeline_id: Uuid = event_row.get("id");
+                let is_inserted: bool = event_row.get("inserted");
+
+                sqlx::query(
+                    "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
+                     VALUES ($1, $2, 'playstation', $3, $4, $5)",
+                )
+                .bind(timeline_id)
+                .bind(user_id)
+                .bind(&act.game.title_id)
+                .bind(&act.source_ref)
+                .bind(&span_data)
+                .execute(&mut **tx)
+                .await?;
+
+                sqlx::query(
+                    "INSERT INTO pulse_invalidations (user_id, reason, range_start, range_end) \
+                     VALUES ($1, 'connection_sync', $2, $2)",
+                )
+                .bind(user_id)
+                .bind(act.observation_start)
+                .execute(&mut **tx)
+                .await?;
+
+                spans_created += usize::from(is_inserted);
             }
         }
 
@@ -334,7 +418,6 @@ impl TimelineIngestor for CoreIngestor {
             let (Some(first), Some(last)) = (game.first_played_at, game.last_played_at) else {
                 continue;
             };
-            let end = last.max(first);
             let source_ref = format!("history:{}", game.title_id);
             let hours = game.play_duration_seconds as f64 / 3600.0;
             let data = json!({
@@ -344,50 +427,63 @@ impl TimelineIngestor for CoreIngestor {
                 "total_seconds": game.play_duration_seconds,
                 "total_display": format!("{:.1}h", hours),
                 "play_count": game.play_count,
-                "timing": "first_to_last_played",
+                "first_played_at": first,
+                "last_played_at": last,
+                "timing": "cumulative_lifetime_stat",
+                "is_cumulative_lifetime_stat": true,
+                "session_times_known": false,
                 "connection_id": connection_id,
             });
             let title = format!("PlayStation: {}", game.name);
             let notes = format!(
-                "Played on {} · {:.1}h in total across {} sessions",
+                "Lifetime playtime on {} · {:.1}h; {} provider play-count observations, session times unknown",
                 game.platform, hours, game.play_count
             );
-            let existing = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM spans WHERE user_id = $1 AND source = 'playstation' AND source_ref = $2",
+            validate_content(tx,"gaming",&data).await?;
+            let event_row = sqlx::query(
+                "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
+                 SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
+                 FROM timeline_event_types et WHERE et.value = 'gaming' AND et.owner_user_id IS NULL AND et.version = 1 AND et.state='published' \
+                 ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET \
+                 title = EXCLUDED.title, summary = EXCLUDED.summary, occurred_at = EXCLUDED.occurred_at, ended_at = EXCLUDED.ended_at, \
+                 content = timeline_events.content || EXCLUDED.content, revision = timeline_events.revision + 1, updated_at = now() \
+                 RETURNING id, (xmax = 0) AS inserted",
             )
             .bind(user_id)
+            .bind(&title)
+            .bind(&notes)
+            .bind(last)
+            .bind(None::<DateTime<Utc>>)
+            .bind(&data)
             .bind(&source_ref)
-            .fetch_optional(&mut **tx)
+            .fetch_one(&mut **tx)
             .await?;
-            if let Some(id) = existing {
-                sqlx::query(
-                    "UPDATE spans SET title = $2, notes = $3, start_at = $4, end_at = $5, data = $6, version = version + 1, updated_at = now() \
-                     WHERE id = $1 AND (start_at IS DISTINCT FROM $4 OR end_at IS DISTINCT FROM $5 OR data IS DISTINCT FROM $6)",
-                )
-                .bind(id)
-                .bind(&title)
-                .bind(&notes)
-                .bind(first)
-                .bind(end)
-                .bind(&data)
-                .execute(&mut **tx)
-                .await?;
-            } else {
-                sqlx::query(
-                    "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, version, created_at, updated_at) \
-                     VALUES ($1, $2, $3, 'gaming', 'playstation', $4, 'done', $5, $6, 'manual_human', $7, 1, now(), now())",
-                )
-                .bind(user_id)
-                .bind(&title)
-                .bind(&notes)
-                .bind(&source_ref)
-                .bind(first)
-                .bind(end)
-                .bind(&data)
-                .execute(&mut **tx)
-                .await?;
-                written += 1;
-            }
+
+            let timeline_id: Uuid = event_row.get("id");
+            let is_inserted: bool = event_row.get("inserted");
+
+            sqlx::query(
+                "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
+                 VALUES ($1, $2, 'playstation', $3, $4, $5)",
+            )
+            .bind(timeline_id)
+            .bind(user_id)
+            .bind(&game.title_id)
+            .bind(&source_ref)
+            .bind(&data)
+            .execute(&mut **tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO pulse_invalidations (user_id, reason, range_start, range_end) \
+                 VALUES ($1, 'connection_sync', $2, $2)",
+            )
+            .bind(user_id)
+            .bind(first)
+            .execute(&mut **tx)
+            .await?;
+
+            written += usize::from(is_inserted);
         }
         notify(tx, user_id).await?;
         Ok(written)
@@ -410,7 +506,7 @@ impl TimelineIngestor for CoreIngestor {
                 continue;
             }
             let source_ref = format!("{}:{}", order.provider, order.order_id);
-            let span_status = match order.status {
+            let _span_status = match order.status {
                 FoodDeliveryStatus::Delivered => "done",
                 FoodDeliveryStatus::Cancelled => "cancelled",
                 FoodDeliveryStatus::Unknown => unreachable!(),
@@ -457,7 +553,7 @@ impl TimelineIngestor for CoreIngestor {
                 "provider_data": order.provider_data,
             });
 
-            let event_id: Uuid = sqlx::query_scalar(
+            let _event_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO inbound_events (user_id, source_kind, source_id, external_event_id, payload_hash, event_type, occurred_at, payload, processed_at) \
                  VALUES ($1, $2, $3, $4, $5, 'food_delivery.order_synced', $6, $7, now()) \
                  ON CONFLICT (source_kind, source_id, external_event_id) DO UPDATE SET occurred_at = EXCLUDED.occurred_at, payload = EXCLUDED.payload, payload_hash=EXCLUDED.payload_hash RETURNING id"
@@ -472,50 +568,58 @@ impl TimelineIngestor for CoreIngestor {
             .fetch_one(&mut **tx)
             .await?;
 
-            let existing_id = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM spans WHERE user_id = $1 AND source = $2 AND source_ref = $3",
+            let record_state = match order.status {
+                FoodDeliveryStatus::Cancelled => "retracted",
+                _ => "active",
+            };
+
+            validate_content(tx,"order",&payload).await?;
+            let event_row = sqlx::query(
+                "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
+                 SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, $7, 1.0, $8 \
+                 FROM timeline_event_types et WHERE et.value = 'order' AND et.owner_user_id IS NULL AND et.version = 1 AND et.state='published' \
+                 ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET \
+                 title = EXCLUDED.title, summary = EXCLUDED.summary, occurred_at = EXCLUDED.occurred_at, ended_at = EXCLUDED.ended_at, \
+                 content = timeline_events.content || EXCLUDED.content, record_state = EXCLUDED.record_state, revision = timeline_events.revision + 1, updated_at = now() \
+                 RETURNING id, (xmax = 0) AS inserted",
             )
             .bind(user_id)
-            .bind(&order.provider)
+            .bind(&title)
+            .bind(&notes)
+            .bind(order_time)
+            .bind(order.delivered_time)
+            .bind(&payload)
+            .bind(record_state)
             .bind(&source_ref)
-            .fetch_optional(&mut **tx)
+            .fetch_one(&mut **tx)
             .await?;
 
-            let _span_id = if let Some(id) = existing_id {
-                sqlx::query(
-                    "UPDATE spans SET title = $1, notes = $2, start_at = $3, end_at = $4, status = $5, data = data || $6, source_event_id = $7, version = version + 1, updated_at = now() WHERE id = $8"
-                )
-                .bind(&title)
-                .bind(&notes)
-                .bind(order_time)
-                .bind(order.delivered_time)
-                .bind(span_status)
-                .bind(&payload)
-                .bind(event_id)
-                .bind(id)
-                .execute(&mut **tx)
-                .await?;
-                id
-            } else {
-                let id = sqlx::query_scalar::<_, Uuid>(
-                    "INSERT INTO spans (user_id, title, notes, category, source, source_ref, status, start_at, end_at, execution_type, data, source_event_id, version, created_at, updated_at) \
-                     VALUES ($1, $2, $3, 'dining', $4, $5, $6, $7, $8, 'manual_human', $9, $10, 1, now(), now()) RETURNING id"
-                )
-                .bind(user_id)
-                .bind(&title)
-                .bind(&notes)
-                .bind(&order.provider)
-                .bind(&source_ref)
-                .bind(span_status)
-                .bind(order_time)
-                .bind(order.delivered_time)
-                .bind(&payload)
-                .bind(event_id)
-                .fetch_one(&mut **tx)
-                .await?;
-                spans_created += 1;
-                id
-            };
+            let timeline_id: Uuid = event_row.get("id");
+            let is_inserted: bool = event_row.get("inserted");
+
+            sqlx::query(
+                "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(timeline_id)
+            .bind(user_id)
+            .bind(&order.provider)
+            .bind(&order.order_id)
+            .bind(&source_ref)
+            .bind(&payload)
+            .execute(&mut **tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO pulse_invalidations (user_id, reason, range_start, range_end) \
+                 VALUES ($1, 'connection_sync', $2, $2)",
+            )
+            .bind(user_id)
+            .bind(order_time)
+            .execute(&mut **tx)
+            .await?;
+
+            spans_created += usize::from(is_inserted);
         }
 
         notify(tx, user_id).await?;
@@ -633,6 +737,10 @@ async fn notify(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_notify('vox_timeline_updated', $1)")
+        .bind(json!({"type":"timeline_updated","user_id":user_id}).to_string())
+        .execute(&mut **tx)
+        .await?;
     sqlx::query("SELECT pg_notify('vox_connection_spans', $1)")
         .bind(json!({"type":"span_updated","user_id":user_id}).to_string())
         .execute(&mut **tx)
@@ -703,3 +811,7 @@ mod configuration_tests {
 #[cfg(test)]
 #[path = "connection_ingestion_tests.rs"]
 mod ingestion_tests;
+
+async fn validate_content(tx:&mut sqlx::Transaction<'_,sqlx::Postgres>,value:&str,content:&serde_json::Value) -> Result<(),FreshConnectionError> {
+    crate::storage::timeline::validate_published_content(tx,value,content).await.map_err(|error| FreshConnectionError::Invalid(error.to_string()))
+}

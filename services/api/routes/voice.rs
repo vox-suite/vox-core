@@ -15,6 +15,7 @@ use axum::{
     },
     response::IntoResponse,
 };
+use axum::extract::Query;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use uuid::Uuid;
 use vox_core::{
     conversations::{CompleteConversationRequest, RespondRequest, service::ConversationService},
@@ -51,9 +53,24 @@ pub enum VoiceClientMessage {
     Turn {
         #[serde(default)]
         conversation_id: Option<String>,
+        /// Already-transcribed utterance from a client doing on-device STT;
+        /// when set, buffered audio and server STT are skipped.
+        #[serde(default)]
+        text: Option<String>,
+        /// Tools the client already ran on-device for this utterance.
+        #[serde(default)]
+        tool_results: Vec<serde_json::Value>,
     },
     Interrupt,
     Ping,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoiceSocketParams {
+    /// `local` means the client synthesizes speech on-device, so the server
+    /// streams text only.
+    #[serde(default)]
+    pub audio: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,14 +105,24 @@ pub enum VoiceServerMessage<'a> {
 pub async fn voice_socket(
     State(state): State<VoiceSocketState>,
     Extension(actor): Extension<Actor>,
+    Query(params): Query<VoiceSocketParams>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_voice_socket(socket, state, actor))
+    let mut state = state;
+    let local_audio = params.audio.as_deref() == Some("local");
+    if local_audio {
+        state.tts = None;
+    }
+    ws.on_upgrade(move |socket| handle_voice_socket(socket, state, actor, local_audio))
 }
 
 enum OutboundFrame {
     Text(String),
-    Binary(Bytes),
+    Binary {
+        bytes: Bytes,
+        queued_at: Instant,
+        stats: Arc<SpeakStats>,
+    },
     Pong(Bytes),
 }
 
@@ -113,7 +140,17 @@ struct SessionStats {
 
 /// Per-turn TTS counters; `first_audio_ms` is measured from the turn start.
 struct SpeakStats {
+    kind: &'static str,
     turn_started: Instant,
+    session_started: Instant,
+    session_id: String,
+    conversation_id: String,
+    turn_id: String,
+    outcome: AtomicU64,
+    tts_errors: AtomicU64,
+    first_sent_ms: AtomicU64,
+    max_queue_ms: AtomicU64,
+    max_write_ms: AtomicU64,
     first_audio_ms: AtomicU64,
     audio_bytes: AtomicU64,
     sentences: AtomicU64,
@@ -121,9 +158,26 @@ struct SpeakStats {
 }
 
 impl SpeakStats {
-    fn new(session: Arc<SessionStats>) -> Arc<Self> {
+    fn new(
+        session: Arc<SessionStats>,
+        kind: &'static str,
+        session_id: String,
+        conversation_id: String,
+        turn_id: String,
+        session_started: Instant,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            kind,
             turn_started: Instant::now(),
+            session_started,
+            session_id,
+            conversation_id,
+            turn_id,
+            outcome: AtomicU64::new(0),
+            tts_errors: AtomicU64::new(0),
+            first_sent_ms: AtomicU64::new(UNSET),
+            max_queue_ms: AtomicU64::new(0),
+            max_write_ms: AtomicU64::new(0),
             first_audio_ms: AtomicU64::new(UNSET),
             audio_bytes: AtomicU64::new(0),
             sentences: AtomicU64::new(0),
@@ -148,6 +202,27 @@ impl SpeakStats {
     }
 }
 
+impl Drop for SpeakStats {
+    fn drop(&mut self) {
+        let status = self.outcome.load(Ordering::Relaxed);
+        let first_sent = self.first_sent_ms.load(Ordering::Relaxed);
+        let errors = self.tts_errors.load(Ordering::Relaxed);
+        let outcome = match status {
+            1 if first_sent == UNSET => "no_answer_audio",
+            1 if errors > 0 => "degraded",
+            1 => "completed",
+            2 => "failed",
+            3 => "empty_transcript",
+            _ => "cancelled",
+        };
+        tracing::info!(conversation_id = %self.conversation_id, kind = self.kind, session_id = %self.session_id, turn_id = %self.turn_id, outcome,
+            turn_to_first_ws_audio_ms = (first_sent != UNSET).then_some(first_sent),
+            max_output_queue_ms = self.max_queue_ms.load(Ordering::Relaxed),
+            max_ws_write_ms = self.max_write_ms.load(Ordering::Relaxed), tts_errors = errors,
+            "VOICE_NATIVE_TURN_LIFECYCLE");
+    }
+}
+
 /// Synthesizes and streams one sentence's audio to the client. Returns
 /// `false` if the caller should stop the turn immediately (cancelled
 /// mid-stream, or the outbound channel closed), `true` to continue.
@@ -156,10 +231,11 @@ async fn speak_sentence(
     sentence: &str,
     out_tx: &mpsc::Sender<OutboundFrame>,
     cancel_token: &CancellationToken,
-    stats: &SpeakStats,
+    stats: &Arc<SpeakStats>,
     turn_id: &str,
 ) -> bool {
     let Some(tts_client) = tts else {
+        stats.tts_errors.fetch_add(1, Ordering::Relaxed);
         tracing::warn!(turn_id, "TTS unavailable; reply will be silent");
         return true;
     };
@@ -167,6 +243,7 @@ async fn speak_sentence(
     let mut audio_stream = match tts_client.synthesize_stream(sentence).await {
         Ok(stream) => stream,
         Err(e) => {
+            stats.tts_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!(turn_id, error = %e, sentence_chars = sentence.len(), "VOICE_TTS_FAILED");
             return true;
         }
@@ -183,6 +260,9 @@ async fn speak_sentence(
         }
         match chunk_res {
             Ok(bytes) => {
+                if bytes.is_empty() {
+                    continue;
+                }
                 if first_chunk_ms.is_none() {
                     first_chunk_ms = Some(sentence_started.elapsed().as_millis() as u64);
                 } else {
@@ -190,12 +270,22 @@ async fn speak_sentence(
                 }
                 last_chunk_at = Instant::now();
                 sentence_bytes += bytes.len();
-                stats.record_audio(bytes.len());
-                if out_tx.send(OutboundFrame::Binary(bytes)).await.is_err() {
+                let chunk_len = bytes.len();
+                if out_tx
+                    .send(OutboundFrame::Binary {
+                        bytes,
+                        queued_at: Instant::now(),
+                        stats: Arc::clone(stats),
+                    })
+                    .await
+                    .is_err()
+                {
                     return false;
                 }
+                stats.record_audio(chunk_len);
             }
             Err(e) => {
+                stats.tts_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(turn_id, error = %e, "VOICE_TTS_CHUNK_ERROR");
             }
         }
@@ -269,18 +359,22 @@ where
     } = reply;
     let mut chunker = SentenceChunker::new();
     let (sentence_tx, sentence_rx) = mpsc::unbounded_channel::<String>();
-    let speaker_task = tokio::spawn(run_speaker(
-        sentence_rx,
-        tts,
-        out_tx.clone(),
-        cancel_token.clone(),
-        Arc::clone(&stats),
-        turn_id.clone(),
-    ));
+    let speaker_task = tokio::spawn(
+        run_speaker(
+            sentence_rx,
+            tts,
+            out_tx.clone(),
+            cancel_token.clone(),
+            Arc::clone(&stats),
+            turn_id.clone(),
+        )
+        .instrument(tracing::Span::current()),
+    );
 
     let mut first_delta_ms: Option<u64> = None;
     let mut reply_chars = 0usize;
     let mut cancelled = false;
+    let mut failed = false;
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
@@ -308,6 +402,7 @@ where
                         }
                     }
                     Some(Err(err)) => {
+                        failed = true;
                         tracing::warn!(turn_id = %turn_id, error = %err, "Error during voice LLM stream");
                         break;
                     }
@@ -326,16 +421,29 @@ where
 
     let first_audio = stats.first_audio_ms.load(Ordering::Relaxed);
     let cancelled = cancelled || cancel_token.is_cancelled();
+    stats.outcome.store(
+        if cancelled {
+            0
+        } else if failed {
+            2
+        } else {
+            1
+        },
+        Ordering::Relaxed,
+    );
     tracing::info!(
         kind,
         turn_id = %turn_id,
-        cancelled,
-        llm_first_delta_ms = ?first_delta_ms,
-        llm_total_ms,
+        cancelled, outcome = if cancelled { "cancelled" } else if failed { "failed" } else { "completed" },
+        core_first_delta_ms = first_delta_ms,
+        core_stream_ms = llm_total_ms,
+        session_id = %stats.session_id,
+        max_output_queue_ms = stats.max_queue_ms.load(Ordering::Relaxed),
+        max_ws_write_ms = stats.max_write_ms.load(Ordering::Relaxed),
         reply_chars,
         sentences = stats.sentences.load(Ordering::Relaxed),
         audio_bytes = stats.audio_bytes.load(Ordering::Relaxed),
-        first_audio_after_turn_start_ms = if first_audio == UNSET { None } else { Some(first_audio) },
+        first_audio_enqueued_after_turn_start_ms = if first_audio == UNSET { None } else { Some(first_audio) },
         turn_total_ms = stats.turn_started.elapsed().as_millis() as u64,
         "VOICE_TURN_REPLY"
     );
@@ -347,7 +455,13 @@ where
     }
 }
 
-async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: Actor) {
+async fn handle_voice_socket(
+    socket: WebSocket,
+    state: VoiceSocketState,
+    actor: Actor,
+    local_audio: bool,
+) {
+    let tts_provider = if local_audio { "local" } else { "elevenlabs" };
     let session_id = Uuid::new_v4().to_string();
     let session_started = Instant::now();
     let session_stats = Arc::new(SessionStats::default());
@@ -362,7 +476,31 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
         while let Some(frame) = out_rx.recv().await {
             let msg = match frame {
                 OutboundFrame::Text(text) => Message::Text(text.into()),
-                OutboundFrame::Binary(bytes) => Message::Binary(bytes),
+                OutboundFrame::Binary {
+                    bytes,
+                    queued_at,
+                    stats,
+                } => {
+                    let write_started = Instant::now();
+                    let queue_ms = queued_at.elapsed().as_millis() as u64;
+                    if ws_sender.send(Message::Binary(bytes)).await.is_err() {
+                        tracing::warn!(conversation_id = %stats.conversation_id, session_id = %stats.session_id, turn_id = %stats.turn_id, "VOICE_NATIVE_SOCKET_SEND_FAILED");
+                        break;
+                    }
+                    let write_ms = write_started.elapsed().as_millis() as u64;
+                    stats.max_queue_ms.fetch_max(queue_ms, Ordering::Relaxed);
+                    stats.max_write_ms.fetch_max(write_ms, Ordering::Relaxed);
+                    let elapsed = stats.turn_started.elapsed().as_millis() as u64;
+                    if stats
+                        .first_sent_ms
+                        .compare_exchange(UNSET, elapsed, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        tracing::info!(conversation_id = %stats.conversation_id, session_id = %stats.session_id, turn_id = %stats.turn_id,
+                            turn_to_first_ws_audio_ms = elapsed, session_to_first_ws_audio_ms = stats.session_started.elapsed().as_millis() as u64, queue_ms, write_ms, "VOICE_NATIVE_FIRST_AUDIO_SENT");
+                    }
+                    continue;
+                }
                 OutboundFrame::Pong(bytes) => Message::Pong(bytes),
             };
             if ws_sender.send(msg).await.is_err() {
@@ -429,7 +567,14 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
         let cancel_token = CancellationToken::new();
         current_turn_cancel = Some(cancel_token.clone());
         let turn_id = Uuid::new_v4().to_string();
-        let stats = SpeakStats::new(Arc::clone(&session_stats));
+        let stats = SpeakStats::new(
+            Arc::clone(&session_stats),
+            "greeting",
+            session_id.clone(),
+            external_conv_id.clone(),
+            turn_id.clone(),
+            session_started,
+        );
         let tts = state.tts.clone();
         let out_tx_clone = out_tx.clone();
         let context = context.clone();
@@ -441,15 +586,17 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
             initiation_context: None,
             turn_id: Some(turn_id.clone()),
             revision: None,
-            tts_provider: Some("elevenlabs".to_string()),
+            tts_provider: Some(tts_provider.to_string()),
             filler: None,
         };
         let session_id = session_id.clone();
+        let span = tracing::info_span!("native_voice_turn", %session_id, %turn_id, conversation_id = %external_conv_id, kind = "greeting");
         last_turn = Some(tokio::spawn(async move {
             let llm_started = Instant::now();
             let stream = match conversations.respond_stream(context, request).await {
                 Ok(stream) => stream,
                 Err(e) => {
+                    stats.outcome.store(2, Ordering::Relaxed);
                     tracing::error!(session_id = %session_id, error = %e, "VOICE_GREETING_FAILED");
                     return;
                 }
@@ -473,7 +620,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                 llm_started,
             };
             stream_reply(stream, reply).await;
-        }));
+        }.instrument(span)));
     }
 
     let mut had_turn = false;
@@ -506,20 +653,22 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                             .unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
                     }
-                    Ok(VoiceClientMessage::Turn { conversation_id }) => {
+                    Ok(VoiceClientMessage::Turn { conversation_id, text, tool_results }) => {
                         let audio = std::mem::take(&mut pending_audio);
-                        if audio.is_empty() {
+                        let typed = text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                        if audio.is_empty() && typed.is_none() {
                             continue;
                         }
 
-                        let Some(stt) = state.stt.clone() else {
+                        let stt = state.stt.clone();
+                        if typed.is_none() && stt.is_none() {
                             let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
                                 message: "Speech-to-text is unavailable",
                             })
                             .unwrap_or_default();
                             let _ = out_tx.send(OutboundFrame::Text(err_msg)).await;
                             continue;
-                        };
+                        }
 
                         let Some(conversations) = state.conversations.clone() else {
                             let err_msg = serde_json::to_string(&VoiceServerMessage::Error {
@@ -541,15 +690,28 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
 
                         let turn_id = Uuid::new_v4().to_string();
                         let conv_id = conversation_id.unwrap_or_else(|| external_conv_id.clone());
-                        let stats = SpeakStats::new(Arc::clone(&session_stats));
+                        let stats = SpeakStats::new(
+                            Arc::clone(&session_stats),
+                            "turn",
+                            session_id.clone(),
+                            conv_id.clone(),
+                            turn_id.clone(),
+                            session_started,
+                        );
 
                         let tts = state.tts.clone();
                         let out_tx_clone = out_tx.clone();
                         let context = context.clone();
                         let identity = identity.clone();
                         let session_id = session_id.clone();
+                        let tts_provider = tts_provider.to_string();
 
+                        let span = tracing::info_span!("native_voice_turn", %session_id, %turn_id, conversation_id = %conv_id, kind = "turn");
                         last_turn = Some(tokio::spawn(async move {
+                            let text = if let Some(typed) = typed {
+                                typed
+                            } else {
+                                let stt = stt.expect("checked above");
                             let pcm: Vec<i16> = audio
                                 .as_chunks::<2>()
                                 .0
@@ -566,6 +728,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 match stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE).await {
                                     Ok(text) => text,
                                     Err(e) => {
+                                        stats.outcome.store(2, Ordering::Relaxed);
                                         tracing::error!(
                                             session_id = %session_id, turn_id = %turn_id,
                                             error = %e, audio_ms, "VOICE_STT_FAILED"
@@ -591,7 +754,10 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 transcript_chars = text.len(),
                                 "VOICE_STT"
                             );
+                                text
+                            };
                             if text.is_empty() {
+                                stats.outcome.store(3, Ordering::Relaxed);
                                 return;
                             }
 
@@ -609,6 +775,14 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                             .unwrap_or_default();
                             let _ = out_tx_clone.send(OutboundFrame::Text(thinking)).await;
 
+                            let text = if tool_results.is_empty() {
+                                text
+                            } else {
+                                format!(
+                                    "{text}\n\n[Already done on the user's device just now. Do not repeat these tool calls; confirm the outcome briefly in your own words: {}]",
+                                    serde_json::Value::Array(tool_results)
+                                )
+                            };
                             let request = RespondRequest {
                                 agent_external_key: "general".to_string(),
                                 identity,
@@ -617,7 +791,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 initiation_context: None,
                                 turn_id: Some(turn_id.clone()),
                                 revision: None,
-                                tts_provider: Some("elevenlabs".to_string()),
+                                tts_provider: Some(tts_provider.to_string()),
                                 filler: None,
                             };
 
@@ -631,6 +805,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                             message: "Agent response failed",
                                         })
                                         .unwrap_or_default();
+                                    stats.outcome.store(2, Ordering::Relaxed);
                                     tracing::error!(session_id = %session_id, turn_id = %turn_id, error = %e, "Agent response stream error");
                                     let _ = out_tx_clone.send(OutboundFrame::Text(err_msg)).await;
                                     return;
@@ -651,7 +826,7 @@ async fn handle_voice_socket(socket: WebSocket, state: VoiceSocketState, actor: 
                                 llm_started,
                             };
                             stream_reply(stream, reply).await;
-                        }));
+                        }.instrument(span)));
                     }
                     Err(e) => {
                         tracing::warn!(session_id = %session_id, error = %e, "Invalid voice client message payload");

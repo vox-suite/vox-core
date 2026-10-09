@@ -12,8 +12,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use vox_core::{
-    agents::{space_architect::SpaceArchitecting, space_runtime::SpaceRuntime},
-    application::schemas::SchemaService,
+    agents::space_runtime::SpaceRuntime,
     domain::{
         collections::CollectionKind,
         identity::Actor,
@@ -27,8 +26,6 @@ use vox_core::{
 pub struct SpaceApiState {
     pub pool: PgPool,
     pub spaces: SpaceRepository,
-    pub schemas: SchemaService,
-    pub architect: Arc<dyn SpaceArchitecting>,
     pub runtime: Arc<SpaceRuntime>,
     pub user_events: UserEventHub,
 }
@@ -43,6 +40,8 @@ pub struct CreateSpaceInput {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SendSpaceChatInput {
     pub message: String,
+    #[serde(default)]
+    pub node_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -76,41 +75,15 @@ pub async fn create_space(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let available_schemas = state
-        .schemas
-        .list_for_user(&actor)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let spec = state
-        .architect
-        .generate_spec(intent, &available_schemas)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let title = input
         .title
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or(spec.title.trim());
-    let title = if title.is_empty() {
-        "Untitled space"
-    } else {
-        title
-    };
-
-    let spec_json = serde_json::to_value(&spec).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+        .unwrap_or("New space");
     let space = state
         .spaces
-        .create_space(
-            actor.user_id,
-            title,
-            intent,
-            SpaceState::Ideating,
-            spec_json,
-        )
+        .create_workflow_space(actor.user_id, title, intent)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -238,11 +211,85 @@ pub async fn send_space_chat(
         Some(_) => {}
     }
 
+    let context = if let Some(node_id) = input.node_id {
+        let graph = state
+            .spaces
+            .get_graph(actor.user_id, id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        format!(
+            "Selected node {} ({}): {}\nUser instruction: {}",
+            node.id, node.title, node.body, message
+        )
+    } else {
+        message.to_string()
+    };
+    let workflow = state
+        .spaces
+        .get_space(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_some_and(|s| s.agent_spec["workflow_version"] == 2);
+    if workflow {
+        let mut tx = state
+            .pool
+            .begin()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let current =
+            sqlx::query("SELECT state,workflow_generation FROM spaces WHERE id=$1 FOR UPDATE")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if matches!(
+            current.get::<String, _>("state").as_str(),
+            "committed" | "dropped"
+        ) {
+            return Err(StatusCode::CONFLICT);
+        }
+        let generation: i32 = current.get("workflow_generation");
+        sqlx::query(
+            "INSERT INTO space_workflow_requests(space_id,message,node_id,generation) VALUES($1,$2,$3,$4)",
+        )
+        .bind(id)
+        .bind(message)
+        .bind(input.node_id)
+        .bind(generation)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query("INSERT INTO space_messages(space_id,role,text) VALUES($1,'user',$2)")
+            .bind(id)
+            .bind(message)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query("INSERT INTO jobs(kind,payload_reference_id) VALUES('run_space',$1)")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tx.commit()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     let runtime = state.runtime.clone();
-    let msg_str = message.to_string();
     tokio::spawn(async move {
-        let _ = runtime.run_space(id, Some(msg_str)).await;
+        let _ = runtime
+            .run_space(id, if workflow { None } else { Some(context) })
+            .await;
     });
+    state.user_events.notify(
+        actor.user_id,
+        json!({"type":"space_message_created","space_id":id}),
+    );
 
     Ok(Json(json!({ "status": "processing" })))
 }
@@ -266,7 +313,7 @@ pub async fn commit_space(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let space_row = sqlx::query(
-        "SELECT id, user_id, title, intent, state, committed_collection_id FROM spaces WHERE user_id = $1 AND id = $2 FOR UPDATE",
+        "SELECT id, user_id, title, intent, state, agent_spec, committed_collection_id FROM spaces WHERE user_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(actor.user_id)
     .bind(id)
@@ -280,6 +327,24 @@ pub async fn commit_space(
 
     let current_state: String = space_row.get("state");
     if current_state == "committed" || current_state == "dropped" {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let spec: serde_json::Value = space_row.get("agent_spec");
+    if spec["workflow_version"] == 2 {
+        let ready:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND role='plan' AND status='done') AND NOT EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND (status!='done' OR NOT expanded)) AND NOT EXISTS(SELECT 1 FROM space_workflow_requests WHERE space_id=$1 AND NOT processed)").bind(id).fetch_one(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        if !ready {
+            return Err(StatusCode::CONFLICT);
+        }
+    }
+    let unfinished: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM space_tasks WHERE space_id=$1 AND status != 'done'",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if unfinished > 0 {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -454,6 +519,52 @@ pub async fn update_space_node(
         return Err(StatusCode::NOT_FOUND);
     }
 
+    if space.agent_spec["workflow_version"] == 2 {
+        let mut tx = state
+            .pool
+            .begin()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let current: String = sqlx::query_scalar("SELECT state FROM spaces WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if matches!(current.as_str(), "committed" | "dropped") {
+            return Err(StatusCode::CONFLICT);
+        }
+        sqlx::query("UPDATE space_nodes SET title=coalesce($3,title),body=coalesce($4,body),position=coalesce($5,position),state=coalesce($6,state),version=version+1,updated_at=now() WHERE space_id=$1 AND id=$2").bind(id).bind(node_id).bind(&input.title).bind(&input.body).bind(&input.position).bind(parsed_state.map(NodeState::as_str)).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        if input.title.is_some()
+            || input.body.is_some()
+            || parsed_state == Some(NodeState::Rejected)
+        {
+            sqlx::query("WITH RECURSIVE descendants(id) AS (SELECT e.to_node FROM space_edges e WHERE e.space_id=$1 AND e.from_node=$2 UNION SELECT e.to_node FROM space_edges e JOIN descendants d ON e.from_node=d.id WHERE e.space_id=$1) UPDATE space_tasks SET status='cancelled',error='Prerequisite changed; retry this branch',lease_token=NULL,expanded=true WHERE space_id=$1 AND node_id IN(SELECT id FROM descendants)").bind(id).bind(node_id).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query("UPDATE space_tasks SET status=$3,brief=coalesce($4,brief),lease_token=NULL,expanded=false,attempt=0,error=NULL WHERE space_id=$1 AND node_id=$2").bind(id).bind(node_id).bind(if parsed_state==Some(NodeState::Rejected){"cancelled"}else{"queued"}).bind(&input.body).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query("INSERT INTO jobs(kind,payload_reference_id) VALUES('run_space',$1)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        vox_core::storage::space_tasks::TaskRepository::new(state.pool.clone())
+            .sync_metadata(id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let node = state
+            .spaces
+            .get_node(id, node_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        state.user_events.notify(
+            actor.user_id,
+            json!({"type":"space_node_updated","space_id":id,"node":node}),
+        );
+        return Ok(Json(node));
+    }
     let updated = state
         .spaces
         .update_node_scoped(
@@ -474,7 +585,19 @@ pub async fn update_space_node(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    if parsed_state == Some(NodeState::Rejected) {
+    if space.agent_spec["workflow_version"] == 2
+        && (input.title.is_some()
+            || input.body.is_some()
+            || parsed_state == Some(NodeState::Rejected))
+    {
+        sqlx::query("WITH RECURSIVE descendants(id) AS (SELECT e.to_node FROM space_edges e WHERE e.space_id=$1 AND e.from_node=$2 UNION SELECT e.to_node FROM space_edges e JOIN descendants d ON e.from_node=d.id WHERE e.space_id=$1) UPDATE space_tasks SET status='cancelled',error='Prerequisite changed; retry this branch',lease_token=NULL,expanded=false WHERE space_id=$1 AND node_id IN(SELECT id FROM descendants)").bind(id).bind(node_id).execute(&state.pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query("UPDATE space_tasks SET status=$3,lease_token=NULL,expanded=true WHERE space_id=$1 AND node_id=$2").bind(id).bind(node_id).bind(if parsed_state==Some(NodeState::Rejected){"cancelled"}else{"done"}).execute(&state.pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        vox_core::storage::space_tasks::TaskRepository::new(state.pool.clone())
+            .sync_metadata(id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if parsed_state == Some(NodeState::Rejected) || input.title.is_some() || input.body.is_some() {
         let stale = state
             .spaces
             .mark_descendants_stale(id, node.id)
@@ -505,4 +628,58 @@ pub async fn update_space_node(
     );
 
     Ok(Json(node))
+}
+
+#[utoipa::path(post,path="/v1/me/spaces/{id}/stop",tag="spaces",params(("id"=Uuid,Path)),responses((status=200)))]
+pub async fn stop_space(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    state
+        .spaces
+        .get_space(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    vox_core::storage::space_tasks::TaskRepository::new(state.pool)
+        .stop(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.user_events.notify(
+        actor.user_id,
+        json!({"type":"space_graph_updated","space_id":id}),
+    );
+    Ok(Json(json!({"status":"stopped"})))
+}
+#[utoipa::path(post,path="/v1/me/spaces/{id}/nodes/{node}/retry",tag="spaces",params(("id"=Uuid,Path),("node"=Uuid,Path)),responses((status=200)))]
+pub async fn retry_space_node(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path((id, node)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let graph = state
+        .spaces
+        .get_graph(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if matches!(
+        graph.space.state,
+        SpaceState::Committed | SpaceState::Dropped
+    ) {
+        return Err(StatusCode::CONFLICT);
+    }
+    if !graph.nodes.iter().any(|n| n.id == node) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    vox_core::storage::space_tasks::TaskRepository::new(state.pool)
+        .retry(id, node)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let runtime = state.runtime;
+    tokio::spawn(async move {
+        let _ = runtime.run_space(id, None).await;
+    });
+    Ok(Json(json!({"status":"queued"})))
 }

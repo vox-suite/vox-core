@@ -3,37 +3,7 @@ use serde::Deserialize;
 use vox_core::{
     consent::{ConsentError, ConsentService, DataSource},
     domain::identity::Actor,
-    sms_ingestion::{SmsIngestionError, SmsIngestionService, SmsMessage},
 };
-
-#[derive(Deserialize)]
-pub struct SubmitSmsBatchRequest {
-    pub messages: Vec<SmsMessage>,
-}
-
-pub async fn submit_batch(
-    State(service): State<SmsIngestionService>,
-    Extension(actor): Extension<Actor>,
-    Json(body): Json<SubmitSmsBatchRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let result = service
-        .submit_batch(actor.user_id, body.messages)
-        .await
-        .map_err(|err| match err {
-            SmsIngestionError::Empty | SmsIngestionError::TooLarge => StatusCode::BAD_REQUEST,
-            SmsIngestionError::ConsentRequired => StatusCode::FORBIDDEN,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        })?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "event_ids": result.event_ids,
-            "batch_id": result.event_ids.first().map(|e| e.0),
-            "synced_until": result.synced_until,
-        })),
-    ))
-}
 
 pub async fn get_consent(
     State(service): State<ConsentService>,

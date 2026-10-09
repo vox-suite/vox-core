@@ -35,6 +35,7 @@ async fn main() {
         return;
     }
     let _traces = vox_core::telemetry::init("vox-core-api");
+    vox_core::storage::object_storage::validate_configuration().expect("Vox shared storage configuration is invalid");
     let config = Config::from_env().expect("Vox Core configuration is invalid");
 
     let db = Db::connect_with_pool(
@@ -76,17 +77,18 @@ async fn main() {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     });
-    let agent = Arc::new(
-        ConversationAgent::with_db(&config, db.clone())
-            .expect("Vox Core agent configuration is invalid")
-            .with_user_events(user_events.clone())
-            .with_device_hub(device_hub.clone()),
-    );
     let cache = RedisContextCache::new(&config.redis_url)
         .ok()
         .map(|c| Arc::new(c) as Arc<dyn ContextCache>);
     let memory = MemoryService::new(db.clone(), cache);
     let _ = memory.sync_minimal_users().await;
+    let agent = Arc::new(
+        ConversationAgent::with_db(&config, db.clone())
+            .expect("Vox Core agent configuration is invalid")
+            .with_memory(memory.clone())
+            .with_user_events(user_events.clone())
+            .with_device_hub(device_hub.clone()),
+    );
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .expect("Vox Core API address is unavailable");

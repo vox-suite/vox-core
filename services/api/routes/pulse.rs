@@ -46,6 +46,11 @@ pub struct CanvasQuery {
 pub struct MeasurementsQuery {
     pub timezone: String,
 }
+#[derive(Deserialize)]
+pub struct ListChartsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
 
 #[utoipa::path(get,path="/v1/me/pulse/canvas",tag="pulse",params(("timezone"=String,Query),("refresh"=Option<bool>,Query),("cursor"=Option<Uuid>,Query)),responses((status=200,body=CanvasResponse)))]
 pub async fn get_canvas(
@@ -94,6 +99,43 @@ pub async fn save(
         Json(service.save(&actor, input).await?),
     ))
 }
+#[utoipa::path(get,path="/v1/me/pulse/charts",tag="pulse",params(("limit"=Option<i64>,Query),("offset"=Option<i64>,Query)),responses((status=200,body=Vec<SavedPulseChart>)))]
+pub async fn list_charts(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Query(input): Query<ListChartsQuery>,
+) -> Result<Json<Vec<SavedPulseChart>>, PulseApiError> {
+    Ok(Json(
+        service
+            .list_charts(&actor, input.limit.unwrap_or(50), input.offset.unwrap_or(0))
+            .await?,
+    ))
+}
+#[utoipa::path(get,path="/v1/me/pulse/charts/{id}",tag="pulse",params(("id"=Uuid,Path)),responses((status=200,body=SavedPulseChart),(status=404)))]
+pub async fn get_chart(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, PulseApiError> {
+    if let Some(chart) = service.get_chart(&actor, id).await? {
+        Ok(Json(chart).into_response())
+    } else {
+        Ok(StatusCode::NOT_FOUND.into_response())
+    }
+}
+#[utoipa::path(patch,path="/v1/me/pulse/charts/{id}",tag="pulse",params(("id"=Uuid,Path)),request_body=UpdatePulseChartInput,responses((status=200,body=SavedPulseChart),(status=404)))]
+pub async fn update_chart(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdatePulseChartInput>,
+) -> Result<Response, PulseApiError> {
+    if let Some(chart) = service.update_chart(&actor, id, input).await? {
+        Ok(Json(chart).into_response())
+    } else {
+        Ok(StatusCode::NOT_FOUND.into_response())
+    }
+}
 #[utoipa::path(post,path="/v1/me/pulse/dismissals",tag="pulse",request_body=PulseDefinition,responses((status=204)))]
 pub async fn dismiss(
     State(service): State<PulseService>,
@@ -102,6 +144,25 @@ pub async fn dismiss(
 ) -> Result<StatusCode, PulseApiError> {
     service.dismiss(&actor, input).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+#[utoipa::path(get,path="/v1/me/pulse/dismissals",tag="pulse",responses((status=200,body=Vec<String>)))]
+pub async fn list_dismissals(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<Vec<String>>, PulseApiError> {
+    Ok(Json(service.list_dismissals(&actor).await?))
+}
+#[utoipa::path(delete,path="/v1/me/pulse/dismissals/{key}",tag="pulse",params(("key"=String,Path)),responses((status=204),(status=404)))]
+pub async fn undismiss(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Path(key): Path<String>,
+) -> Result<StatusCode, PulseApiError> {
+    if service.undismiss(&actor, &key).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Ok(StatusCode::NOT_FOUND)
+    }
 }
 #[utoipa::path(delete,path="/v1/me/pulse/charts/{id}",tag="pulse",params(("id"=Uuid,Path)),responses((status=204),(status=404)))]
 pub async fn delete_chart(

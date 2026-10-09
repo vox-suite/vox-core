@@ -370,14 +370,12 @@ impl EventHandler {
         &self,
         event_id: EventId,
         user_id: Uuid,
-        schema_id: Uuid,
+        _schema_id: Uuid,
         title: &str,
         data: &Value,
         occurred_at: DateTime<Utc>,
         source_kind: &str,
     ) -> Result<(), EventHandlerError> {
-        // Authorization SMS is an attempt, never proof of a debit. Enforce
-        // this independently of the model's extraction choices.
         let authorization_only = if source_kind == "sms" {
             sqlx::query_scalar::<_, bool>(
                 "SELECT COALESCE((payload->>'authorization_only')::boolean, false) FROM inbound_events WHERE id = $1",
@@ -398,27 +396,39 @@ impl EventHandler {
             );
             fields.insert("authorization_only".into(), serde_json::json!(true));
         }
-        let span_id = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO spans (user_id, title, category, source, status, start_at, data, schema_id, source_event_id) \
-             SELECT $1, $2, s.name, $3, 'done', $4, $5, s.id, $6 \
-             FROM data_schemas s WHERE s.id = $7 \
-             RETURNING spans.id",
-        )
-        .bind(user_id)
-        .bind(title)
-        .bind(source_kind)
-        .bind(occurred_at)
-        .bind(&data)
-        .bind(event_id.0)
-        .bind(schema_id)
-        .fetch_one(self.db.pool())
-        .await?;
+
+        let direction = data.get("direction").and_then(Value::as_str);
+        let event_type_val = if source_kind == "sms" {
+            match direction {
+                Some("refund") => "refund",
+                Some("transfer") => "transfer",
+                Some("due") => "bill",
+                Some("statement") => "statement",
+                Some("repayment") => "repayment",
+                _ => "transaction",
+            }
+        } else {
+            "personal"
+        };
+
+        let input = crate::domain::timeline::IngestTimelineEventInput {
+            event_type_id: None, event_type_value: Some(event_type_val.into()), group_id: None, group_value: None,
+            title: title.into(), summary: None, occurred_at, ended_at: None, time_precision: "second".into(),
+            source_timezone: None, content: data.clone(), confidence: 0.8, dedupe_key: Some(format!("inbound:{}", event_id.0)),
+            evidence: vec![crate::domain::timeline::NewEvidenceItem {
+                source_record_id: None, source_attachment_id: None, source_type: source_kind.into(),
+                source_id: Some(event_id.0.to_string()), raw_reference: None, observation_metadata: serde_json::json!({})
+            }],
+        };
+        let saved = crate::storage::timeline::TimelineRepository::new(self.db.pool().clone()).ingest_event(user_id, input).await
+            .map_err(|e| EventHandlerError::Database(sqlx::Error::Protocol(e.to_string())))?;
+        let timeline_event_id = saved.event.id;
 
         if source_kind == "sms" && !authorization_only {
-            crate::sms_ingestion::finance::dedupe_or_settle(
+            crate::finance_normalization::dedupe_or_settle(
                 self.db.pool(),
                 user_id,
-                span_id,
+                timeline_event_id,
                 &data,
             )
             .await?;

@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod greetings;
 pub mod projection;
+pub mod user_name;
 
 use crate::{
     db::Db,
@@ -34,16 +35,32 @@ impl MemoryService {
     }
 
     pub async fn get_user_name(&self, user_id: UserId) -> Result<Option<String>, sqlx::Error> {
-        if let Some(cache) = &self.cache
-            && let Ok(Some(info)) = cache.get_user(user_id).await
-            && let Some(name) = info
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-        {
-            return Ok(Some(name.to_owned()));
+        let started = std::time::Instant::now();
+        let mut cache_source = "disabled";
+        if let Some(cache) = &self.cache {
+            match cache.get_user(user_id).await {
+                Ok(Some(info)) => {
+                    if let Some(name) = info
+                        .name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                    {
+                        tracing::info!(
+                            source = "redis",
+                            redis_ms = started.elapsed().as_millis() as u64,
+                            "CORE_NAME_LOOKUP"
+                        );
+                        return Ok(Some(name.to_owned()));
+                    }
+                    cache_source = "empty";
+                }
+                Ok(None) => cache_source = "miss",
+                Err(_) => cache_source = "error",
+            }
         }
+        let redis_ms = started.elapsed().as_millis() as u64;
+        let database_started = std::time::Instant::now();
 
         let name: Option<String> =
             sqlx::query_scalar(
@@ -54,30 +71,28 @@ impl MemoryService {
                 .await?
                 .flatten();
 
-        if let Some(ref n) = name {
-            let _ = self.write_minimal_user(user_id, Some(n)).await;
+        let database_ms = database_started.elapsed().as_millis() as u64;
+        tracing::info!(
+            source = "postgres",
+            cache_source,
+            redis_ms,
+            database_ms,
+            name_known = name.is_some(),
+            "CORE_NAME_LOOKUP"
+        );
+        if let Some(ref n) = name
+            && self.cache.is_some()
+        {
+            let refresh_started = std::time::Instant::now();
+            let result = self.write_minimal_user(user_id, Some(n)).await;
+            tracing::info!(
+                refresh_ms = refresh_started.elapsed().as_millis() as u64,
+                succeeded = result.is_ok(),
+                "CORE_NAME_CACHE_REFRESH"
+            );
         }
 
         Ok(name)
-    }
-
-    pub async fn set_user_name(&self, user_id: UserId, name: &str) -> Result<(), sqlx::Error> {
-        let trimmed = name.trim();
-        sqlx::query(
-            "UPDATE users SET \
-             profile_facts = jsonb_set(profile_facts, '{name}', to_jsonb($2::text), true), \
-             display_name = $2, \
-             profile_version = profile_version + 1, \
-             updated_at = now() \
-             WHERE id = $1",
-        )
-        .bind(user_id.0)
-        .bind(trimmed)
-        .execute(self.db.pool())
-        .await?;
-
-        let _ = self.write_minimal_user(user_id, Some(trimmed)).await;
-        Ok(())
     }
 
     pub async fn find_user_by_name(&self, name: &str) -> Result<Option<UserId>, sqlx::Error> {
@@ -160,7 +175,10 @@ impl MemoryService {
         .await?;
         let devices = device_kinds(platforms.iter().map(String::as_str), has_mobile_consent);
         let info = MinimalUserInfo::new(name, channels, devices);
-        let _ = cache.put_user(user_id, &info).await;
+        cache
+            .put_user(user_id, &info)
+            .await
+            .map_err(|_| sqlx::Error::Protocol("user identity cache unavailable".into()))?;
         Ok(())
     }
 }

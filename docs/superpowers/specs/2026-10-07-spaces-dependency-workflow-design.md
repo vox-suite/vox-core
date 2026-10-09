@@ -48,7 +48,7 @@ Vision occupies column zero. Each other node has rank = one plus the maximum ran
 
 Use React Flow straight edges with left target/right source handles and small arrowheads. No curved connectors. Keep edge endpoints on card boundaries, and keep connecting paths outside unrelated card bounds through row allocation. Selected nodes emphasize their immediate prerequisites and dependents. Cyclic legacy graphs display a visible compatibility warning with a deterministic fallback; do not freeze the renderer or silently schedule them.
 
-Auto-fit once on first load, never on every update. New nodes appear without stealing focus or resetting pan/zoom. Retain zoom/fit controls, selection, the chat dock, existing detail editing, and commit controls. Creating a Space opens it as soon as the persisted vision is available, before research finishes.
+Auto-fit once on first load, never on every update. New nodes appear without stealing focus or resetting pan/zoom. Retain zoom/fit controls, selection, the bottom-center chat composer, existing detail editing, and commit controls. Creating a Space opens it as soon as the persisted vision is available, before research finishes.
 
 ## API and compatibility
 
@@ -73,3 +73,7 @@ Core: domain task types; migration; SpaceRepository transactional graph/task ope
 Desktop: dependency-layout helper and tests; workflow card component; straight edge configuration; creation selection; additive execution states and retry/stop actions; browser fixtures.
 
 Avoid unrelated edits currently present in desktop and Android working trees. Preserve older Space records and current commit semantics.
+
+## Approved chat refinement
+
+A bottom-center floating composer replaces the side chat dock. Selecting a node targets its agent and names it above the input; otherwise messages target the Space orchestrator. A compact expandable thread shows replies. Requests for new work spawn connected tasks; corrections invalidate descendants. Node context is sent as a validated node_id, never inferred only from message text.

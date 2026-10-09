@@ -3,7 +3,6 @@
 */
 pub mod auth;
 pub mod callback_page;
-pub mod charts;
 pub mod client_logs;
 pub mod collections;
 pub mod connections;
@@ -15,11 +14,15 @@ pub mod internal;
 pub mod live;
 pub mod map_scene;
 pub mod phone;
-pub mod records;
 pub mod schemas;
 pub mod sms;
 pub mod spaces;
 pub mod spans;
+pub mod tools;
 pub mod voice;
 
 pub mod pulse;
+pub mod timeline;
+pub mod updates;
+pub mod gmail;
+pub mod takeout;

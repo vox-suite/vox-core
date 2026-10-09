@@ -11,10 +11,7 @@ use crate::{
     openapi::get_openapi_spec,
     routes::{
         auth::exchange_token,
-        charts::{
-            ChartApiState, create_chart_board, get_chart_board, get_chart_board_data,
-            list_chart_boards, suggest_charts,
-        },
+
         client_logs::submit_client_logs,
         collections::{
             add_collection_span, archive_collection, create_collection, get_collection,
@@ -28,13 +25,13 @@ use crate::{
         live::{LiveApiState, live_socket},
         map_scene::get_map_scene,
         phone::{PhoneApiState, confirm_phone_verification, link_phone, start_phone_verification},
-        records::{create_record, delete_record, get_record, list_records, update_record},
         schemas::{create_schema_version, get_schema_by_name, list_schemas},
-        sms::{get_consent, grant_consent, revoke_consent, submit_batch},
+        sms::{get_consent, grant_consent, revoke_consent},
         spans::{
             create_span, delete_span, get_span, list_span_day, list_span_days, list_spans,
             update_span,
         },
+        tools::{ToolsApiState, invoke_tool, list_tools},
         voice::{VoiceSocketState, voice_socket},
     },
     state::ApiState,
@@ -81,23 +78,11 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.collections.clone());
 
-    let record_routes = Router::new()
-        .route("/v1/records", post(create_record))
-        .route("/v1/records/list", post(list_records))
-        .route("/v1/records/{id}", post(get_record))
-        .route("/v1/records/{id}/update", post(update_record))
-        .route("/v1/records/{id}/delete", post(delete_record))
-        .with_state(state.records.clone());
-
     let schema_routes = Router::new()
         .route("/v1/schemas", post(create_schema_version))
         .route("/v1/schemas/{namespace}/{name}", post(get_schema_by_name))
         .route("/v1/me/schemas", get(list_schemas))
         .with_state(state.schemas.clone());
-
-    let sms_routes = Router::new()
-        .route("/v1/sms/batches", post(submit_batch))
-        .with_state(state.sms_ingestion.clone());
 
     let refresh_cache = middleware::from_fn_with_state(
         state.memory.clone(),
@@ -180,12 +165,14 @@ pub fn build_api_router(state: ApiState) -> Router {
             stt: state.stt.clone(),
         });
 
-    let chart_api_state = ChartApiState {
-        pool: state.pool.clone(),
-        charts: state.charts.clone(),
-        schemas: state.schemas.clone(),
-        suggester: state.chart_suggester.clone(),
-    };
+    let tool_routes = Router::new()
+        .route("/v1/me/tools", get(list_tools))
+        .route("/v1/me/tools/{name}", post(invoke_tool))
+        .with_state(ToolsApiState {
+            conversations: state.legacy.conversations(),
+            export: state.tool_export.clone(),
+        });
+
     let pulse_service = vox_core::application::pulse::service::PulseService::new(
         vox_core::storage::pulse::PulseRepository::new(state.pool.clone()),
     )
@@ -197,35 +184,37 @@ pub fn build_api_router(state: ApiState) -> Router {
             get(crate::routes::pulse::list_measurements),
         )
         .route(
+            "/v1/me/pulse/discover",
+            get(crate::routes::pulse::list_measurements),
+        )
+        .route(
             "/v1/me/pulse/suggestions",
             post(crate::routes::pulse::discover),
         )
         .route("/v1/me/pulse/preview", post(crate::routes::pulse::preview))
-        .route("/v1/me/pulse/charts", post(crate::routes::pulse::save))
+        .route(
+            "/v1/me/pulse/charts",
+            get(crate::routes::pulse::list_charts).post(crate::routes::pulse::save),
+        )
         .route(
             "/v1/me/pulse/charts/{id}",
-            axum::routing::delete(crate::routes::pulse::delete_chart),
+            get(crate::routes::pulse::get_chart)
+                .patch(crate::routes::pulse::update_chart)
+                .delete(crate::routes::pulse::delete_chart),
         )
         .route(
             "/v1/me/pulse/dismissals",
-            post(crate::routes::pulse::dismiss),
+            get(crate::routes::pulse::list_dismissals).post(crate::routes::pulse::dismiss),
+        )
+        .route(
+            "/v1/me/pulse/dismissals/{key}",
+            axum::routing::delete(crate::routes::pulse::undismiss),
         )
         .with_state(pulse_service);
-    let chart_routes = Router::new()
-        .route("/v1/me/charts/suggest", post(suggest_charts))
-        .route(
-            "/v1/me/charts/boards",
-            get(list_chart_boards).post(create_chart_board),
-        )
-        .route("/v1/me/charts/boards/{id}", get(get_chart_board))
-        .route("/v1/me/charts/boards/{id}/data", get(get_chart_board_data))
-        .with_state(chart_api_state);
 
     let space_api_state = crate::routes::spaces::SpaceApiState {
         pool: state.pool.clone(),
         spaces: state.spaces.clone(),
-        schemas: state.schemas.clone(),
-        architect: state.space_architect.clone(),
         runtime: state.space_runtime.clone(),
         user_events: state.user_events.clone(),
     };
@@ -241,6 +230,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/me/spaces/{id}/chat",
             post(crate::routes::spaces::send_space_chat),
+        )
+        .route(
+            "/v1/me/spaces/{id}/stop",
+            post(crate::routes::spaces::stop_space),
+        )
+        .route(
+            "/v1/me/spaces/{id}/nodes/{node}/retry",
+            post(crate::routes::spaces::retry_space_node),
         )
         .route(
             "/v1/me/spaces/{id}/commit",
@@ -332,12 +329,82 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.connections.clone());
 
+    let timeline_routes = Router::new()
+        .route("/v1/timeline/events/counts", post(crate::routes::timeline::day_counts))
+        .route(
+            "/v1/timeline/groups",
+            get(crate::routes::timeline::list_groups),
+        )
+        .route(
+            "/v1/timeline/event-types",
+            get(crate::routes::timeline::list_event_types)
+                .post(crate::routes::timeline::create_event_type),
+        )
+        .route(
+            "/v1/timeline/events/query",
+            post(crate::routes::timeline::query_events),
+        )
+        .route(
+            "/v1/timeline/events",
+            post(crate::routes::timeline::ingest_event),
+        )
+        .with_state(state.timeline.clone());
+
+    let update_routes = Router::new()
+        .route(
+            "/v1/updates/list",
+            post(crate::routes::updates::list_updates),
+        )
+        .route(
+            "/v1/updates/{id}",
+            get(crate::routes::updates::get_update),
+        )
+        .route(
+            "/v1/updates/{id}/read",
+            post(crate::routes::updates::mark_update_read),
+        )
+        .route(
+            "/v1/updates/{id}/dismiss",
+            post(crate::routes::updates::dismiss_update),
+        )
+        .route(
+            "/v1/updates/{id}/resolve",
+            post(crate::routes::updates::resolve_update),
+        )
+        .route(
+            "/v1/updates/jobs/{id}/retry",
+            post(crate::routes::updates::retry_job),
+        )
+        .route(
+            "/v1/updates/jobs/{id}/input",
+            post(crate::routes::updates::provide_job_input),
+        )
+        .with_state(state.updates.clone());
+
+    let connector_ingest_routes = Router::new()
+        .route("/v1/connectors/gmail/device-access", post(crate::routes::gmail::device_access))
+        .route(
+            "/v1/connectors/gmail/device-historical-import",
+            post(crate::routes::gmail::device_historical_import).layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/connectors/google/takeout/upload",
+            post(crate::routes::takeout::upload_takeout)
+                .layer(axum::extract::DefaultBodyLimit::max(104_857_600)),
+        )
+        .with_state(state.pool.clone());
+
+    let gmail_pubsub_route = Router::new()
+        .route(
+            "/v1/connectors/gmail/pubsub",
+            post(crate::routes::gmail::pubsub_webhook),
+        )
+        .with_state(state.pool.clone());
+
     let protected_routes = span_routes
         .merge(integration_authorize)
         .merge(collection_routes)
-        .merge(record_routes)
         .merge(schema_routes)
-        .merge(sms_routes)
         .merge(client_log_routes)
         .merge(sms_consent_routes)
         .merge(device_routes)
@@ -348,11 +415,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(live_routes)
         .merge(map_scene_routes)
         .merge(voice_routes)
-        .merge(chart_routes)
+        .merge(tool_routes)
         .merge(pulse_routes)
         .merge(space_routes)
         .merge(web_token_routes)
         .merge(connection_routes)
+        .merge(timeline_routes)
+        .merge(update_routes)
+        .merge(connector_ingest_routes)
         .layer(middleware::from_fn_with_state(
             state.pool.clone(),
             extract_actor,
@@ -366,6 +436,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(integration_public)
         .merge(internal_routes)
         .merge(google_callback_route)
+        .merge(gmail_pubsub_route)
         .merge(protected_routes)
         .layer(crate::cors::layer())
 }

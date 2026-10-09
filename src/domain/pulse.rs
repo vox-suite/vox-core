@@ -16,6 +16,8 @@ pub enum MeasurementKind {
     EventCount,
     NumericSum,
     NumericAverage,
+    NumericMedian,
+    NumericP95,
     KnownIntervalDuration,
     RecurringCostProjection,
 }
@@ -60,6 +62,10 @@ pub struct PulseDefinition {
     pub bucket: Option<Bucket>,
     pub dimension: Option<String>,
     pub period_days: u16,
+    #[serde(default)]
+    pub offset_days: u16,
+    #[serde(default)]
+    pub top_n: Option<u16>,
     pub timezone: String,
     pub chart_type: ChartType,
 }
@@ -70,6 +76,9 @@ pub struct PulsePoint {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PulseResult {
+    #[serde(default)]
+    pub coverage: serde_json::Value,
+    pub total: Option<f64>,
     pub source: String,
     pub points: Vec<PulsePoint>,
     pub unit: String,
@@ -117,7 +126,6 @@ pub struct DiscoveryResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CanvasResponse {
     pub charts: Vec<SavedPulseChart>,
-    pub legacy_boards: Vec<serde_json::Value>,
     pub next_cursor: Option<Uuid>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -139,4 +147,12 @@ pub struct PulseCandidate {
     pub title: String,
     pub reason: String,
     pub definition: PulseDefinition,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UpdatePulseChartInput {
+    pub title: Option<String>,
+    pub definition: Option<PulseDefinition>,
+    pub sort_order: Option<i32>,
+    pub is_pinned: Option<bool>,
 }

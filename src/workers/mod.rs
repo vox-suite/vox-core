@@ -10,7 +10,6 @@ use crate::{
     events::{EventId, handler::EventHandler},
     jobs::JobKind,
     schedules::{ScheduleId, handler::ScheduleHandler, ticker::ScheduleTicker},
-    sms_ingestion::retention::SmsRetentionSweeper,
     summaries::handler::SummaryHandler,
 };
 use chrono::{Duration, Utc};
@@ -25,7 +24,6 @@ pub struct Worker {
     ticker: Option<ScheduleTicker>,
     summaries: Option<SummaryHandler>,
     wa_sweeper: Option<WhatsAppSweeper>,
-    sms_retention: Option<SmsRetentionSweeper>,
     space_runtime: Option<std::sync::Arc<crate::agents::space_runtime::SpaceRuntime>>,
     worker_id: String,
 }
@@ -39,7 +37,6 @@ impl Worker {
             ticker: None,
             summaries: None,
             wa_sweeper: None,
-            sms_retention: None,
             space_runtime: None,
             worker_id,
         }
@@ -53,7 +50,6 @@ impl Worker {
         ticker: ScheduleTicker,
         summaries: SummaryHandler,
         wa_sweeper: WhatsAppSweeper,
-        sms_retention: SmsRetentionSweeper,
         worker_id: String,
     ) -> Self {
         Self {
@@ -63,7 +59,6 @@ impl Worker {
             ticker: Some(ticker),
             summaries: Some(summaries),
             wa_sweeper: Some(wa_sweeper),
-            sms_retention: Some(sms_retention),
             space_runtime: None,
             worker_id,
         }
@@ -249,11 +244,6 @@ impl Worker {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(count, "requeued failed events"),
                 Err(error) => tracing::warn!(%error, "event requeue sweeper failed"),
-            }
-            if let Some(sweeper) = &self.sms_retention
-                && let Err(error) = sweeper.purge_expired().await
-            {
-                tracing::warn!(%error, "sms retention sweeper failed");
             }
         }
     }

@@ -729,6 +729,187 @@
           "computed_at"
         ],
         "type": "object"
+      },
+      "PubSubPushMessage": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "object",
+            "required": [
+              "data",
+              "messageId"
+            ],
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "messageId": {
+                "type": "string"
+              },
+              "publishTime": {
+                "type": "string"
+              }
+            }
+          },
+          "subscription": {
+            "type": "string"
+          }
+        }
+      },
+      "DeviceHistoricalAttachmentItem": {
+        "type": "object",
+        "required": [
+          "filename",
+          "mime_type",
+          "content_base64"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "content_base64": {
+            "type": "string"
+          }
+        }
+      },
+      "ProposedEventItem": {
+        "type": "object",
+        "required": [
+          "event_type_value",
+          "group_value",
+          "title",
+          "occurred_at",
+          "content"
+        ],
+        "properties": {
+          "event_type_value": {
+            "type": "string"
+          },
+          "group_value": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "content": {
+            "type": "object"
+          }
+        }
+      },
+      "DeviceHistoricalImportItem": {
+        "type": "object",
+        "required": [
+          "message_id",
+          "user_reviewed",
+          "uncertainty"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "internal_date": {
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "body_text": {
+            "type": "string"
+          },
+          "user_reviewed": {
+            "type": "boolean"
+          },
+          "uncertainty": {
+            "type": "boolean"
+          },
+          "proposed_event": {
+            "$ref": "#/components/schemas/ProposedEventItem"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceHistoricalAttachmentItem"
+            },
+            "type": "array"
+          }
+        }
+      },
+      "DeviceHistoricalImportRequest": {
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceHistoricalImportItem"
+            },
+            "type": "array"
+          }
+        }
+      },
+      "DeviceHistoricalImportResponse": {
+        "type": "object",
+        "required": [
+          "imported_records",
+          "events_created",
+          "attachments_queued",
+          "uncertain_count"
+        ],
+        "properties": {
+          "imported_records": {
+            "type": "integer"
+          },
+          "events_created": {
+            "type": "integer"
+          },
+          "attachments_queued": {
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "TakeoutUploadResponse": {
+        "type": "object",
+        "required": [
+          "youtube_records_imported",
+          "maps_records_imported",
+          "total_events_created"
+        ],
+        "properties": {
+          "youtube_records_imported": {
+            "type": "integer"
+          },
+          "maps_records_imported": {
+            "type": "integer"
+          },
+          "total_events_created": {
+            "type": "integer"
+          }
+        }
       }
     }
   },
@@ -1827,6 +2008,103 @@
         },
         "tags": [
           "pulse"
+        ]
+      }
+    },
+    "/v1/connectors/gmail/pubsub": {
+      "post": {
+        "operationId": "gmail_pubsub_webhook",
+        "summary": "Pub/Sub webhook for Gmail watch notifications",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PubSubPushMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Notification acknowledged"
+          }
+        },
+        "tags": [
+          "connectors"
+        ]
+      }
+    },
+    "/v1/connectors/gmail/device-historical-import": {
+      "post": {
+        "operationId": "gmail_device_historical_import",
+        "summary": "Import client-reviewed historical Gmail messages",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceHistoricalImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Historical messages imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceHistoricalImportResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "connectors"
+        ]
+      }
+    },
+    "/v1/connectors/google/takeout/upload": {
+      "post": {
+        "operationId": "upload_takeout",
+        "summary": "Upload manual Google Takeout ZIP archive or JSON file",
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Takeout data imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoutUploadResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "connectors"
         ]
       }
     }

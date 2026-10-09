@@ -4,7 +4,7 @@ use crate::{
         identity::Actor,
         spans::{NewSpan, SpanQuery},
     },
-    storage::charts::ChartRepository,
+    storage::pulse::PulseRepository,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
@@ -51,7 +51,7 @@ pub struct IntegrationService {
     pub pool: PgPool,
     spans: SpanService,
     collections: CollectionService,
-    charts: ChartRepository,
+    charts: PulseRepository,
     client_id: String,
     redirect_uri: Option<String>,
 }
@@ -62,7 +62,7 @@ pub struct Authorization {
     pub state: String,
     pub code_challenge: String,
     pub collection_ids: Vec<Uuid>,
-    pub board_ids: Vec<Uuid>,
+    pub chart_ids: Vec<Uuid>,
     pub span_from: Option<DateTime<Utc>>,
     pub span_to: Option<DateTime<Utc>>,
     pub allow_create_plans: bool,
@@ -72,7 +72,7 @@ pub struct Grant {
     pub id: Uuid,
     pub user_id: Uuid,
     pub collection_ids: Vec<Uuid>,
-    pub board_ids: Vec<Uuid>,
+    pub chart_ids: Vec<Uuid>,
     pub span_from: Option<DateTime<Utc>>,
     pub span_to: Option<DateTime<Utc>>,
     pub allow_create_plans: bool,
@@ -110,7 +110,7 @@ impl IntegrationService {
         pool: PgPool,
         spans: SpanService,
         collections: CollectionService,
-        charts: ChartRepository,
+        charts: PulseRepository,
     ) -> Self {
         Self {
             pool,
@@ -156,11 +156,11 @@ impl IntegrationService {
                 .ok()
                 != Some(32)
             || a.collection_ids.len() > 30
-            || a.board_ids.len() > 10
+            || a.chart_ids.len() > 10
         {
             return Err(Error::Invalid);
         }
-        if (!a.collection_ids.is_empty() || !a.board_ids.is_empty()) && a.span_from.is_none() {
+        if (!a.collection_ids.is_empty() || !a.chart_ids.is_empty()) && a.span_from.is_none() {
             return Err(Error::Invalid);
         }
         for id in &a.collection_ids {
@@ -168,13 +168,13 @@ impl IntegrationService {
                 return Err(Error::Forbidden);
             }
         }
-        for id in &a.board_ids {
-            if self.charts.get_board(actor.user_id, *id).await?.is_none() {
+        for id in &a.chart_ids {
+            if self.charts.get_chart(actor.user_id, *id).await?.is_none() {
                 return Err(Error::Forbidden);
             }
         }
         let mut tx = self.pool.begin().await?;
-        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_grants(user_id,client_id,collection_ids,board_ids,span_from,span_to,allow_create_plans) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id").bind(actor.user_id).bind(&self.client_id).bind(a.collection_ids).bind(a.board_ids).bind(a.span_from).bind(a.span_to).bind(a.allow_create_plans).fetch_one(&mut *tx).await?;
+        let id=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_grants(user_id,client_id,collection_ids,chart_ids,span_from,span_to,allow_create_plans) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id").bind(actor.user_id).bind(&self.client_id).bind(a.collection_ids).bind(a.chart_ids).bind(a.span_from).bind(a.span_to).bind(a.allow_create_plans).fetch_one(&mut *tx).await?;
         let code = secret();
         sqlx::query("INSERT INTO integration_codes(code_hash,grant_id,redirect_uri,code_challenge,expires_at) VALUES($1,$2,$3,$4,now()+interval '5 minutes')").bind(hash(&code)).bind(id).bind(&a.redirect_uri).bind(a.code_challenge).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -235,7 +235,7 @@ impl IntegrationService {
             &self.client_id,
             self.redirect_uri.as_deref().ok_or(Error::Unavailable)?,
         )?;
-        sqlx::query_as::<_,Grant>("SELECT g.id,g.user_id,g.collection_ids,g.board_ids,g.span_from,g.span_to,g.allow_create_plans FROM integration_grants g JOIN integration_tokens t ON g.id=t.grant_id WHERE t.access_hash=$1 AND t.access_expires_at>now() AND t.rotated_at IS NULL AND g.revoked_at IS NULL AND g.expires_at>now() AND g.client_id=$2").bind(hash(token)).bind(&self.client_id).fetch_optional(&self.pool).await?.ok_or(Error::Forbidden)
+        sqlx::query_as::<_,Grant>("SELECT g.id,g.user_id,g.collection_ids,g.chart_ids,g.span_from,g.span_to,g.allow_create_plans FROM integration_grants g JOIN integration_tokens t ON g.id=t.grant_id WHERE t.access_hash=$1 AND t.access_expires_at>now() AND t.rotated_at IS NULL AND g.revoked_at IS NULL AND g.expires_at>now() AND g.client_id=$2").bind(hash(token)).bind(&self.client_id).fetch_optional(&self.pool).await?.ok_or(Error::Forbidden)
     }
     pub async fn revoke(&self, g: &Grant) -> Result<(), Error> {
         sqlx::query("UPDATE integration_grants SET revoked_at=now() WHERE id=$1 AND user_id=$2")
@@ -285,62 +285,25 @@ impl IntegrationService {
                 s.parent_id = None;
             }
         }
-        for id in &g.board_ids {
-            if let Some(b) = self.charts.get_board(g.user_id, *id).await? {
-                let charts = self.charts.list_charts_for_board(*id).await?;
-                let mut entries = Vec::new();
-                for chart in charts.into_iter().take(20) {
-                    let data = self.chart_data(g, &chart).await?;
-                    entries
-                        .push(serde_json::json!({"id":chart.id,"title":chart.title,"data":data}));
-                }
-                pulse.push(serde_json::json!({"id":b.id,"name":b.name,"charts":entries}));
+        for id in &g.chart_ids {
+            if let Some(chart) = self.charts.get_chart(g.user_id,*id).await? {
+                let data = self.chart_data(g,&chart).await?;
+                pulse.push(serde_json::json!({"id":chart.id,"title":chart.title,"definition":chart.definition,"data":data}));
             }
         }
         Ok(serde_json::json!({"collections":collections,"spans":spans,"pulse":pulse}))
     }
-    async fn chart_data(
-        &self,
-        g: &Grant,
-        chart: &crate::domain::charts::Chart,
-    ) -> Result<serde_json::Value, Error> {
-        use crate::domain::charts::{Aggregation, GroupBy, QuerySpec};
-        let spec: QuerySpec =
-            serde_json::from_value(chart.query_spec.clone()).map_err(|_| Error::Invalid)?;
-        let (Some(from), Some(to)) = (g.span_from, g.span_to) else {
-            return Ok(serde_json::json!([]));
-        };
-        let aggregation = match spec.aggregation {
-            Aggregation::Sum => "sum(value)",
-            Aggregation::Count => "count(value)",
-            Aggregation::Avg => "avg(value)",
-            Aggregation::Min => "min(value)",
-            Aggregation::Max => "max(value)",
-        };
-        let label = match &spec.group_by {
-            GroupBy::Day => "to_char(date_trunc('day',at),'YYYY-MM-DD')",
-            GroupBy::Week => "to_char(date_trunc('week',at),'YYYY-MM-DD')",
-            GroupBy::Month => "to_char(date_trunc('month',at),'YYYY-MM')",
-            GroupBy::Field(_) => "coalesce(nullif(data->>$6,''),'unknown')",
-        };
-        let sql = format!(
-            "WITH values_in_scope AS (SELECT data,coalesce(start_at,created_at) at,CASE WHEN data->>$3 ~ '^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$' THEN (data->>$3)::numeric END value FROM spans WHERE user_id=$1 AND schema_id=ANY($2) AND coalesce(start_at,created_at)>=$4 AND coalesce(start_at,created_at)<$5 AND ($6::text IS NULL OR true)) SELECT {label} label,coalesce({aggregation},0)::float8 value FROM values_in_scope GROUP BY 1 ORDER BY 1 LIMIT 100"
-        );
-        let field = if let GroupBy::Field(f) = spec.group_by {
-            Some(f)
-        } else {
-            None
-        };
-        let rows = sqlx::query(&sql)
-            .bind(g.user_id)
-            .bind(&chart.schema_ids)
-            .bind(spec.metric_field)
-            .bind(from)
-            .bind(to)
-            .bind(field)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(serde_json::Value::Array(rows.iter().map(|r|serde_json::json!({"label":r.get::<String,_>("label"),"value":r.get::<f64,_>("value")})).collect()))
+    async fn chart_data(&self,g:&Grant,chart:&crate::domain::pulse::SavedPulseChart) -> Result<serde_json::Value,Error> {
+        use chrono::TimeZone;
+        let timezone=chart.definition.timezone.parse::<chrono_tz::Tz>().map_err(|_| Error::Invalid)?;
+        let now=chrono::Utc::now();
+        let last=now.with_timezone(&timezone).date_naive()-chrono::Duration::days(i64::from(chart.definition.offset_days));
+        let first=last-chrono::Duration::days(i64::from(chart.definition.period_days)-1);
+        let start=timezone.from_local_datetime(&first.and_hms_opt(0,0,0).ok_or(Error::Invalid)?).earliest().ok_or(Error::Invalid)?.with_timezone(&chrono::Utc);
+        let end=if chart.definition.offset_days==0 {now} else {timezone.from_local_datetime(&(last+chrono::Duration::days(1)).and_hms_opt(0,0,0).ok_or(Error::Invalid)?).earliest().ok_or(Error::Invalid)?.with_timezone(&chrono::Utc)};
+        if g.span_from.is_none_or(|from| from>start) || g.span_to.is_none_or(|to| to<end) {return Err(Error::Forbidden);}
+        let result=crate::application::pulse::service::PulseService::new(self.charts.clone()).preview(&Actor::user(g.user_id),chart.definition.clone()).await.map_err(|_| Error::Invalid)?;
+        serde_json::to_value(result).map_err(|_| Error::Invalid)
     }
     pub async fn plan(&self, g: &Grant, p: Plan) -> Result<Uuid, Error> {
         if !g.allow_create_plans

@@ -1,8 +1,6 @@
-/**
-* Task worker dispatch loops, job claiming, and execution runtime.
-*/
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use sqlx::Row;
 use uuid::Uuid;
 use vox_core::{
     agents::{
@@ -19,7 +17,6 @@ use vox_core::{
     },
     outbound::OutboundCallService,
     schedules::{handler::ScheduleHandler, ticker::ScheduleTicker},
-    sms_ingestion::retention::SmsRetentionSweeper,
     status::{EncryptedWebhookSecretStore, StatusService},
     summaries::handler::SummaryHandler,
     workers::{Worker, task_executor::TaskExecutorHandler, whatsapp_sweeper::WhatsAppSweeper},
@@ -55,6 +52,112 @@ pub async fn run_worker(
                         _ = connections_cancel.cancelled() => break,
                         result = fresh_connections.run_due_syncs() => {
                             if result.is_err() { tracing::warn!("Connections background sync unavailable"); }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let gmail_pool = db.pool().clone();
+    let gmail_cancel = cancellation.clone();
+    let gmail_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
+        loop {
+            tokio::select! {
+                _ = gmail_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    tokio::select! {
+                        _ = gmail_cancel.cancelled() => break,
+                        _ = vox_core::gmail_sync::reconcile_all_gmail_connections(&gmail_pool) => {}
+                    }
+                }
+            }
+        }
+    });
+    let pulse_pool = db.pool().clone();
+    let pulse_cancel = cancellation.clone();
+    let pulse_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = pulse_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    let _ = vox_core::storage::pulse::PulseRepository::process_pending_pulse_invalidations(&pulse_pool).await;
+                }
+            }
+        }
+    });
+    let retention_sweeper = vox_core::attachments::AttachmentRetentionSweeper::new(db.pool().clone());
+    let retention_cancel = cancellation.clone();
+    let retention_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                _ = retention_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    let _ = retention_sweeper.sweep_expired().await;
+                }
+            }
+        }
+    });
+    let key = vox_core::attachments::attachment_master_key()?;
+    let att_pool = db.pool().clone();
+    let att_cancel = cancellation.clone();
+    let att_handle = tokio::spawn(async move {
+        let att_worker_id = Uuid::new_v4().to_string();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = att_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    let claim_sql = "UPDATE jobs SET \
+                        state = 'running', \
+                        lease_owner = $1, \
+                        lease_expires_at = now() + interval '5 minutes', \
+                        lease_generation = lease_generation + 1 \
+                     WHERE id = ( \
+                         SELECT j.id FROM jobs j \
+                         JOIN source_attachments a ON a.id = j.payload_reference_id AND a.user_id = j.user_id \
+                         WHERE a.parse_state IN ('pending','processing') AND a.raw_deleted_at IS NULL \
+                           AND j.kind='process_attachment' AND j.wait_reason IS NULL AND j.available_at<=now() AND (j.state='pending' OR (j.state='running' AND j.lease_expires_at<now())) \
+                           AND (j.lease_expires_at IS NULL OR j.lease_expires_at < now()) \
+                         LIMIT 1 \
+                         FOR UPDATE OF j SKIP LOCKED \
+                     ) \
+                     RETURNING id, user_id, payload_reference_id";
+
+                    let claimed = sqlx::query(claim_sql)
+                        .bind(&att_worker_id)
+                        .fetch_optional(&att_pool)
+                        .await;
+
+                    if let Ok(Some(row)) = claimed {
+                        let j_id: Uuid = row.get("id");
+                        let u_id: Uuid = row.get("user_id");
+                        let att_id: Option<Uuid> = row.get("payload_reference_id");
+                        if let Some(a_id) = att_id {
+                            let attempt: Result<Uuid,sqlx::Error> = sqlx::query_scalar("INSERT INTO job_attempts(job_id,attempt_number,lease_generation,executor_kind) SELECT id,COALESCE((SELECT max(attempt_number) FROM job_attempts WHERE job_id=$1),0)+1,lease_generation,'server' FROM jobs WHERE id=$1 AND lease_owner=$2 RETURNING id")
+                                .bind(j_id).bind(&att_worker_id).fetch_one(&att_pool).await;
+                            let Ok(attempt_id) = attempt else {
+                                tracing::error!(job_id=%j_id,"cannot record attachment attempt");
+                                continue;
+                            };
+                            let result = vox_core::attachments::process_attachment(&att_pool, &key, u_id, a_id, j_id).await;
+                            let (outcome,error_code) = match &result {
+                                Ok(vox_core::attachments::AttachmentOutcome::Success) => ("succeeded",None),
+                                Ok(vox_core::attachments::AttachmentOutcome::WaitingUser(_)) => ("failed",Some("user_input_required")),
+                                Ok(vox_core::attachments::AttachmentOutcome::Failed(_)) => ("failed",Some("attachment_processing_failed")),
+                                Err(_) => ("failed",Some("attachment_worker_failure")),
+                            };
+                            if let Err(error) = sqlx::query("UPDATE job_attempts SET finished_at=now(),heartbeat_at=now(),outcome=$1,error_details=$2 WHERE id=$3")
+                                .bind(outcome).bind(error_code).bind(attempt_id).execute(&att_pool).await {
+                                tracing::error!(job_id=%j_id,%error,"cannot finalize attachment attempt");
+                            }
+                            if let Err(error) = result {
+                                tracing::error!(job_id=%j_id, %error, "attachment worker failed");
+                                let _ = sqlx::query("UPDATE jobs SET state=CASE WHEN attempt_count+1>=max_attempts THEN 'failed' ELSE 'pending' END,attempt_count=attempt_count+1,lease_owner=NULL,lease_expires_at=NULL,available_at=now()+interval '30 seconds',last_error_code='attachment_worker_failure' WHERE id=$1 AND lease_owner=$2")
+                                    .bind(j_id).bind(&att_worker_id).execute(&att_pool).await;
+                            }
                         }
                     }
                 }
@@ -128,7 +231,6 @@ pub async fn run_worker(
     let summaries = SummaryHandler::with_jev(db.clone(), summarizer, jev_client.clone());
     let task_executor = TaskExecutorHandler::new(db.clone(), &config);
     let wa_sweeper = WhatsAppSweeper::new(db.clone());
-    let sms_retention = SmsRetentionSweeper::new(db.clone());
 
     let worker_id = Uuid::new_v4().to_string();
     let assigned_cancellation = cancellation.clone();
@@ -178,7 +280,6 @@ pub async fn run_worker(
         ticker,
         summaries,
         wa_sweeper,
-        sms_retention,
         worker_id,
     );
     worker = worker.with_space_runtime(space_runtime);
@@ -189,6 +290,10 @@ pub async fn run_worker(
     cancellation.cancel();
     assigned_handle.await?;
     connections_handle.await?;
+    retention_handle.await?;
+    att_handle.await?;
+    gmail_handle.await?;
+    pulse_handle.await?;
     if let Some(handle) = status_handle {
         handle.await?;
     }

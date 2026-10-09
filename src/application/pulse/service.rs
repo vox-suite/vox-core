@@ -37,11 +37,12 @@ pub struct PulseService {
 }
 impl PulseService {
     pub fn new(repo: PulseRepository) -> Self {
+        static GATE: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
         Self {
             repo,
             suggester: None,
             locks: Arc::default(),
-            gate: Arc::new(tokio::sync::Semaphore::new(2)),
+            gate: GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2))).clone(),
         }
     }
     pub fn with_suggester(mut self, suggester: Arc<dyn SuggestingCharts>) -> Self {
@@ -177,7 +178,7 @@ impl PulseService {
         .map_err(|_| PulseError::Busy)??;
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let mut stable = meta.clone();
-        stable.revision = "stable".into();
+        stable.revision = meta.revision.clone();
         let key = Self::key(actor, &stable, &format!("discovery:{}", input.timezone));
         if let Some(value) = meta.caches.get(&key)
             && (!input.refresh
@@ -298,7 +299,7 @@ impl PulseService {
                 actor.user_id,
                 &key,
                 json!(response),
-                if llm_ok { 31_536_000 } else { 60 },
+                if llm_ok { 900 } else { 60 },
             )
             .await?;
         Ok(response)
@@ -351,6 +352,47 @@ impl PulseService {
                 other => PulseError::Database(other),
             })
     }
+    pub async fn list_charts(
+        &self,
+        actor: &Actor,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SavedPulseChart>, PulseError> {
+        Ok(self.repo.list_charts(actor.user_id, limit, offset).await?)
+    }
+    pub async fn get_chart(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+    ) -> Result<Option<SavedPulseChart>, PulseError> {
+        Ok(self.repo.get_chart(actor.user_id, id).await?)
+    }
+    pub async fn update_chart(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        input: UpdatePulseChartInput,
+    ) -> Result<Option<SavedPulseChart>, PulseError> {
+        let title = input.title.as_deref();
+        let chart_type = input.definition.as_ref().map(|d| d.chart_type.as_str());
+        let def_val = if let Some(ref d) = input.definition {
+            Some(serde_json::to_value(d).map_err(|e| PulseError::Invalid(e.to_string()))?)
+        } else {
+            None
+        };
+        Ok(self
+            .repo
+            .update_chart(
+                actor.user_id,
+                id,
+                title,
+                chart_type,
+                def_val.as_ref(),
+                input.sort_order,
+                input.is_pinned,
+            )
+            .await?)
+    }
     pub async fn delete_chart(&self, actor: &Actor, id: uuid::Uuid) -> Result<bool, PulseError> {
         Ok(self.repo.delete_chart(actor.user_id, id).await?)
     }
@@ -367,6 +409,12 @@ impl PulseService {
             .dismiss(actor.user_id, &definition_hash(&definition))
             .await?;
         Ok(())
+    }
+    pub async fn list_dismissals(&self, actor: &Actor) -> Result<Vec<String>, PulseError> {
+        Ok(self.repo.list_dismissals(actor.user_id).await?)
+    }
+    pub async fn undismiss(&self, actor: &Actor, key: &str) -> Result<bool, PulseError> {
+        Ok(self.repo.undismiss(actor.user_id, key).await?)
     }
     pub async fn canvas(
         &self,
@@ -385,7 +433,6 @@ impl PulseService {
         if meta.charts.is_empty() {
             return Ok(CanvasResponse {
                 charts: vec![],
-                legacy_boards: meta.legacy_boards,
                 next_cursor: None,
             });
         }
@@ -401,6 +448,8 @@ impl PulseService {
                 }
                 Err(message) => {
                     chart.result = Some(PulseResult {
+                        coverage: serde_json::json!({"state":"unavailable"}),
+                        total: None,
                         source: "Source unavailable".into(),
                         points: vec![],
                         unit: String::new(),
@@ -423,7 +472,6 @@ impl PulseService {
         }
         Ok(CanvasResponse {
             charts: meta.charts,
-            legacy_boards: meta.legacy_boards,
             next_cursor: meta.next_cursor,
         })
     }

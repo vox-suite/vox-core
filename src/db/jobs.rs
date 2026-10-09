@@ -64,7 +64,7 @@ impl JobRepository {
         let rows = sqlx::query(
             "WITH candidates AS (\
                 SELECT id FROM jobs \
-                WHERE wait_reason IS NULL \
+                WHERE wait_reason IS NULL AND kind <> 'process_attachment' \
                   AND NOT (kind = 'execute_span' AND EXISTS (\
                       SELECT 1 FROM spans WHERE spans.id=jobs.span_id AND spans.execution_type='interactive')) \
                   AND ((state = 'pending' AND available_at <= $1) \

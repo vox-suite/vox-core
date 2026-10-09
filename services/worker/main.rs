@@ -11,6 +11,7 @@ use vox_core::config::Config;
 #[tokio::main]
 async fn main() {
     let _traces = vox_core::telemetry::init("vox-core-worker");
+    vox_core::storage::object_storage::validate_configuration().expect("Vox shared storage configuration is invalid");
     let config = Config::from_env().expect("Vox Core worker configuration is invalid");
 
     let cancellation = CancellationToken::new();

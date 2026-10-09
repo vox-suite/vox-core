@@ -37,6 +37,7 @@ pub struct MinimalUserInfo {
 
 impl MinimalUserInfo {
     pub fn new(name: Option<String>, channels: Vec<MinimalChannel>, devices: Vec<String>) -> Self {
+        let name = name.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
         let phone = channels
             .iter()
             .find(|c| c.channel.eq_ignore_ascii_case("phone"))
@@ -168,11 +169,15 @@ impl ContextCache for RedisContextCache {
 
     async fn put_user(&self, user_id: UserId, info: &MinimalUserInfo) -> Result<(), CacheError> {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
+        if info.name.is_none() && info.phone.is_none() && info.devices.is_empty() && info.connections.is_empty() && info.channels.is_empty() {
+            connection.del::<_, ()>(redis_keys::user(user_id)).await?;
+            return Ok(());
+        }
         let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
         let mut pipeline = redis::pipe();
         pipeline
             .atomic()
-            .set(redis_keys::user(user_id), payload)
+            .set_ex(redis_keys::user(user_id), payload, 86400)
             .ignore();
         for channel in &info.channels {
             pipeline

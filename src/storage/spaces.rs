@@ -48,6 +48,33 @@ impl SpaceRepository {
         Ok(map_space_row(row))
     }
 
+    pub async fn create_workflow_space(
+        &self,
+        user_id: Uuid,
+        title: &str,
+        intent: &str,
+    ) -> Result<Space, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let query = format!(
+            "INSERT INTO spaces(user_id,title,intent,state,agent_spec) VALUES($1,$2,$3,'ideating',$4) RETURNING {SPACE_COLUMNS}"
+        );
+        let row = sqlx::query(&query)
+            .bind(user_id)
+            .bind(title)
+            .bind(intent)
+            .bind(serde_json::json!({"workflow_version":2}))
+            .fetch_one(&mut *tx)
+            .await?;
+        let space = map_space_row(row);
+        sqlx::query("INSERT INTO space_nodes(space_id,kind,title,body,state) VALUES($1,'goal','Your vision',$2,'done')").bind(space.id).bind(intent).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO jobs(kind,payload_reference_id) VALUES('run_space',$1)")
+            .bind(space.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(space)
+    }
+
     pub async fn list_spaces(&self, user_id: Uuid) -> Result<Vec<Space>, sqlx::Error> {
         let query = format!(
             r#"
@@ -413,6 +440,17 @@ impl SpaceRepository {
         from_node: Uuid,
         to_node: Uuid,
     ) -> Result<SpaceEdge, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM spaces WHERE id=$1 FOR UPDATE")
+            .bind(space_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let cycle: bool = sqlx::query_scalar("WITH RECURSIVE descendants(id) AS (SELECT $3::uuid UNION SELECT e.to_node FROM space_edges e JOIN descendants d ON e.from_node=d.id WHERE e.space_id=$1) SELECT EXISTS(SELECT 1 FROM descendants WHERE id=$2)").bind(space_id).bind(from_node).bind(to_node).fetch_one(&mut *tx).await?;
+        if cycle {
+            return Err(sqlx::Error::Protocol(
+                "Edges must preserve the dependency hierarchy".into(),
+            ));
+        }
         let row = sqlx::query(
             r#"
             INSERT INTO space_edges (space_id, from_node, to_node)
@@ -427,9 +465,10 @@ impl SpaceRepository {
         .bind(space_id)
         .bind(from_node)
         .bind(to_node)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(map_edge_row(row))
     }
 

@@ -177,7 +177,7 @@ fn identity_from_payload(
     })
 }
 
-fn split_jwt(token: &str) -> Result<(&str, &str, &str), StatusCode> {
+pub(crate) fn split_jwt(token: &str) -> Result<(&str, &str, &str), StatusCode> {
     let mut parts = token.split('.');
     let header = parts.next().ok_or(StatusCode::UNAUTHORIZED)?;
     let payload = parts.next().ok_or(StatusCode::UNAUTHORIZED)?;
@@ -188,7 +188,7 @@ fn split_jwt(token: &str) -> Result<(&str, &str, &str), StatusCode> {
     Ok((header, payload, signature))
 }
 
-fn decode_part(value: &str) -> Result<Vec<u8>, StatusCode> {
+pub(crate) fn decode_part(value: &str) -> Result<Vec<u8>, StatusCode> {
     URL_SAFE_NO_PAD
         .decode(value)
         .or_else(|_| URL_SAFE.decode(value))
@@ -374,12 +374,12 @@ async fn verify_google_token(token: &str) -> Result<VerifiedIdentity, StatusCode
     Ok(identity)
 }
 
-struct GoogleKey {
-    n: String,
-    e: String,
+pub(crate) struct GoogleKey {
+    pub(crate) n: String,
+    pub(crate) e: String,
 }
 
-async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
+pub(crate) async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
     let find = |keys: &[serde_json::Value]| {
         keys.iter()
             .find(|key| key.get("kid").and_then(|value| value.as_str()) == Some(kid))
@@ -436,7 +436,7 @@ async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
     })
 }
 
-fn rsa_sha256_valid(key: &GoogleKey, message: &str, signature: &str) -> Result<bool, StatusCode> {
+pub(crate) fn rsa_sha256_valid(key: &GoogleKey, message: &str, signature: &str) -> Result<bool, StatusCode> {
     use rsa::pkcs1v15::{Signature, VerifyingKey};
     use rsa::signature::Verifier;
     use rsa::{BigUint, RsaPublicKey};

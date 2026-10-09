@@ -13,6 +13,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
+use tracing::Instrument;
 
 #[derive(Deserialize)]
 pub struct AuthenticatedRespondRequest {
@@ -58,8 +59,11 @@ pub async fn respond_stream(
     headers: HeaderMap,
     Json(request): Json<AuthenticatedRespondRequest>,
 ) -> Response {
+    let span = tracing::info_span!("voice_core_request", conversation_id = %request.conversation.external_conversation_id, turn_id = request.conversation.turn_id.as_deref(), revision = request.conversation.revision, channel = %request.conversation.identity.channel);
     let started = std::time::Instant::now();
-    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context).await
+    let Some(context) = context(state.host_trust.as_deref(), &headers, request.host_context)
+        .instrument(span.clone())
+        .await
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -72,7 +76,11 @@ pub async fn respond_stream(
     let channel = request.conversation.identity.channel.clone();
     let prompt_chars = request.conversation.text.len();
     let service_started = std::time::Instant::now();
-    match service.respond_stream(context, request.conversation).await {
+    match service
+        .respond_stream(context, request.conversation)
+        .instrument(span.clone())
+        .await
+    {
         Ok(stream) => {
             let service_ms = service_started.elapsed().as_millis() as u64;
             let preparation_ms = started.elapsed().as_millis() as u64;
@@ -127,7 +135,34 @@ pub async fn respond_stream(
                 );
                 Ok::<_, std::convert::Infallible>("data: [DONE]\n\n".to_string())
             });
-            let full_stream = sse_stream.chain(done_stream);
+            let report = CoreStreamReport {
+                started,
+                span: span.clone(),
+                outcome: "cancelled",
+            };
+            let full_stream = futures_util::stream::unfold(
+                (Box::pin(sse_stream.chain(done_stream)), report),
+                |(mut stream, mut report)| async move {
+                    let item = stream.next().instrument(report.span.clone()).await;
+                    match item {
+                        Some(item) => {
+                            if let Ok(data) = &item {
+                                if data.starts_with("event: error") {
+                                    report.outcome = "failed";
+                                }
+                                if data == "data: [DONE]\n\n" && report.outcome != "failed" {
+                                    report.outcome = "completed";
+                                }
+                            }
+                            Some((item, (stream, report)))
+                        }
+                        None => {
+                            drop(report);
+                            None
+                        }
+                    }
+                },
+            );
 
             axum::response::Response::builder()
                 .status(StatusCode::OK)
@@ -166,5 +201,21 @@ pub async fn complete(
         Ok(()) => StatusCode::OK.into_response(),
         Err(ConversationError::Invalid) => StatusCode::BAD_REQUEST.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+struct CoreStreamReport {
+    started: std::time::Instant,
+    span: tracing::Span,
+    outcome: &'static str,
+}
+impl Drop for CoreStreamReport {
+    fn drop(&mut self) {
+        let _entered = self.span.enter();
+        tracing::info!(
+            outcome = self.outcome,
+            stream_total_ms = self.started.elapsed().as_millis() as u64,
+            "CORE_STREAM_LIFECYCLE"
+        );
     }
 }

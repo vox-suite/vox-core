@@ -1,169 +1,151 @@
-use crate::{
-    domain::pulse::*,
-    storage::pulse::{ACTION, ACTUAL_SPANS, ALLOWED_SPANS, FLAT_DATA, TIMING},
-};
-use chrono::{Datelike, Duration, TimeZone, Utc};
+use crate::domain::pulse::*;
+use chrono::{Duration, Utc};
 use serde_json::json;
-use sqlx::PgPool;
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub async fn execute(
-    pool: &PgPool,
-    user: Uuid,
-    inputs: &[(PulseDefinition, Measurement)],
-) -> Result<Vec<PulseResult>, sqlx::Error> {
+pub async fn execute(pool: &PgPool, user: Uuid, inputs: &[(PulseDefinition, Measurement)]) -> Result<Vec<PulseResult>, sqlx::Error> {
     execute_inner(pool, user, inputs, None).await
 }
 
-pub async fn execute_cached(
-    pool: &PgPool,
-    user: Uuid,
-    inputs: &[(PulseDefinition, Measurement)],
-    key: &str,
-    refresh: bool,
-    arrived: chrono::DateTime<Utc>,
-) -> Result<Vec<PulseResult>, sqlx::Error> {
+pub async fn execute_cached(pool: &PgPool, user: Uuid, inputs: &[(PulseDefinition, Measurement)], key: &str, refresh: bool, arrived: chrono::DateTime<Utc>) -> Result<Vec<PulseResult>, sqlx::Error> {
     execute_inner(pool, user, inputs, Some((key, refresh, arrived))).await
 }
 
-async fn execute_inner(
-    pool: &PgPool,
-    user: Uuid,
-    inputs: &[(PulseDefinition, Measurement)],
-    cache: Option<(&str, bool, chrono::DateTime<Utc>)>,
-) -> Result<Vec<PulseResult>, sqlx::Error> {
-    if inputs.is_empty() {
-        return Ok(vec![]);
+async fn execute_inner(pool: &PgPool, user: Uuid, inputs: &[(PulseDefinition, Measurement)], cache: Option<(&str, bool, chrono::DateTime<Utc>)>) -> Result<Vec<PulseResult>, sqlx::Error> {
+    if inputs.len() > 12 { return Err(sqlx::Error::Protocol("Too many charts".into())); }
+    if let Some((key, refresh, arrived)) = cache {
+        let cached: Option<serde_json::Value> = sqlx::query_scalar("SELECT payload FROM pulse_cache WHERE user_id=$1 AND cache_key=$2 AND expires_at>now() AND (NOT $3 OR created_at >= $4)")
+            .bind(user).bind(key).bind(refresh).bind(arrived).fetch_optional(pool).await?;
+        if let Some(cached) = cached {
+            if let Ok(results) = serde_json::from_value(cached) { return Ok(results); }
+        }
     }
-    if inputs.len() > 12 {
-        return Err(sqlx::Error::Protocol("Too many charts in one page".into()));
+    let mut results = Vec::with_capacity(inputs.len());
+    for (definition, measurement) in inputs {
+        results.push(execute_single(pool, user, definition, measurement).await?);
     }
+    if let Some((key, _, _)) = cache {
+        crate::storage::pulse::PulseRepository::new(pool.clone()).put_cache(user, key, json!(results), 60).await?;
+    }
+    Ok(results)
+}
+
+async fn execute_single(pool: &PgPool, user: Uuid, d: &PulseDefinition, m: &Measurement) -> Result<PulseResult, sqlx::Error> {
+    let timezone = d.timezone.parse::<chrono_tz::Tz>().map_err(|_| sqlx::Error::Protocol("Invalid timezone".into()))?;
+    if !(1..=366).contains(&d.period_days) { return Err(sqlx::Error::Protocol("Invalid period".into())); }
     let now = Utc::now();
-    let requests:Vec<_>=inputs.iter().enumerate().map(|(index,(d,m))|{
- let tz:chrono_tz::Tz=d.timezone.parse().expect("validated timezone");
- let local=now.with_timezone(&tz).date_naive();
- let first=local-Duration::days(i64::from(d.period_days)-1);
- let from=tz.from_local_datetime(&first.and_hms_opt(0,0,0).unwrap()).earliest().unwrap_or_else(||tz.from_utc_datetime(&first.and_hms_opt(0,0,0).unwrap())).with_timezone(&Utc);
- json!({"index":index,"kind":m.kind,"field":m.field,"source":m.profile.source,"schema_id":m.profile.schema_id,"connection_id":m.profile.connection_id,"category":m.profile.category,"action":m.profile.action,"timing":m.profile.timing,"currency":m.profile.currency,"from":from,"bucket":d.bucket,"dimension":d.dimension,"timezone":d.timezone,"scale":m.scale})
- }).collect();
-    let sql = format!(
-        r#"
- WITH requests AS MATERIALIZED(SELECT value AS r FROM jsonb_array_elements($2::jsonb)),
- base AS MATERIALIZED(
- SELECT s.id,s.title,s.schema_id,s.source,s.category,s.start_at,s.end_at,{action} AS action,{timing} AS timing,COALESCE(s.data->>'currency','') AS currency,{flat} AS flat,
- CASE WHEN pg_input_is_valid(s.data->>'observation_end','timestamp with time zone') THEN (s.data->>'observation_end')::timestamptz END AS observed_end,
- CASE WHEN pg_input_is_valid(s.data->>'observation_start','timestamp with time zone') THEN (s.data->>'observation_start')::timestamptz END AS observed_start
- FROM spans s WHERE {allowed} AND {actual}
- AND EXISTS(SELECT 1 FROM requests WHERE r->>'source'=s.source AND r->>'category'=s.category AND COALESCE(r->>'schema_id','')=COALESCE(s.schema_id::text,''))
- AND (s.start_at>=(SELECT min((r->>'from')::timestamptz) FROM requests) OR s.end_at>=(SELECT min((r->>'from')::timestamptz) FROM requests) OR s.start_at IS NULL OR s.source='playstation' OR EXISTS(SELECT 1 FROM requests WHERE r->>'kind'='recurring_cost_projection'))
- ), matched AS MATERIALIZED(
- SELECT r,b.*,COALESCE(b.start_at,b.observed_end) AS at,
- CASE WHEN jsonb_typeof(flat->(r->>'field'))='number' THEN (flat->>(r->>'field'))::numeric END AS num
- FROM base b JOIN requests ON r->>'source'=b.source AND r->>'category'=b.category AND COALESCE(r->>'schema_id','')=COALESCE(b.schema_id::text,'') AND COALESCE(r->>'connection_id','')=COALESCE(b.flat->>'connection_id','') AND r->>'action'=b.action AND r->>'timing'=b.timing AND r->>'currency'=b.currency
- WHERE (r->>'kind'='recurring_cost_projection' AND flat->>'active'='true')
- OR (r->>'kind'<>'recurring_cost_projection' AND ( (b.source='playstation' AND b.timing='first_to_last_played')
- OR (b.timing='observed_counter_delta' AND b.observed_start>=(r->>'from')::timestamptz AND b.observed_end<=$3)
- OR (b.timing NOT IN('observed_counter_delta','first_to_last_played') AND COALESCE(b.start_at,b.observed_end)>=(r->>'from')::timestamptz AND COALESCE(b.start_at,b.observed_end)<=$3)
- OR (r->>'kind'='known_interval_duration' AND b.end_at>(r->>'from')::timestamptz AND b.start_at<$3)))
- ), regular AS (
- SELECT (r->>'index')::int AS index,
- CASE WHEN r->>'bucket' IS NOT NULL THEN to_char(date_trunc(r->>'bucket',at AT TIME ZONE(r->>'timezone')),'YYYY-MM-DD') ELSE COALESCE(NULLIF(CASE WHEN r->>'dimension'='title' THEN title ELSE flat->>(r->>'dimension') END,''),'Unknown') END AS label,
- CASE WHEN r->>'kind'='event_count' THEN 1::numeric
- WHEN r->>'kind'='recurring_cost_projection' THEN num*CASE COALESCE(flat->>'billing_interval',flat->>'interval') WHEN 'month' THEN 1 WHEN 'monthly' THEN 1 WHEN 'year' THEN 1.0/12 WHEN 'yearly' THEN 1.0/12 WHEN 'annual' THEN 1.0/12 WHEN 'week' THEN 52.0/12 WHEN 'weekly' THEN 52.0/12 WHEN 'day' THEN 365.0/12 WHEN 'daily' THEN 365.0/12 WHEN 'quarterly' THEN 1.0/3 END
- ELSE num END * (r->>'scale')::numeric AS val,
- r->>'kind' AS kind, timing,COALESCE(flat->>'title_id',id::text) AS entity
- FROM matched WHERE r->>'kind'<>'known_interval_duration'
- ), intervals AS (
- SELECT (r->>'index')::int AS index,
- CASE WHEN r->>'bucket' IS NOT NULL THEN to_char(t.local_at,'YYYY-MM-DD') ELSE COALESCE(NULLIF(CASE WHEN r->>'dimension'='title' THEN title ELSE flat->>(r->>'dimension') END,''),'Unknown') END AS label,
- EXTRACT(epoch FROM LEAST(end_at,$3,(t.local_at+CASE r->>'bucket' WHEN 'week' THEN interval '1 week' WHEN 'month' THEN interval '1 month' ELSE interval '1 day' END) AT TIME ZONE(r->>'timezone'))-GREATEST(start_at,(r->>'from')::timestamptz,t.local_at AT TIME ZONE(r->>'timezone'))) * (r->>'scale')::numeric AS val,
- 'known_interval_duration'::text AS kind,timing,id::text AS entity
- FROM matched CROSS JOIN LATERAL generate_series(date_trunc(COALESCE(r->>'bucket','day'),GREATEST(start_at,(r->>'from')::timestamptz) AT TIME ZONE(r->>'timezone')),date_trunc(COALESCE(r->>'bucket','day'),(LEAST(end_at,$3)-interval '1 microsecond') AT TIME ZONE(r->>'timezone')),CASE r->>'bucket' WHEN 'week' THEN interval '1 week' WHEN 'month' THEN interval '1 month' ELSE interval '1 day' END)t(local_at)
- WHERE r->>'kind'='known_interval_duration' AND end_at>start_at AND timing NOT IN('observed_counter_delta','first_to_last_played')
- ), values AS (SELECT * FROM regular UNION ALL SELECT * FROM intervals),
- deduped AS (SELECT * FROM values WHERE timing<>'first_to_last_played' UNION ALL SELECT index,label,max(val) AS val,min(kind) AS kind,timing,entity FROM values WHERE timing='first_to_last_played' GROUP BY index,label,timing,entity),
- totals AS (SELECT index,label,CASE WHEN min(kind)='numeric_average' THEN avg(val) ELSE sum(val) END::float8 AS value FROM deduped WHERE val IS NOT NULL GROUP BY index,label),
- ranked AS (SELECT *,row_number() OVER(PARTITION BY index ORDER BY value DESC,label) AS rank FROM totals),
- points AS (SELECT index,jsonb_agg(jsonb_build_object('label',label,'value',value) ORDER BY label) AS points FROM ranked WHERE rank<=CASE WHEN (SELECT r->>'bucket' FROM requests WHERE (r->>'index')::int=ranked.index) IS NULL THEN 20 ELSE 366 END GROUP BY index)
- SELECT COALESCE(jsonb_agg(jsonb_build_object('index',(r->>'index')::int,'points',COALESCE(points.points,'[]')) ORDER BY (r->>'index')::int),'[]') FROM requests LEFT JOIN points ON points.index=(r->>'index')::int
- "#,
-        allowed = ALLOWED_SPANS,
-        actual = ACTUAL_SPANS,
-        flat = FLAT_DATA,
-        action = ACTION,
-        timing = TIMING
-    );
-    let (value, computed_at) = if let Some((key, refresh, arrived)) = cache {
-        let cached: serde_json::Value =
-            sqlx::query_scalar("SELECT pulse_cached_aggregate($1,$2,$3,$4,$5,$6,$7)")
-                .bind(user)
-                .bind(format!("raw:{key}"))
-                .bind(json!(requests))
-                .bind(now)
-                .bind(&sql)
-                .bind(refresh)
-                .bind(arrived)
-                .fetch_one(pool)
-                .await?;
-        let computed_at = serde_json::from_value(cached["computed_at"].clone())
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        (cached["rows"].clone(), computed_at)
-    } else {
-        let value = sqlx::query_scalar(&sql)
-            .bind(user)
-            .bind(json!(requests))
-            .bind(now)
-            .fetch_one(pool)
-            .await?;
-        (value, now)
+    if u32::from(d.period_days)+u32::from(d.offset_days)>366 { return Err(sqlx::Error::Protocol("range exceeds 366 days".into())); }
+    let end_day = now.with_timezone(&timezone).date_naive() - Duration::days(i64::from(d.offset_days));
+    let from_day = end_day - Duration::days(i64::from(d.period_days) - 1);
+    let end_at = if d.offset_days == 0 { now } else {
+        use chrono::TimeZone;
+        timezone.from_local_datetime(&(end_day + Duration::days(1)).and_hms_opt(0,0,0).unwrap()).earliest()
+            .ok_or_else(|| sqlx::Error::Protocol("date boundary unavailable in timezone".into()))?.with_timezone(&Utc)
     };
-    let rows = value
-        .as_array()
-        .ok_or_else(|| sqlx::Error::Protocol("Invalid aggregate result".into()))?;
-    inputs
-        .iter()
-        .enumerate()
-        .map(|(i, (d, m))| {
-            let mut points: Vec<PulsePoint> = serde_json::from_value(rows[i]["points"].clone())
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-            if let Some(bucket) = &d.bucket {
-                let tz: chrono_tz::Tz = d.timezone.parse().unwrap();
-                let today = now.with_timezone(&tz).date_naive();
-                let first = today - Duration::days(i64::from(d.period_days) - 1);
-                let mut labels = std::collections::BTreeSet::new();
-                for offset in 0..d.period_days {
-                    let date = first + Duration::days(i64::from(offset));
-                    let date = match bucket {
-                        Bucket::Day => date,
-                        Bucket::Week => {
-                            date - Duration::days(i64::from(date.weekday().num_days_from_monday()))
-                        }
-                        Bucket::Month => date.with_day(1).unwrap(),
-                    };
-                    labels.insert(date.to_string());
-                }
-                let recorded: std::collections::BTreeMap<_, _> =
-                    points.into_iter().map(|p| (p.label, p.value)).collect();
-                points = labels
-                    .into_iter()
-                    .map(|label| PulsePoint {
-                        value: recorded.get(&label).copied().flatten(),
-                        label,
-                    })
-                    .collect();
+    let type_id = m.profile.schema_id.ok_or_else(|| sqlx::Error::Protocol("Missing event type".into()))?;
+    let metric_key = format!("{:x}", Sha256::digest(serde_json::to_vec(&(m.id.clone(), from_day, end_day, d.dimension.clone(), d.timezone.clone())).unwrap()));
+    let revision: i64 = sqlx::query_scalar("SELECT coalesce((SELECT data_revision FROM pulse_revisions WHERE user_id=$1),0)")
+        .bind(user).fetch_one(pool).await?;
+    let distribution = matches!(m.kind, MeasurementKind::NumericMedian | MeasurementKind::NumericP95);
+    let mut rows = if !distribution {
+        sqlx::query("SELECT day, dimension_value AS dimension, aggregate_value::float8 AS sum_value, count_events::bigint AS cnt, (metadata->>'valid_count')::bigint AS valid_count FROM pulse_daily_aggregates WHERE user_id=$1 AND metric_key=$2 AND data_revision=$3 ORDER BY day")
+            .bind(user).bind(&metric_key).bind(revision).fetch_all(pool).await?
+    } else { Vec::new() };
+    if rows.is_empty() {
+        let field = m.field.as_deref().unwrap_or("");
+        if !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') { return Err(sqlx::Error::Protocol("Invalid metric field".into())); }
+        let dimension = d.dimension.as_deref().unwrap_or("");
+        if !dimension.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') { return Err(sqlx::Error::Protocol("Invalid dimension".into())); }
+        let spending = m.profile.action == "transaction" && field == "amount";
+        let value = if spending {
+            "CASE WHEN et.value='refund' AND jsonb_typeof(te.content->'amount')='number' THEN -abs((te.content->>'amount')::numeric) WHEN et.value='transaction' AND te.content->>'is_spending'='true' AND jsonb_typeof(te.content->'amount')='number' THEN abs((te.content->>'amount')::numeric) ELSE NULL END".to_owned()
+        } else if m.kind == MeasurementKind::EventCount { "1::numeric".to_owned() }
+        else if m.kind == MeasurementKind::KnownIntervalDuration {
+            "CASE WHEN te.content->>'timing' IN ('cumulative_lifetime_stat','observed_counter_delta') THEN NULL WHEN te.ended_at>te.occurred_at THEN extract(epoch FROM te.ended_at-te.occurred_at) WHEN jsonb_typeof(te.content->'duration_seconds')='number' THEN (te.content->>'duration_seconds')::numeric ELSE NULL END".to_owned()
+        } else { format!("CASE WHEN jsonb_typeof(te.content->'{field}')='number' THEN (te.content->>'{field}')::numeric ELSE NULL END") };
+        let percentile = if m.kind == MeasurementKind::NumericP95 { "0.95" } else { "0.5" };
+        let distribution_value = if distribution { format!(", percentile_cont({percentile}) WITHIN GROUP (ORDER BY val::float8) AS distribution_value") } else { String::new() };
+        let day_expression = if distribution {
+            if d.dimension.is_some() || d.chart_type == crate::domain::charts::ChartType::Stat { "$3::date".to_owned() } else {
+                let bucket = match d.bucket { Some(Bucket::Week) => "week", Some(Bucket::Month) => "month", _ => "day" };
+                format!("date_trunc('{bucket}', te.occurred_at AT TIME ZONE $2)::date")
             }
-            Ok(PulseResult {
-                source: m.profile.source.clone(),
-                points,
-                unit: m.unit.clone(),
-                quality: m.quality.clone(),
-                description: m.description.clone(),
-                record_count: m.profile.dated_count,
-                undated_count: m.profile.count - m.profile.dated_count,
-                computed_at,
-                data_as_of: m.profile.last_at,
-                error: None,
-            })
-        })
-        .collect()
+        } else { "(te.occurred_at AT TIME ZONE $2)::date".to_owned() };
+        let sql = format!(r#"
+            WITH event_values AS (
+                SELECT {day_expression} AS day,
+                    CASE WHEN $7='' THEN '' ELSE coalesce(nullif(te.content->>$7,''),'unknown') END AS dimension,
+                    {value} AS val
+                FROM timeline_events te JOIN timeline_event_types et ON et.id=te.event_type_id
+                WHERE te.user_id=$1 AND te.record_state='active'
+                    AND te.occurred_at >= ($3::date::timestamp AT TIME ZONE $2) AND te.occurred_at <= $4
+                    AND (($8 AND et.value IN ('transaction','refund')) OR (NOT $8 AND te.event_type_id=$5))
+                    AND coalesce(te.content->>'currency','')=$6
+                    AND coalesce(te.content->>'timing','')=$9
+                    AND coalesce(te.content->>'timing','') NOT IN ('cumulative_lifetime_stat','observed_counter_delta')
+            ) SELECT day, dimension, sum(val)::float8 AS sum_value, count(*)::bigint AS cnt,
+                count(val)::bigint AS valid_count {distribution_value}
+            FROM event_values GROUP BY day, dimension ORDER BY day
+        "#);
+        let mut read_tx = pool.begin().await?;
+        sqlx::query("SET LOCAL statement_timeout='5s'").execute(&mut *read_tx).await?;
+        rows = sqlx::query(&sql).bind(user).bind(&d.timezone).bind(from_day).bind(end_at)
+            .bind(type_id).bind(&m.profile.currency).bind(dimension).bind(spending).bind(&m.profile.timing).fetch_all(&mut *read_tx).await?;
+        read_tx.commit().await?;
+        if !distribution {
+            let mut tx = pool.begin().await?;
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind(format!("rollup:{user}:{metric_key}")).execute(&mut *tx).await?;
+            let current: i64 = sqlx::query_scalar("SELECT coalesce((SELECT data_revision FROM pulse_revisions WHERE user_id=$1),0)").bind(user).fetch_one(&mut *tx).await?;
+            if current == revision {
+                sqlx::query("DELETE FROM pulse_daily_aggregates WHERE user_id=$1 AND metric_key=$2").bind(user).bind(&metric_key).execute(&mut *tx).await?;
+                for row in &rows {
+                    sqlx::query("INSERT INTO pulse_daily_aggregates (user_id, group_id, event_type_id, day, metric_key, aggregate_value, count_events, metadata, timezone, currency, dimension_value, data_revision) SELECT $1, group_id, id, $3, $4, $5, $6, $7, $8, $9, $10, $11 FROM timeline_event_types WHERE id=$2")
+                        .bind(user).bind(type_id).bind(row.get::<chrono::NaiveDate,_>("day")).bind(&metric_key)
+                        .bind(row.get::<Option<f64>,_>("sum_value").unwrap_or(0.0)).bind(row.get::<i64,_>("cnt"))
+                        .bind(json!({"valid_count": row.get::<i64,_>("valid_count")})).bind(&d.timezone).bind(&m.profile.currency)
+                        .bind(row.get::<String,_>("dimension")).bind(revision).execute(&mut *tx).await?;
+                }
+                tx.commit().await?;
+            }
+        }
+    }
+    let mut buckets = std::collections::BTreeMap::<String,(f64,i64,i64)>::new();
+    for row in &rows {
+        let day: chrono::NaiveDate = row.get("day");
+        let label = if d.chart_type == crate::domain::charts::ChartType::Stat { "Total".to_owned() } else if d.dimension.is_some() { row.get::<String,_>("dimension") } else {
+            use chrono::Datelike;
+            match d.bucket {
+                Some(Bucket::Week) => (day - Duration::days(i64::from(day.weekday().num_days_from_monday()))).to_string(),
+                Some(Bucket::Month) => day.with_day(1).unwrap().to_string(),
+                _ => day.to_string(),
+            }
+        };
+        let entry = buckets.entry(label).or_default();
+        entry.0 += row.get::<Option<f64>,_>(if distribution { "distribution_value" } else { "sum_value" }).unwrap_or(0.0);
+        entry.1 += row.get::<i64,_>("valid_count");
+        entry.2 += row.get::<i64,_>("cnt");
+    }
+    let record_count = buckets.values().map(|v|v.2).sum();
+    let valid_count: i64 = buckets.values().map(|v| v.1).sum();
+    let total_sum: f64 = buckets.values().map(|v| v.0).sum();
+    let total = if valid_count == 0 || (distribution && d.chart_type != crate::domain::charts::ChartType::Stat) { None }
+        else { Some(if m.kind == MeasurementKind::NumericAverage { total_sum / valid_count as f64 * m.scale } else { total_sum * m.scale }) };
+    let mut points: Vec<PulsePoint> = buckets.into_iter().map(|(label,(sum,count,_))| PulsePoint {
+        label, value: if count==0 { None } else { Some(if m.kind==MeasurementKind::NumericAverage { sum / count as f64 * m.scale } else { sum * m.scale }) },
+    }).collect();
+    if d.dimension.is_some() {
+        points.sort_by(|left,right| right.value.unwrap_or(f64::NEG_INFINITY).total_cmp(&left.value.unwrap_or(f64::NEG_INFINITY)).then_with(|| left.label.cmp(&right.label)));
+        points.truncate(usize::from(d.top_n.unwrap_or(20)));
+    }
+    let source_coverage = sqlx::query("SELECT connector_id,coverage_start,coverage_end,sync_mode,is_healthy,last_checked_at,metadata FROM connector_coverage WHERE user_id=$1 ORDER BY connector_id")
+        .bind(user).fetch_all(pool).await?;
+    let coverage = json!({"state":"partial","scope":"recorded_observations","range_start":from_day,"range_end":end_day,"timezone":d.timezone,
+        "observed_records":record_count,"values_missing":record_count-valid_count,"empty_buckets":"unknown","sources":source_coverage.into_iter().map(|row| json!({
+            "connector":row.get::<String,_>("connector_id"),"start":row.get::<Option<chrono::DateTime<Utc>>,_>("coverage_start"),
+            "end":row.get::<Option<chrono::DateTime<Utc>>,_>("coverage_end"),"mode":row.get::<String,_>("sync_mode"),"healthy":row.get::<bool,_>("is_healthy"),
+            "last_checked_at":row.get::<Option<chrono::DateTime<Utc>>,_>("last_checked_at")})).collect::<Vec<_>>()});
+    Ok(PulseResult { coverage, total, source:m.profile.source.clone(), points, unit:m.unit.clone(), quality:m.quality.clone(),
+        description:m.description.clone(), record_count, undated_count:0, computed_at:Utc::now(), data_as_of:Some(now), error:None })
 }

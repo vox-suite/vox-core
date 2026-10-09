@@ -1,3 +1,0 @@
-ALTER TABLE data_schemas
-    ADD COLUMN color_token INTEGER NOT NULL DEFAULT 0 CHECK (color_token BETWEEN 0 AND 23),
-    ADD COLUMN icon_token INTEGER NOT NULL DEFAULT 0 CHECK (icon_token BETWEEN 0 AND 23);

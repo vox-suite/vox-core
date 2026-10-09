@@ -10,7 +10,7 @@
  *   This is deliberate cache-aside, not expiring cache — correctness
  *   depends on every Postgres write that can change a user's name or
  *   channel ownership also driving a Redis write (see `MemoryService`:
- *   `set_user_name`, `refresh`, `refresh_minimal_user`, and the get_user_name
+ *   `update_user_name`, `refresh_minimal_user`, and the get_user_name
  *   write-through-on-miss path).
  * - Freshness is layered: (1) synchronous write-through on the mutations
  *   above, (2) one-shot full rebuild at API process boot

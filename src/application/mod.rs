@@ -18,3 +18,8 @@ pub use schemas::*;
 pub use spans::*;
 
 pub mod pulse;
+pub mod timeline;
+pub mod updates;
+
+pub use timeline::*;
+pub use updates::*;

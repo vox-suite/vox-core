@@ -9,6 +9,7 @@ pub enum ChartType {
     Bar,
     Pie,
     Area,
+    Stat,
 }
 
 impl ChartType {
@@ -18,6 +19,7 @@ impl ChartType {
             Self::Bar => "bar",
             Self::Pie => "pie",
             Self::Area => "area",
+            Self::Stat => "stat",
         }
     }
 
@@ -27,6 +29,7 @@ impl ChartType {
             "bar" => Some(Self::Bar),
             "pie" => Some(Self::Pie),
             "area" => Some(Self::Area),
+            "stat" => Some(Self::Stat),
             _ => None,
         }
     }

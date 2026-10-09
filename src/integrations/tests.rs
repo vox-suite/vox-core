@@ -37,7 +37,7 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         collections: CollectionService::new(
             crate::storage::collections::CollectionRepository::new(pool.clone()),
         ),
-        charts: ChartRepository::new(pool.clone()),
+        charts: PulseRepository::new(pool.clone()),
         client_id: "share_to_action".into(),
         redirect_uri: Some("http://localhost/callback".into()),
     };
@@ -72,7 +72,7 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         state: "state".into(),
         code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".into(),
         collection_ids,
-        board_ids: vec![],
+        chart_ids: vec![],
         span_from: Some(now - Duration::days(1)),
         span_to: Some(now + Duration::days(1)),
         allow_create_plans: true,
@@ -203,7 +203,7 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         .await
         .unwrap();
     let mut invalid_board = auth(vec![]);
-    invalid_board.board_ids = vec![other_board.id];
+    invalid_board.chart_ids = vec![other_board.id];
     assert!(matches!(
         service.authorize(&a, invalid_board).await,
         Err(Error::Forbidden)
@@ -249,13 +249,13 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         .unwrap();
     let mut pulse_grant = grant.clone();
     pulse_grant.collection_ids = vec![];
-    pulse_grant.board_ids = vec![board.id];
+    pulse_grant.chart_ids = vec![board.id];
     let pulse = service.context(&pulse_grant).await.unwrap();
     assert_eq!(pulse["spans"].as_array().unwrap().len(), 0);
     assert_eq!(pulse["pulse"][0]["charts"][0]["data"][0]["value"], 1.5);
     let mut no_reads = grant.clone();
     no_reads.collection_ids = vec![];
-    no_reads.board_ids = vec![];
+    no_reads.chart_ids = vec![];
     let no_context = service.context(&no_reads).await.unwrap();
     assert_eq!(
         no_context,

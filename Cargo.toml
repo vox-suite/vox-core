@@ -25,6 +25,9 @@ rig = { version = "0.42.0", default-features = false, features = ["agent", "deri
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+md-5 = "0.10.6"
+miniz_oxide = "0.8.9"
+flate2 = "1.1.10"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "macros", "migrate"] }
 subtle = "2"
 thiserror = "2"
@@ -46,6 +49,8 @@ bytes = "1"
 unicode-segmentation = "1.12"
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-native-tls", "pool"] }
 regex = "1.13.1"
+lopdf = "0.45.0"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 
 [[bin]]
 name = "vox-core-api"
@@ -62,3 +67,6 @@ path = "services/defaults/main.rs"
 [[bin]]
 name = "vox-core-check-database"
 path = "services/database-check/main.rs"
+
+[patch."https://github.com/vox-suite/vox-connections.git"]
+vox-connections = { path = "../vox-connections" }

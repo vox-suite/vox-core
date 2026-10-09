@@ -20,6 +20,7 @@ use rig::{client::AgentClientExt, completion::Prompt, providers::gemini};
 use uuid::Uuid;
 
 pub struct SpaceRuntime {
+    workflow_slots: std::sync::Arc<tokio::sync::Semaphore>,
     db: Db,
     gemini_api_key: String,
     gemini_model: String,
@@ -34,6 +35,7 @@ pub struct SpaceRuntime {
 impl SpaceRuntime {
     pub fn new(db: Db, config: &Config, user_events: Option<UserEventHub>) -> Self {
         Self {
+            workflow_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(12)),
             db,
             gemini_api_key: config.gemini_api_key.clone(),
             gemini_model: config.gemini_model.clone(),
@@ -67,6 +69,27 @@ impl SpaceRuntime {
         else {
             return Ok(());
         };
+
+        if space.agent_spec["workflow_version"].as_u64() == Some(2) {
+            let user = space.user_id;
+            let result = self.run_workflow(space, user_message).await;
+            if result.is_err() {
+                let _ = repo
+                    .set_run_state(
+                        space_id,
+                        RunState::Failed,
+                        Some("Workflow could not continue; review the branch or retry"),
+                    )
+                    .await;
+                if let Some(hub) = &self.user_events {
+                    hub.notify(
+                        user,
+                        serde_json::json!({"type":"space_run_failed","space_id":space_id}),
+                    );
+                }
+            }
+            return result;
+        }
 
         let _ = repo.set_run_state(space_id, RunState::Running, None).await;
         if let Some(hub) = &self.user_events {
@@ -302,3 +325,6 @@ impl SpaceRuntime {
         Ok(())
     }
 }
+
+#[path = "space_workflow.rs"]
+mod workflow;
