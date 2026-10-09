@@ -54,12 +54,12 @@ impl ToolExport {
         ));
         set.add_tool(agent_memory::GetAgentMemory::new(
             db.clone(),
-            owner.clone(),
+            owner,
             EXPORT_AGENT.into(),
         ));
         set.add_tool(agent_memory::UpdateAgentMemory::new(
             db.clone(),
-            owner.clone(),
+            owner,
             EXPORT_AGENT.into(),
         ));
         set.add_tool(data_query::FindSchemas::new(db.clone(), user_id));
@@ -77,9 +77,9 @@ impl ToolExport {
         set.add_tool(map_scene::ShowOnMap::new(Some(self.user_events.clone()), user_id.0));
         set.add_tool(map_scene::ClearMap::new(Some(self.user_events.clone()), user_id.0));
         set.add_tool(visits::ListVisits::new(db.clone(), user_id));
-        set.add_tool(spans::CreateSpan::new(db.clone(), owner.clone(), self.user_events.clone()));
-        set.add_tool(spans::ListSpans::new(db.clone(), owner.clone()));
-        set.add_tool(spans::GetSpan::new(db.clone(), owner.clone()));
+        set.add_tool(spans::CreateSpan::new(db.clone(), owner, self.user_events.clone()));
+        set.add_tool(spans::ListSpans::new(db.clone(), owner));
+        set.add_tool(spans::GetSpan::new(db.clone(), owner));
         set.add_tool(spans::UpdateSpan::new(db.clone(), owner, self.user_events.clone()));
         set.add_tool(event_actions::AdjustSpan::new(self.db.clone(), user_id.0));
         set.add_tool(records::DefineDataSchema::new(db.clone(), user_id));
