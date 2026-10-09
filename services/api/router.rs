@@ -35,6 +35,7 @@ use crate::{
             create_span, delete_span, get_span, list_span_day, list_span_days, list_spans,
             update_span,
         },
+        tools::{ToolsApiState, invoke_tool, list_tools},
         voice::{VoiceSocketState, voice_socket},
     },
     state::ApiState,
@@ -168,6 +169,14 @@ pub fn build_api_router(state: ApiState) -> Router {
             conversations: state.legacy.conversations(),
             tts: state.tts.clone(),
             stt: state.stt.clone(),
+        });
+
+    let tool_routes = Router::new()
+        .route("/v1/me/tools", get(list_tools))
+        .route("/v1/me/tools/{name}", post(invoke_tool))
+        .with_state(ToolsApiState {
+            conversations: state.legacy.conversations(),
+            export: state.tool_export.clone(),
         });
 
     let chart_api_state = ChartApiState {
@@ -363,6 +372,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(live_routes)
         .merge(map_scene_routes)
         .merge(voice_routes)
+        .merge(tool_routes)
         .merge(chart_routes)
         .merge(pulse_routes)
         .merge(space_routes)

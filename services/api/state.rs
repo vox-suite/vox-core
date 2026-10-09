@@ -44,6 +44,7 @@ pub struct ApiState {
     pub space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
     pub bridge: Option<Arc<dyn vox_core::bridge_client::OutboundBridge>>,
     pub connections: vox_core::fresh_connections::FreshConnectionsService,
+    pub tool_export: vox_core::agents::tools::export::ToolExport,
 }
 
 impl ApiState {
@@ -87,6 +88,16 @@ impl ApiState {
         )
         .expect("FreshConnectionsService initialization failed");
 
+        let tool_export = vox_core::agents::tools::export::ToolExport {
+            db: db.clone(),
+            memory: memory.clone(),
+            connections: connections.clone(),
+            connected_apps: Some(Arc::new(vox_core::connected_apps::from_config(db.clone(), config))),
+            user_events: user_events.clone(),
+            device_hub: device_hub.clone(),
+            google_maps_api_key: config.google_maps_api_key.clone(),
+        };
+
         Self {
             legacy,
             pool,
@@ -109,6 +120,7 @@ impl ApiState {
             space_runtime,
             bridge: None,
             connections,
+            tool_export,
         }
     }
 }

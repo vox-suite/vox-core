@@ -20,6 +20,7 @@ pub mod schemas;
 pub mod sms;
 pub mod spaces;
 pub mod spans;
+pub mod tools;
 pub mod voice;
 
 pub mod pulse;
