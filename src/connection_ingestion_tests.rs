@@ -247,8 +247,8 @@ async fn gaming_ingestion_retains_unknown_session_times_and_deduplicates() {
         .await
         .unwrap();
     assert_eq!(
-        row.get::<DateTime<Utc>, _>("start_at"),
-        activity.observation_end
+        row.get::<DateTime<Utc>, _>("start_at").timestamp_micros(),
+        activity.observation_end.timestamp_micros()
     );
     assert!(row.get::<Option<DateTime<Utc>>, _>("end_at").is_none());
     assert_eq!(
