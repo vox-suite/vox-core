@@ -246,7 +246,7 @@ impl UpdatesRepository {
         let update = self.get_update(user_id, id).await?;
         if let Some(job_id) = update.source_job_id {
             let job_row = sqlx::query(
-                "SELECT state, wait_reason FROM jobs WHERE id = $1 AND user_id = $2",
+                "SELECT state, wait_reason FROM jobs WHERE id = $1 AND user_id = $2 AND (source_job_id IS NULL OR EXISTS(SELECT 1 FROM jobs j WHERE j.id=updates.source_job_id AND j.user_id=updates.user_id AND j.state='completed' AND j.wait_reason IS NULL))",
             )
             .bind(job_id)
             .bind(user_id)
@@ -264,7 +264,7 @@ impl UpdatesRepository {
 
         let rows = sqlx::query(
             "UPDATE updates SET status = 'resolved', resolved_at = now(), updated_at = now() \
-             WHERE id = $1 AND user_id = $2",
+             WHERE id = $1 AND user_id = $2 AND (source_job_id IS NULL OR EXISTS(SELECT 1 FROM jobs j WHERE j.id=updates.source_job_id AND j.user_id=updates.user_id AND j.state='completed' AND j.wait_reason IS NULL))",
         )
         .bind(id)
         .bind(user_id)
@@ -272,7 +272,7 @@ impl UpdatesRepository {
         .await?;
 
         if rows.rows_affected() == 0 {
-            return Err(UpdatesStorageError::NotFound);
+            return Err(UpdatesStorageError::InvalidJobState);
         }
         self.get_update(user_id, id).await
     }

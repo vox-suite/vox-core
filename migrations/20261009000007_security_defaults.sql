@@ -15,3 +15,13 @@ GRANT SELECT ON timeline_groups,timeline_event_types TO authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+
+DO $$
+DECLARE relation record;
+BEGIN
+    FOR relation IN SELECT c.conrelid::regclass AS table_name,c.conname FROM pg_constraint c
+        WHERE c.contype='f' AND c.connamespace='public'::regnamespace AND NOT c.condeferrable
+    LOOP
+        EXECUTE format('ALTER TABLE %s ALTER CONSTRAINT %I DEFERRABLE INITIALLY IMMEDIATE',relation.table_name,relation.conname);
+    END LOOP;
+END $$;

@@ -110,7 +110,6 @@ impl TaskRepository {
             "SELECT EXISTS(SELECT 1 FROM space_tasks WHERE node_id=ANY($1) AND status='cancelled')",
         )
         .bind(&proposal.dependencies)
-        .bind(generation)
         .fetch_one(&mut *tx)
         .await?;
         if cancelled {

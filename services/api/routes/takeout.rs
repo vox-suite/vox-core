@@ -15,16 +15,20 @@ pub struct TakeoutUploadResponse { pub youtube_records_imported: usize,pub maps_
 pub async fn upload_takeout(State(pool):State<PgPool>,Extension(actor):Extension<Actor>,body:Bytes)->Result<impl IntoResponse,StatusCode> {
     if body.is_empty() { return Err(StatusCode::BAD_REQUEST); }
     if body.len()>MAX_TAKEOUT_BYTES { return Err(StatusCode::PAYLOAD_TOO_LARGE); }
+    static PARSERS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    let parser = PARSERS.get_or_init(||std::sync::Arc::new(tokio::sync::Semaphore::new(1))).clone().try_acquire_owned().map_err(|_|StatusCode::TOO_MANY_REQUESTS)?;
     let files = tokio::task::spawn_blocking(move || {
+        let _parser = parser;
         if body.starts_with(b"PK") { extract_zip_entries(&body) }
         else { serde_json::from_slice(&body).map(|v|vec![("direct.json".into(),v)]).map_err(|e|e.to_string()) }
     }).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.map_err(|_|StatusCode::BAD_REQUEST)?;
     let repo=TimelineRepository::new(pool.clone());
     let mut response=TakeoutUploadResponse { youtube_records_imported:0,maps_records_imported:0,total_events_created:0,skipped_records:0,notes:vec![] };
+    if files.is_empty() { response.notes.push("No JSON data was found. Choose JSON format when creating the YouTube or Timeline export.".into()); }
     for (name,value) in files {
         let name_lower=name.to_ascii_lowercase();
         let mut candidates=Vec::new();
-        if name_lower.contains("watch-history") || name_lower=="direct.json" {
+        if name_lower.contains("watch-history") || (name_lower=="direct.json" && value.as_array().is_some_and(|items|items.iter().any(|item|item.get("titleUrl").is_some()))) {
             if let Some(items)=value.as_array() {
                 for row in items {
                     if let Some(event)=youtube_event(row) { candidates.push(("youtube_history",event));response.youtube_records_imported+=1; }
@@ -78,8 +82,9 @@ pub async fn upload_takeout(State(pool):State<PgPool>,Extension(actor):Extension
     Ok(Json(response))
 }
 fn database_error(error:sqlx::Error)->StatusCode {tracing::error!(%error,"Takeout database write failed");StatusCode::INTERNAL_SERVER_ERROR}
-fn event(kind:&str,title:String,start:DateTime<Utc>,end:Option<DateTime<Utc>>,content:Value)->IngestTimelineEventInput {
-    let identity=json!([kind,start.to_rfc3339(),end.map(|v|v.to_rfc3339()),&content]);
+fn event(kind:&str,title:String,start:DateTime<Utc>,end:Option<DateTime<Utc>>,mut content:Value)->IngestTimelineEventInput {
+    if let Some(end) = end { if let Some(object)=content.as_object_mut() { object.insert("duration_seconds".into(),json!((end-start).num_milliseconds() as f64 / 1000.0)); } }
+    let identity=json!([kind,start.to_rfc3339(),end.map(|v|v.to_rfc3339()),content.get("video_id"),content.get("place_id")]);
     let key=format!("takeout:{:x}",Sha256::digest(identity.to_string().as_bytes()));
     IngestTimelineEventInput { event_type_id:None,event_type_value:Some(kind.into()),group_id:None,group_value:None,title,summary:None,occurred_at:start,ended_at:end,time_precision:"second".into(),source_timezone:None,content,confidence:1.0,dedupe_key:Some(key),evidence:vec![] }
 }
@@ -139,4 +144,12 @@ fn extract_zip_entries(bytes:&[u8])->Result<Vec<(String,Value)>,String> {
         entries.push((name,serde_json::from_slice(&data).map_err(|e|e.to_string())?));
     }
     Ok(entries)
+}
+
+pub async fn limit_import(request:axum::extract::Request,next:axum::middleware::Next) -> axum::response::Response {
+    static IMPORTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    let Ok(_permit) = IMPORTS.get_or_init(||tokio::sync::Semaphore::new(1)).try_acquire() else {
+        return (StatusCode::TOO_MANY_REQUESTS,"An import is already running. Try again after it finishes.").into_response();
+    };
+    next.run(request).await
 }

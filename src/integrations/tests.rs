@@ -191,68 +191,28 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
     let context = service.context(&grant).await.unwrap();
     assert_eq!(context["spans"].as_array().unwrap().len(), 1);
     assert_eq!(context["collections"].as_array().unwrap().len(), 1);
-    let schema=sqlx::query_scalar::<_,Uuid>("INSERT INTO data_schemas(user_id,namespace,name,version,description,json_schema) VALUES($1,'test','metric',1,'metric','{}') RETURNING id").bind(a.user_id).fetch_one(&pool).await.unwrap();
-    let board = service
-        .charts
-        .create_board(a.user_id, "Pulse selection")
-        .await
-        .unwrap();
-    let other_board = service
-        .charts
-        .create_board(b.user_id, "Other Pulse")
-        .await
-        .unwrap();
-    let mut invalid_board = auth(vec![]);
-    invalid_board.chart_ids = vec![other_board.id];
-    assert!(matches!(
-        service.authorize(&a, invalid_board).await,
-        Err(Error::Forbidden)
-    ));
-    service
-        .charts
-        .add_chart(
-            board.id,
-            "Metric",
-            crate::domain::charts::ChartType::Bar,
-            &[schema],
-            serde_json::json!({"metric_field":"amount","aggregation":"sum","group_by":"day"}),
-        )
-        .await
-        .unwrap();
-    service
-        .spans
-        .create_span(
-            &a,
-            NewSpan {
-                title: "metric inside".into(),
-                start_at: Some(now),
-                schema_id: Some(schema),
-                data: Some(serde_json::json!({"amount":1.5})),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    service
-        .spans
-        .create_span(
-            &a,
-            NewSpan {
-                title: "metric outside".into(),
-                start_at: Some(now - Duration::days(5)),
-                schema_id: Some(schema),
-                data: Some(serde_json::json!({"amount":99})),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    sqlx::query("INSERT INTO timeline_events(user_id,event_type_id,group_id,title,occurred_at,content) SELECT $1,id,group_id,'Metric', $2, '{\"amount\":1.5,\"currency\":\"INR\",\"direction\":\"debit\",\"is_spending\":true}'::jsonb FROM timeline_event_types WHERE value='transaction' AND owner_user_id IS NULL")
+        .bind(a.user_id).bind(now).execute(&pool).await.unwrap();
+    let inventory = service.charts.inventory(a.user_id).await.unwrap();
+    let catalog = crate::application::pulse::measurements::measurement_catalog(&inventory.profiles);
+    let measurement = catalog.iter().find(|m| m.kind == crate::domain::pulse::MeasurementKind::NumericSum).unwrap();
+    let definition = crate::domain::pulse::PulseDefinition {
+        version: 2, measurement_id: measurement.id.clone(), bucket: Some(crate::domain::pulse::Bucket::Day),
+        dimension: None, period_days: 1, offset_days: 0, top_n: None,
+        timezone: "UTC".into(), chart_type: crate::domain::charts::ChartType::Bar,
+    };
+    let input = crate::domain::pulse::SavePulseInput { title: "Metric".into(), definition, idempotency_key: Uuid::new_v4() };
+    let chart = service.charts.save(a.user_id,&input,"","").await.unwrap();
+    let other_chart = service.charts.save(b.user_id,&input,"","").await.unwrap();
+    let mut invalid_chart = auth(vec![]);
+    invalid_chart.chart_ids = vec![other_chart.id];
+    assert!(matches!(service.authorize(&a,invalid_chart).await,Err(Error::Forbidden)));
     let mut pulse_grant = grant.clone();
     pulse_grant.collection_ids = vec![];
-    pulse_grant.chart_ids = vec![board.id];
+    pulse_grant.chart_ids = vec![chart.id];
     let pulse = service.context(&pulse_grant).await.unwrap();
     assert_eq!(pulse["spans"].as_array().unwrap().len(), 0);
-    assert_eq!(pulse["pulse"][0]["charts"][0]["data"][0]["value"], 1.5);
+    assert_eq!(pulse["pulse"][0]["data"]["total"],1.5);
     let mut no_reads = grant.clone();
     no_reads.collection_ids = vec![];
     no_reads.chart_ids = vec![];

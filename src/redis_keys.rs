@@ -5,13 +5,6 @@
  * - Redis holds only two key families (below), all rebuildable projections
  *   of Postgres. Postgres is always authoritative; Redis is a read
  *   optimization only. Nothing is ever written to Redis first.
- * - No key carries a TTL. Entries live until explicitly overwritten or
- *   deleted (`replace_users`'s SCAN+DEL, or a fresh SET on the same key).
- *   This is deliberate cache-aside, not expiring cache — correctness
- *   depends on every Postgres write that can change a user's name or
- *   channel ownership also driving a Redis write (see `MemoryService`:
- *   `update_user_name`, `refresh_minimal_user`, and the get_user_name
- *   write-through-on-miss path).
  * - Freshness is layered: (1) synchronous write-through on the mutations
  *   above, (2) one-shot full rebuild at API process boot
  *   (`services/api/main.rs`), (3) a periodic full clear+rebuild from Postgres

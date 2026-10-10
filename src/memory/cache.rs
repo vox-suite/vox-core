@@ -36,6 +36,12 @@ pub struct MinimalUserInfo {
 }
 
 impl MinimalUserInfo {
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none() && self.first_name.is_none() && self.last_name.is_none()
+            && self.phone.is_none() && self.devices.is_empty()
+            && self.connections.is_empty() && self.channels.is_empty()
+    }
+
     pub fn new(name: Option<String>, channels: Vec<MinimalChannel>, devices: Vec<String>) -> Self {
         let name = name.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
         let phone = channels
@@ -168,11 +174,10 @@ impl ContextCache for RedisContextCache {
     }
 
     async fn put_user(&self, user_id: UserId, info: &MinimalUserInfo) -> Result<(), CacheError> {
-        let mut connection = self.client.get_multiplexed_async_connection().await?;
-        if info.name.is_none() && info.phone.is_none() && info.devices.is_empty() && info.connections.is_empty() && info.channels.is_empty() {
-            connection.del::<_, ()>(redis_keys::user(user_id)).await?;
-            return Ok(());
+        if info.is_empty() {
+            return self.delete_user(user_id).await;
         }
+        let mut connection = self.client.get_multiplexed_async_connection().await?;
         let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
         let mut pipeline = redis::pipe();
         pipeline
@@ -181,9 +186,10 @@ impl ContextCache for RedisContextCache {
             .ignore();
         for channel in &info.channels {
             pipeline
-                .set(
+                .set_ex(
                     redis_keys::user_by_channel(&channel.channel, &channel.external_id),
                     user_id.0.to_string(),
+                    86400,
                 )
                 .ignore();
         }
@@ -240,13 +246,15 @@ impl ContextCache for RedisContextCache {
         let mut pipeline = redis::pipe();
         pipeline.atomic();
         for (user_id, info) in users {
+            if info.is_empty() { continue; }
             let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
-            pipeline.set(redis_keys::user(*user_id), payload).ignore();
+            pipeline.set_ex(redis_keys::user(*user_id), payload, 86400).ignore();
             for channel in &info.channels {
                 pipeline
-                    .set(
+                    .set_ex(
                         redis_keys::user_by_channel(&channel.channel, &channel.external_id),
                         user_id.0.to_string(),
+                        86400,
                     )
                     .ignore();
             }

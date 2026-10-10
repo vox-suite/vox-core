@@ -177,7 +177,7 @@ mod integration_boundary_tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let grant=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_grants(user_id,client_id,collection_ids,board_ids,allow_create_plans) VALUES($1,'share_to_action','{}','{}',true) RETURNING id").bind(user).fetch_one(&pool).await.unwrap();
+        let grant=sqlx::query_scalar::<_,Uuid>("INSERT INTO integration_grants(user_id,client_id,collection_ids,chart_ids,allow_create_plans) VALUES($1,'share_to_action','{}','{}',true) RETURNING id").bind(user).fetch_one(&pool).await.unwrap();
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         sqlx::query("INSERT INTO integration_tokens(access_hash,refresh_hash,grant_id,access_expires_at,refresh_expires_at) VALUES($1,$2,$3,now()+interval '1 hour',now()+interval '1 day')").bind(vox_core::integrations::hash(&token)).bind(Uuid::new_v4().to_string()).bind(grant).execute(&pool).await.unwrap();
         let app = axum::Router::new()

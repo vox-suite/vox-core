@@ -82,6 +82,7 @@ impl MemoryService {
                     MinimalUserInfo::new(info.name, info.channels, devices),
                 )
             })
+            .filter(|(_, info)| !info.is_empty())
             .collect();
         let count = users.len();
         cache.replace_users(&users).await?;

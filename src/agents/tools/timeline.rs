@@ -52,3 +52,27 @@ impl Tool for SaveTimelineEvent {
         Ok(json!(TimelineRepository::new(db.pool().clone()).ingest_event(self.user_id.0,args).await?))
     }
 }
+
+#[derive(Clone)]
+pub struct QueryTimelineEvents { pub db: Option<Db>, pub user_id: UserId }
+impl Tool for QueryTimelineEvents {
+    const NAME: &'static str = "query_timeline_events";
+    type Args = crate::domain::timeline::TimelineQuery;
+    type Output = Value;
+    type Error = TimelineToolError;
+    fn description(&self) -> String { "Read factual timeline entries for this user in an explicit date window, with at most 20 entries per page. Use this for event details and provenance. Use find_schemas and query_user_data for arithmetic or aggregate statistics. Dates with day precision do not establish a precise time.".into() }
+    fn parameters(&self) -> Value { json!({"type":"object","additionalProperties":false,"required":["start_at","end_at"],"properties":{"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"group_value":{"type":"string"},"event_type_value":{"type":"string"},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20}}}) }
+    async fn call(&self,_:&mut rig::prelude::ToolContext,mut args:Self::Args) -> Result<Value,Self::Error> {
+        let db=self.db.as_ref().ok_or(TimelineToolError::NotConfigured)?;
+        if args.start_at.zip(args.end_at).is_none_or(|(start,end)|end<=start || end-start>chrono::Duration::days(366)) {
+            return Err(TimelineStorageError::ValidationFailed("Choose a date window of at most 366 days".into()).into());
+        }
+        args.limit=Some(args.limit.unwrap_or(20).clamp(1,20));
+        let page=TimelineRepository::new(db.pool().clone()).query_events(self.user_id.0,args).await?;
+        let result=json!({"events":page.events.into_iter().map(|entry|json!({"event":entry.event,"sources":entry.evidence.into_iter().map(|evidence|json!({"source_type":evidence.source_type,"source_id":evidence.source_id,"source_record_id":evidence.source_record_id})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"next_cursor":page.next_cursor});
+        if serde_json::to_vec(&result).map_or(true,|bytes|bytes.len()>262144) {
+            return Err(TimelineStorageError::ValidationFailed("Event details exceed the response limit; request fewer entries".into()).into());
+        }
+        Ok(result)
+    }
+}

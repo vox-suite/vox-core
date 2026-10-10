@@ -82,6 +82,7 @@ BEGIN
     INSERT INTO pulse_invalidations(user_id,reason,range_start,range_end)
     SELECT user_id,'timeline_change',min(occurred_at),max(occurred_at) FROM changed
     WHERE user_id IN (SELECT id FROM users) GROUP BY user_id;
+    PERFORM pg_notify('vox_timeline_updated',json_build_object('user_id',user_id,'type','timeline_updated')::text) FROM (SELECT DISTINCT user_id FROM changed) affected;
     RETURN NULL;
 END $$;
 CREATE TRIGGER pulse_timeline_insert AFTER INSERT ON timeline_events

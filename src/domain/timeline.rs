@@ -28,6 +28,7 @@ pub struct TimelineEventType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewEventType {
     pub value: String,
     pub label: String,
@@ -35,9 +36,9 @@ pub struct NewEventType {
     #[serde(default)]
     pub description: String,
     pub content_schema: serde_json::Value,
-    #[serde(default)]
+    #[serde(default = "empty_metadata")]
     pub analytics_definition: serde_json::Value,
-    #[serde(default)]
+    #[serde(default = "empty_metadata")]
     pub ui_hint: serde_json::Value,
 }
 
@@ -83,6 +84,7 @@ pub struct TimelineEventWithEvidence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TimelineQuery {
     pub group_id: Option<Uuid>,
     pub group_value: Option<String>,
@@ -102,17 +104,19 @@ pub struct TimelinePage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewEvidenceItem {
     pub source_record_id: Option<Uuid>,
     pub source_attachment_id: Option<Uuid>,
     pub source_type: String,
     pub source_id: Option<String>,
     pub raw_reference: Option<String>,
-    #[serde(default)]
+    #[serde(default = "empty_metadata")]
     pub observation_metadata: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IngestTimelineEventInput {
     pub event_type_id: Option<Uuid>,
     pub event_type_value: Option<String>,
@@ -142,6 +146,7 @@ fn default_confidence() -> f64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TimelineCountsQuery {
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
@@ -154,3 +159,5 @@ pub struct TimelineDayCount {
     pub category: String,
     pub count: i64,
 }
+
+fn empty_metadata() -> serde_json::Value { serde_json::json!({}) }

@@ -121,7 +121,7 @@ impl PulseService {
             return serde_json::from_value(value.clone())
                 .map_err(|_| PulseError::Invalid("Invalid cached result".into()));
         }
-        let _permit = self.gate.acquire().await.map_err(|_| PulseError::Busy)?;
+        let _permit = tokio::time::timeout(std::time::Duration::from_secs(3),self.gate.acquire()).await.map_err(|_|PulseError::Busy)?.map_err(|_| PulseError::Busy)?;
         let results = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             execution::execute_cached(
@@ -199,9 +199,13 @@ impl PulseService {
         let mut llm_ok = false;
         if !catalog.is_empty()
             && let Some(suggester) = &self.suggester
+            && let Ok(_permit) = {
+                static SUGGESTIONS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+                SUGGESTIONS.get_or_init(||tokio::sync::Semaphore::new(2)).try_acquire()
+            }
         {
             let ranked = tokio::time::timeout(
-                std::time::Duration::from_secs(180),
+                std::time::Duration::from_secs(20),
                 suggester.suggest_pulse(
                     catalog.iter().take(40).cloned().collect(),
                     input.timezone.clone(),

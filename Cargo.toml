@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 yaml_serde = "0.10.7"
-vox-connections = { git = "https://github.com/vox-suite/vox-connections.git", rev = "f61edd970592e7956b715cf1348d6cb634f44db3" }
+vox-connections = { path = "../vox-connections" }
 vox-shared = { git = "https://github.com/vox-suite/vox-shared.git", branch = "main" }
 axum = { version = "0.8.9", features = ["ws"] }
 async-trait = "0.1"
@@ -67,6 +67,3 @@ path = "services/defaults/main.rs"
 [[bin]]
 name = "vox-core-check-database"
 path = "services/database-check/main.rs"
-
-[patch."https://github.com/vox-suite/vox-connections.git"]
-vox-connections = { path = "../vox-connections" }

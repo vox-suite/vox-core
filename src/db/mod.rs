@@ -29,6 +29,10 @@ impl Db {
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
+            .after_connect(|connection,_| Box::pin(async move {
+                sqlx::query("SET search_path TO public,extensions,pg_temp").execute(connection).await?;
+                Ok(())
+            }))
             .connect(database_url)
             .await?;
         Ok(Self { pool })

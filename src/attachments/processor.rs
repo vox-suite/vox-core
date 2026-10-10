@@ -39,7 +39,7 @@ pub async fn process_attachment(
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
-        "SELECT a.id, a.user_id, a.source_record_id, a.object_ref, a.encryption_metadata, \
+        "SELECT a.id, a.user_id, a.storage_owner_id, a.source_record_id, a.object_ref, a.encryption_metadata, \
                 a.parse_state, j.attempt_count, j.max_attempts \
          FROM source_attachments a \
          JOIN jobs j ON j.id = $3 AND j.user_id = a.user_id \
@@ -54,11 +54,12 @@ pub async fn process_attachment(
 
     let source_record_id: Uuid = row.get("source_record_id");
     let object_ref: String = row.get("object_ref");
+    let storage_owner_id: Uuid = row.get("storage_owner_id");
     let encryption_metadata: serde_json::Value = row.get("encryption_metadata");
     let attempt_count: i32 = row.get("attempt_count");
     let max_attempts: i32 = row.get("max_attempts");
 
-    let read_result = if object_ref.starts_with(&format!("vox-obj://{user_id}/")) {
+    let read_result = if object_ref.starts_with(&format!("vox-obj://{storage_owner_id}/")) {
         crate::storage::object_storage::read_object(&object_ref).await.map_err(|e| e.to_string())
     } else { Err("attachment reference does not belong to this user".into()) };
 
@@ -125,7 +126,7 @@ pub async fn process_attachment(
         }
     };
 
-    let initial = parse_pdf(&bytes, None);
+    let initial = parse_pdf_off_runtime(&bytes, None).await;
     let parse_result = if !matches!(&initial, Err(PdfError::PasswordRequired)) {
         initial
     } else {
@@ -156,7 +157,7 @@ pub async fn process_attachment(
         };
 
         if let Some(ref pw) = provided_pw {
-            parse_pdf(&bytes, Some(pw))
+            parse_pdf_off_runtime(&bytes, Some(pw)).await
         } else {
             let user_facts: serde_json::Value = sqlx::query_scalar(
                 "SELECT profile_facts FROM users WHERE id = $1",
@@ -184,7 +185,7 @@ pub async fn process_attachment(
                 PasswordDerivationOutcome::CandidatePasswords(candidates) => {
                     let mut matched = None;
                     for cand in candidates {
-                        if let Ok(doc) = parse_pdf(&bytes, Some(&cand)) {
+                        if let Ok(doc) = parse_pdf_off_runtime(&bytes, Some(&cand)).await {
                             matched = Some(doc);
                             break;
                         }
@@ -344,7 +345,7 @@ pub async fn process_attachment(
         }
         Err(err) => {
             let next_attempts = attempt_count + 1;
-            let will_retry = next_attempts < max_attempts;
+            let will_retry = next_attempts < max_attempts && matches!(&err,PdfError::ExtractionFailed(message) if message.contains("time limit") || message.contains("unavailable") || message.contains("unexpectedly"));
             let (job_state, parse_state) = if will_retry {
                 ("pending", "processing")
             } else {
@@ -450,4 +451,20 @@ async fn record_issue(tx: &mut sqlx::Transaction<'_,sqlx::Postgres>,user_id:Uuid
         .bind(user_id).bind(title).bind(summary).bind(attachment_id).bind(reason).bind(job_id).bind(format!("attachment_issue:{attachment_id}"))
         .execute(&mut **tx).await?;
     Ok(())
+}
+
+async fn parse_pdf_off_runtime(bytes: &[u8], password: Option<&str>) -> Result<crate::attachments::pdf::ExtractedFinancialDocument, PdfError> {
+    static PARSERS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    let permit = tokio::time::timeout(std::time::Duration::from_secs(10),PARSERS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2))).clone().acquire_owned()).await
+        .map_err(|_| PdfError::ExtractionFailed("PDF parser unavailable: capacity wait exceeded".into()))?
+        .map_err(|_| PdfError::ExtractionFailed("PDF parser unavailable".into()))?;
+    let bytes = bytes.to_vec();
+    let password = password.map(str::to_owned);
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        parse_pdf(&bytes, password.as_deref())
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(45), task).await
+        .map_err(|_| PdfError::ExtractionFailed("PDF extraction exceeded its time limit".into()))?
+        .map_err(|_| PdfError::ExtractionFailed("PDF parser stopped unexpectedly".into()))?
 }

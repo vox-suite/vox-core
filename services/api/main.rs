@@ -58,6 +58,8 @@ async fn main() {
             if let Ok(mut listener) =
                 sqlx::postgres::PgListener::connect_with(&span_notification_pool).await
                 && listener.listen("vox_connection_spans").await.is_ok()
+                && listener.listen("vox_timeline_updated").await.is_ok()
+                && listener.listen("vox_updates_updated").await.is_ok()
             {
                 while let Ok(notification) = listener.recv().await {
                     if let Ok(payload) =
@@ -69,7 +71,7 @@ async fn main() {
                     {
                         span_notification_hub.notify(
                             user_id,
-                            serde_json::json!({"type": payload.get("type").and_then(|v| v.as_str()).unwrap_or("span_created"),"span_id":payload.get("span_id")}),
+                            payload,
                         );
                     }
                 }

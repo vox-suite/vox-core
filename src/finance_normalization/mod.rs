@@ -56,7 +56,7 @@ pub async fn dedupe_or_settle_in_transaction(
 
     let existing = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM timeline_events WHERE user_id = $1 \
-         AND dedupe_key = $2 AND id <> $3 ORDER BY created_at LIMIT 1",
+         AND content->>'fingerprint' = $2 AND record_state='active' AND id <> $3 ORDER BY created_at LIMIT 1",
     )
     .bind(user_id)
     .bind(&fp)
@@ -73,6 +73,8 @@ pub async fn dedupe_or_settle_in_transaction(
         .bind(existing_id)
         .execute(&mut **tx)
         .await?;
+        sqlx::query("DELETE FROM timeline_evidence duplicate USING timeline_evidence original WHERE duplicate.timeline_event_id=$2 AND original.timeline_event_id=$1 AND duplicate.user_id=$3 AND original.user_id=$3 AND duplicate.evidence_hash=original.evidence_hash")
+            .bind(existing_id).bind(timeline_event_id).bind(user_id).execute(&mut **tx).await?;
         sqlx::query("UPDATE timeline_evidence SET timeline_event_id=$1 WHERE timeline_event_id=$2 AND user_id=$3")
             .bind(existing_id).bind(timeline_event_id).bind(user_id).execute(&mut **tx).await?;
         sqlx::query("UPDATE timeline_events SET record_state='superseded',content=content || jsonb_build_object('superseded_by',$2::text),revision=revision+1,updated_at=now() WHERE id=$1 AND user_id=$3")
@@ -91,7 +93,7 @@ pub async fn dedupe_or_settle_in_transaction(
     };
 
     sqlx::query(
-        "UPDATE timeline_events SET dedupe_key = $2, \
+        "UPDATE timeline_events SET revision=revision+1, updated_at=now(), \
                 content = content || jsonb_build_object( \
                     'fingerprint', $2::text, \
                     'is_spending', $3::boolean, \

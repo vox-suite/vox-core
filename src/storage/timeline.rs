@@ -112,6 +112,7 @@ impl TimelineRepository {
         input: NewEventType,
     ) -> Result<TimelineEventType, TimelineStorageError> {
         validate_schema_document(&input.content_schema)?;
+        if !input.analytics_definition.is_object() || !input.ui_hint.is_object() || serde_json::to_vec(&input.analytics_definition).map_or(true,|bytes|bytes.len()>65536) || serde_json::to_vec(&input.ui_hint).map_or(true,|bytes|bytes.len()>16384) || input.description.len()>4000 { return Err(TimelineStorageError::ValidationFailed("invalid analytics or UI metadata".into())); }
         if input.value.is_empty() || input.value.len() > 80 || !input.value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') || input.label.trim().is_empty() || input.label.len() > 120 {
             return Err(TimelineStorageError::ValidationFailed("invalid event type value or label".into()));
         }
@@ -227,7 +228,7 @@ impl TimelineRepository {
                AND ($4::uuid IS NULL OR e.event_type_id = $4) \
                AND ($5::text IS NULL OR et.value = $5) \
                AND ($6::timestamptz IS NULL OR e.occurred_at >= $6) \
-               AND ($7::timestamptz IS NULL OR e.occurred_at <= $7) \
+               AND ($7::timestamptz IS NULL OR e.occurred_at < $7) \
                AND ($8::text IS NULL OR e.record_state = $8) \
                AND ($9::timestamptz IS NULL OR (e.occurred_at, e.id) < ($9, $10)) \
              ORDER BY e.occurred_at DESC, e.id DESC \
@@ -338,15 +339,26 @@ impl TimelineRepository {
 
     pub async fn ingest_event(&self, user_id: Uuid, input: IngestTimelineEventInput) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
         let mut tx = self.pool.begin().await?;
-        let result = self.ingest_event_in_transaction(&mut tx, user_id, input).await?;
+        let mut result = self.ingest_event_in_transaction(&mut tx, user_id, input).await?;
+        let finance: bool = sqlx::query_scalar("SELECT owner_user_id IS NULL AND value IN ('transaction','bill','statement','refund','transfer','repayment') FROM timeline_event_types WHERE id=$1")
+            .bind(result.event.event_type_id).fetch_one(&mut *tx).await?;
+        if finance {
+            crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&result.event.content).await?;
+            let row = sqlx::query("SELECT content,record_state,revision,updated_at FROM timeline_events WHERE id=$1 AND user_id=$2")
+                .bind(result.event.id).bind(user_id).fetch_one(&mut *tx).await?;
+            result.event.content=row.get("content");result.event.record_state=row.get("record_state");
+            result.event.revision=row.get("revision");result.event.updated_at=row.get("updated_at");
+            if result.event.record_state != "active" { result.evidence.clear(); }
+        }
         tx.commit().await?;
         Ok(result)
     }
     pub async fn ingest_event_in_transaction(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, user_id: Uuid, input: IngestTimelineEventInput) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
-        if input.title.trim().is_empty() || input.title.len() > 500 || !input.content.is_object() || serde_json::to_vec(&input.content).map_or(true,|v|v.len()>262_144) || input.evidence.len()>20 || !input.confidence.is_finite() || !(0.0..=1.0).contains(&input.confidence) || input.ended_at.is_some_and(|end|end<input.occurred_at) {
+        if input.title.trim().is_empty() || input.title.len() > 500 || !input.content.is_object() || serde_json::to_vec(&input.content).map_or(true,|v|v.len()>262_144) || input.evidence.len()>20 || input.evidence.iter().any(|item| item.source_type.is_empty() || item.source_type.len()>100 || !item.observation_metadata.is_object() || serde_json::to_vec(&item.observation_metadata).map_or(true,|bytes|bytes.len()>65536) || item.source_id.as_ref().is_some_and(|value|value.len()>1024) || item.raw_reference.as_ref().is_some_and(|value|value.len()>2048)) || !input.confidence.is_finite() || !(0.0..=1.0).contains(&input.confidence) || input.ended_at.is_some_and(|end|end<input.occurred_at) {
             return Err(TimelineStorageError::ValidationFailed("invalid event title, content, confidence or time range".into()));
         }
 
+        if !matches!(input.time_precision.as_str(),"year"|"month"|"day"|"hour"|"minute"|"second"|"millisecond") || input.source_timezone.as_ref().is_some_and(|timezone| timezone.parse::<chrono_tz::Tz>().is_err()) || input.dedupe_key.as_ref().is_some_and(|key|key.is_empty() || key.len()>1024) || input.summary.as_ref().is_some_and(|summary|summary.len()>8000) { return Err(TimelineStorageError::ValidationFailed("invalid precision, timezone, dedupe key or summary".into())); }
         let event_type_row = if let Some(et_id) = input.event_type_id {
             sqlx::query(
                 "SELECT id, owner_user_id, group_id, content_schema \
@@ -506,6 +518,7 @@ impl TimelineRepository {
                                                source_attachment_id, source_type, source_id, \
                                                raw_reference, observation_metadata) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO UPDATE SET evidence_hash=EXCLUDED.evidence_hash \
                  RETURNING id, timeline_event_id, user_id, source_record_id, source_attachment_id, \
                            source_type, source_id, raw_reference, observation_metadata, created_at",
             )

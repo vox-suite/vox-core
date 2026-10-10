@@ -25,6 +25,7 @@ CREATE TABLE source_attachments (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     source_record_id UUID NOT NULL,
     object_ref TEXT NOT NULL,
+    storage_owner_id UUID NOT NULL,
     raw_deleted_at TIMESTAMPTZ,
     content_hash TEXT NOT NULL,
     encryption_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -79,3 +80,13 @@ CREATE TABLE connector_coverage (
     CONSTRAINT connector_coverage_connection_tenant_fk
         FOREIGN KEY (connection_id, user_id) REFERENCES vox_connections(id, user_id) ON DELETE CASCADE
 );
+
+CREATE FUNCTION bind_attachment_storage_owner() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP='INSERT' THEN NEW.storage_owner_id := NEW.user_id;
+    ELSIF NEW.storage_owner_id IS DISTINCT FROM OLD.storage_owner_id THEN
+        RAISE EXCEPTION 'attachment storage ownership cannot be changed';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER source_attachment_storage_owner BEFORE INSERT OR UPDATE ON source_attachments FOR EACH ROW EXECUTE FUNCTION bind_attachment_storage_owner();

@@ -34,7 +34,7 @@ CREATE UNIQUE INDEX timeline_event_types_user_uniq
 
 CREATE OR REPLACE FUNCTION immutable_published_event_type() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.state = 'published' AND (NEW.content_schema IS DISTINCT FROM OLD.content_schema OR NEW.analytics_definition IS DISTINCT FROM OLD.analytics_definition OR NEW.value IS DISTINCT FROM OLD.value OR NEW.version IS DISTINCT FROM OLD.version OR NEW.group_id IS DISTINCT FROM OLD.group_id OR NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id) THEN
+    IF OLD.state = 'published' AND (NEW.content_schema IS DISTINCT FROM OLD.content_schema OR NEW.analytics_definition IS DISTINCT FROM OLD.analytics_definition OR NEW.value IS DISTINCT FROM OLD.value OR NEW.version IS DISTINCT FROM OLD.version OR NEW.group_id IS DISTINCT FROM OLD.group_id OR (NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id AND NOT COALESCE(OLD.owner_user_id::text = current_setting('vox.merge_old_user',true) AND NEW.owner_user_id::text = current_setting('vox.merge_new_user',true),false))) THEN
         RAISE EXCEPTION 'published timeline event type schemas are immutable';
     END IF;
     RETURN NEW;
@@ -88,8 +88,8 @@ BEGIN
     RETURN NEW;
 END $$;
 
-CREATE TRIGGER timeline_event_scope_check BEFORE INSERT OR UPDATE ON timeline_events
-    FOR EACH ROW EXECUTE FUNCTION validate_timeline_event_scope();
+CREATE CONSTRAINT TRIGGER timeline_event_scope_check AFTER INSERT OR UPDATE ON timeline_events
+    DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION validate_timeline_event_scope();
 
 CREATE TABLE timeline_evidence (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -101,6 +101,7 @@ CREATE TABLE timeline_evidence (
     source_id TEXT,
     raw_reference TEXT,
     observation_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evidence_hash TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT timeline_evidence_id_user_key UNIQUE (id, user_id),
     CONSTRAINT timeline_evidence_event_tenant_fk
@@ -205,3 +206,13 @@ WHERE NOT EXISTS (
     SELECT 1 FROM timeline_event_types existing
     WHERE existing.owner_user_id IS NULL AND existing.value = seed.val AND existing.version = 1
 );
+
+CREATE INDEX timeline_events_financial_fingerprint_idx ON timeline_events(user_id,(content->>'fingerprint')) WHERE record_state='active' AND content ? 'fingerprint';
+
+CREATE FUNCTION fingerprint_timeline_evidence() RETURNS trigger LANGUAGE plpgsql SET search_path TO public,extensions,pg_temp AS $$
+BEGIN
+    NEW.evidence_hash := encode(digest(jsonb_build_array(NEW.source_record_id,NEW.source_attachment_id,NEW.source_type,NEW.source_id,NEW.raw_reference,NEW.observation_metadata)::text,'sha256'),'hex');
+    RETURN NEW;
+END $$;
+CREATE TRIGGER timeline_evidence_fingerprint BEFORE INSERT OR UPDATE ON timeline_evidence FOR EACH ROW EXECUTE FUNCTION fingerprint_timeline_evidence();
+CREATE UNIQUE INDEX timeline_evidence_snapshot_unique ON timeline_evidence(timeline_event_id,user_id,evidence_hash);

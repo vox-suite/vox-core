@@ -63,6 +63,7 @@ impl ToolExport {
         set.add_tool(timeline::ListTimelineTypes { db: db.clone(), user_id });
         set.add_tool(timeline::CreateTimelineEventType { db: db.clone(), user_id });
         set.add_tool(timeline::SaveTimelineEvent { db: db.clone(), user_id });
+        set.add_tool(timeline::QueryTimelineEvents { db: db.clone(), user_id });
         set.add_tool(data_query::FindSchemas::new(db.clone(), user_id));
         set.add_tool(data_query::QueryUserData::new(db.clone(), user_id));
         set.add_tool(connections::ReadConnectedApp {

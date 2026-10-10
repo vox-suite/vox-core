@@ -33,3 +33,12 @@ CREATE INDEX updates_user_status_published_idx
 
 CREATE INDEX updates_user_kind_idx
     ON updates (user_id, kind, status);
+
+CREATE FUNCTION notify_updates_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('vox_updates_updated',json_build_object('user_id',user_id,'type','updates_updated')::text) FROM (SELECT DISTINCT user_id FROM changed) affected;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER updates_notify_insert AFTER INSERT ON updates REFERENCING NEW TABLE AS changed FOR EACH STATEMENT EXECUTE FUNCTION notify_updates_changed();
+CREATE TRIGGER updates_notify_update AFTER UPDATE ON updates REFERENCING NEW TABLE AS changed FOR EACH STATEMENT EXECUTE FUNCTION notify_updates_changed();
+CREATE TRIGGER updates_notify_delete AFTER DELETE ON updates REFERENCING OLD TABLE AS changed FOR EACH STATEMENT EXECUTE FUNCTION notify_updates_changed();

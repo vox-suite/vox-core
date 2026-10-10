@@ -115,6 +115,13 @@ BEGIN
         RAISE EXCEPTION 'target user % has no context', new_user;
     END IF;
 
+    DELETE FROM timeline_revisions WHERE user_id=old_user;
+    DELETE FROM pulse_revisions WHERE user_id=old_user;
+    DELETE FROM pulse_daily_aggregates WHERE user_id IN (old_user,new_user);
+    DELETE FROM pulse_cache WHERE user_id IN (old_user,new_user);
+    DELETE FROM pulse_dismissals WHERE user_id=old_user;
+    PERFORM set_config('vox.merge_old_user',old_user::text,true);
+    PERFORM set_config('vox.merge_new_user',new_user::text,true);
     SET CONSTRAINTS ALL DEFERRED;
 
     FOR fk IN
@@ -166,23 +173,15 @@ BEGIN
         set_clause := array_to_string(set_parts, ', ');
         where_clause := array_to_string(where_parts, ' AND ');
 
-        BEGIN
-            EXECUTE format('UPDATE %s SET %s WHERE %s', fk.tbl, set_clause, where_clause);
-        EXCEPTION WHEN unique_violation THEN
-            FOR row_ref IN EXECUTE format('SELECT ctid AS ref FROM %s WHERE %s', fk.tbl, where_clause) LOOP
-                BEGIN
-                    EXECUTE format('UPDATE %s SET %s WHERE ctid = $1', fk.tbl, set_clause) USING row_ref.ref;
-                EXCEPTION WHEN unique_violation THEN
-                    EXECUTE format('DELETE FROM %s WHERE ctid = $1', fk.tbl) USING row_ref.ref;
-                END;
-            END LOOP;
-        END;
+        EXECUTE format('UPDATE %s SET %s WHERE %s', fk.tbl, set_clause, where_clause);
     END LOOP;
 
     SET CONSTRAINTS ALL IMMEDIATE;
 
     DELETE FROM user_contexts WHERE user_id = old_user;
     DELETE FROM users WHERE id = old_user;
+    PERFORM set_config('vox.merge_old_user','',true);
+    PERFORM set_config('vox.merge_new_user','',true);
 END
 $_$;
 

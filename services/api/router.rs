@@ -390,7 +390,8 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/connectors/google/takeout/upload",
             post(crate::routes::takeout::upload_takeout)
-                .layer(axum::extract::DefaultBodyLimit::max(104_857_600)),
+                .layer(axum::extract::DefaultBodyLimit::max(104_857_600))
+                .layer(middleware::from_fn(crate::routes::takeout::limit_import)),
         )
         .with_state(state.pool.clone());
 

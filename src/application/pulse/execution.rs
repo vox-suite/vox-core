@@ -147,5 +147,5 @@ async fn execute_single(pool: &PgPool, user: Uuid, d: &PulseDefinition, m: &Meas
             "end":row.get::<Option<chrono::DateTime<Utc>>,_>("coverage_end"),"mode":row.get::<String,_>("sync_mode"),"healthy":row.get::<bool,_>("is_healthy"),
             "last_checked_at":row.get::<Option<chrono::DateTime<Utc>>,_>("last_checked_at")})).collect::<Vec<_>>()});
     Ok(PulseResult { coverage, total, source:m.profile.source.clone(), points, unit:m.unit.clone(), quality:m.quality.clone(),
-        description:m.description.clone(), record_count, undated_count:0, computed_at:Utc::now(), data_as_of:Some(now), error:None })
+        description:m.description.clone(), record_count, undated_count:0, computed_at:Utc::now(), data_as_of:m.profile.last_at.filter(|at| *at <= end_at), error:None })
 }

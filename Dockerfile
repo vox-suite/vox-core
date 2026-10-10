@@ -3,6 +3,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
+COPY vox-connections /vox-connections
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY migrations ./migrations

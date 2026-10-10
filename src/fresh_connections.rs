@@ -129,7 +129,7 @@ impl TimelineIngestor for CoreIngestor {
 
             sqlx::query(
                 "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO NOTHING",
             )
             .bind(timeline_id)
             .bind(user_id)
@@ -599,7 +599,7 @@ impl TimelineIngestor for CoreIngestor {
 
             sqlx::query(
                 "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO NOTHING",
             )
             .bind(timeline_id)
             .bind(user_id)

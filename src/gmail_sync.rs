@@ -259,7 +259,21 @@ pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
                 std::env::var("VOX_CORE_API_URL").ok(),
             );
             if let Ok(svc) = connections_svc {
-                let _ = svc.renew_gmail_watch(u_id, conn_id).await;
+                match svc.renew_gmail_watch(u_id,conn_id).await {
+                    Ok(()) => {
+                        if let Err(error) = sqlx::query("UPDATE updates SET status='resolved',resolved_at=now(),updated_at=now() WHERE user_id=$1 AND dedupe_key=$2 AND status<>'resolved'")
+                            .bind(u_id).bind(format!("gmail-watch:{conn_id}")).execute(pool).await {
+                            tracing::warn!(%conn_id,%error,"Could not resolve Gmail watch status update");
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(%conn_id,"Gmail live watch renewal failed; reconciliation remains enabled");
+                        if let Err(error) = sqlx::query("INSERT INTO updates(user_id,kind,category,title,summary,content,dedupe_key) VALUES($1,'connection_status','gmail','Live Gmail delivery needs attention','New mail reconciliation continues while signed push delivery is unavailable.',jsonb_build_object('connection_id',$2::text,'delivery_state','reconciliation_only'),$3) ON CONFLICT(user_id,dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET status='active',resolved_at=NULL,updated_at=now()")
+                            .bind(u_id).bind(conn_id).bind(format!("gmail-watch:{conn_id}")).execute(pool).await {
+                            tracing::warn!(%conn_id,%error,"Could not record Gmail watch status update");
+                        }
+                    }
+                }
             }
         }
 
@@ -278,8 +292,10 @@ async fn ingest_message(
         .bind(user_id).bind(message_id).fetch_one(&mut *tx).await?;
     if exists { return Ok(false); }
     let msg = gmail.get_message(token, message_id).await?;
-    let metadata = json!({"from":msg.from,"to":msg.to,"subject":msg.subject,"date":msg.date,
-        "snippet":msg.snippet,"internal_date":msg.internal_date,"attachment_count":msg.attachments.len()});
+    let safe_subject = msg.subject.as_deref().map(redact_email_codes);
+    let safe_snippet = msg.snippet.as_deref().map(redact_email_codes);
+    let metadata = json!({"from":msg.from,"to":msg.to,"subject":safe_subject,"date":msg.date,
+        "snippet":safe_snippet,"internal_date":msg.internal_date,"attachment_count":msg.attachments.len()});
     let hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&metadata)?));
     let record_id: Uuid = sqlx::query_scalar("INSERT INTO source_records(user_id,connector_id,source_account_id,source_record_id,record_hash,disposition,metadata) VALUES($1,'gmail',$2,$3,$4,'retained',$5) RETURNING id")
         .bind(user_id).bind(email).bind(message_id).bind(hash).bind(&metadata).fetch_one(&mut *tx).await?;
@@ -309,8 +325,8 @@ async fn ingest_message(
             crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&doc.facts).await?;
         } else {
             sqlx::query("INSERT INTO updates(user_id,kind,content_version,category,title,summary,content,priority,status,dedupe_key) VALUES($1,'email_notice',1,'email',$2,$3,$4,'low','active',$5)")
-                .bind(user_id).bind(msg.subject.as_deref().unwrap_or("Email notification"))
-                .bind(&msg.snippet).bind(&metadata).bind(format!("email_notice:{message_id}")).execute(&mut *tx).await?;
+                .bind(user_id).bind(safe_subject.as_deref().unwrap_or("Email notification"))
+                .bind(&safe_snippet).bind(&metadata).bind(format!("email_notice:{message_id}")).execute(&mut *tx).await?;
         }
         Ok(())
     }.await;
@@ -321,4 +337,13 @@ async fn ingest_message(
     }
     tx.commit().await?;
     Ok(true)
+}
+
+pub fn redact_email_codes(text:&str) -> String {
+    static FORWARD:std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static REVERSE:std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let forward = FORWARD.get_or_init(||regex::Regex::new(r"(?i)((?:\botp\b|one[- ]time password|verification code|security code|login code)\s*(?:is\s*)?[:=-]?\s*)([0-9]{4,8})\b").unwrap());
+    let reverse = REVERSE.get_or_init(||regex::Regex::new(r"(?i)\b([0-9]{4,8})(\s+(?:is\s+)?(?:your\s+)?(?:otp\b|one[- ]time password|verification code|security code|login code))").unwrap());
+    let redacted=forward.replace_all(text,"${1}[redacted]");
+    reverse.replace_all(&redacted,"[redacted]${2}").into_owned()
 }
