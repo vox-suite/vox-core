@@ -550,6 +550,7 @@ impl UpdatesRepository {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_update(
         &self,
         user_id: Uuid,

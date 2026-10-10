@@ -94,10 +94,10 @@ pub fn validate_configuration() -> Result<(), ObjectStoreError> {
 }
 
 pub fn local_storage_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("VOX_STORAGE_PATH") {
-        if !dir.trim().is_empty() {
-            return PathBuf::from(dir.trim());
-        }
+    if let Ok(dir) = std::env::var("VOX_STORAGE_PATH")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir.trim());
     }
     PathBuf::from("data/storage")
 }

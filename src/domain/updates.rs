@@ -23,7 +23,7 @@ impl UpdateKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_value(s: &str) -> Option<Self> {
         match s {
             "briefing" => Some(Self::Briefing),
             "email_notice" => Some(Self::EmailNotice),
@@ -52,7 +52,7 @@ impl UpdateStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_value(s: &str) -> Option<Self> {
         match s {
             "active" => Some(Self::Active),
             "resolved" => Some(Self::Resolved),
@@ -81,7 +81,7 @@ impl UpdatePriority {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_value(s: &str) -> Option<Self> {
         match s {
             "low" => Some(Self::Low),
             "standard" => Some(Self::Standard),

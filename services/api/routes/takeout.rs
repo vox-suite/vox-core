@@ -71,20 +71,19 @@ pub async fn upload_takeout(
     for (name, value) in files {
         let name_lower = name.to_ascii_lowercase();
         let mut candidates = Vec::new();
-        if name_lower.contains("watch-history")
+        if (name_lower.contains("watch-history")
             || (name_lower == "direct.json"
                 && value
                     .as_array()
-                    .is_some_and(|items| items.iter().any(|item| item.get("titleUrl").is_some())))
+                    .is_some_and(|items| items.iter().any(|item| item.get("titleUrl").is_some()))))
+            && let Some(items) = value.as_array()
         {
-            if let Some(items) = value.as_array() {
-                for row in items {
-                    if let Some(event) = youtube_event(row) {
-                        candidates.push(("youtube_history", event));
-                        response.youtube_records_imported += 1;
-                    } else {
-                        response.skipped_records += 1;
-                    }
+            for row in items {
+                if let Some(event) = youtube_event(row) {
+                    candidates.push(("youtube_history", event));
+                    response.youtube_records_imported += 1;
+                } else {
+                    response.skipped_records += 1;
                 }
             }
         }
@@ -186,13 +185,13 @@ fn event(
     end: Option<DateTime<Utc>>,
     mut content: Value,
 ) -> IngestTimelineEventInput {
-    if let Some(end) = end {
-        if let Some(object) = content.as_object_mut() {
-            object.insert(
-                "duration_seconds".into(),
-                json!((end - start).num_milliseconds() as f64 / 1000.0),
-            );
-        }
+    if let Some(end) = end
+        && let Some(object) = content.as_object_mut()
+    {
+        object.insert(
+            "duration_seconds".into(),
+            json!((end - start).num_milliseconds() as f64 / 1000.0),
+        );
     }
     let identity = json!([
         kind,

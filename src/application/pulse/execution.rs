@@ -36,10 +36,10 @@ async fn execute_inner(
     if let Some((key, refresh, arrived)) = cache {
         let cached: Option<serde_json::Value> = sqlx::query_scalar("SELECT payload FROM pulse_cache WHERE user_id=$1 AND cache_key=$2 AND expires_at>now() AND (NOT $3 OR created_at >= $4)")
             .bind(user).bind(key).bind(refresh).bind(arrived).fetch_optional(pool).await?;
-        if let Some(cached) = cached {
-            if let Ok(results) = serde_json::from_value(cached) {
-                return Ok(results);
-            }
+        if let Some(cached) = cached
+            && let Ok(results) = serde_json::from_value(cached)
+        {
+            return Ok(results);
         }
     }
     let mut results = Vec::with_capacity(inputs.len());

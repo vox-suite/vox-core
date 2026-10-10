@@ -94,12 +94,11 @@ async fn verify_pubsub_auth(
             .unwrap_or(false);
 
     if let Some(token) = bearer_token {
-        if is_dev {
-            if let Some(ref sec) = expected_secret {
-                if token == sec.trim() {
-                    return Ok(());
-                }
-            }
+        if is_dev
+            && let Some(ref sec) = expected_secret
+            && token == sec.trim()
+        {
+            return Ok(());
         }
 
         if let Ok((header, payload, signature)) = crate::identity_token::split_jwt(token) {
@@ -156,12 +155,11 @@ async fn verify_pubsub_auth(
         }
     }
 
-    if is_dev {
-        if let Some(ref sec) = expected_secret {
-            if query_token == Some(sec.trim()) {
-                return Ok(());
-            }
-        }
+    if is_dev
+        && let Some(ref sec) = expected_secret
+        && query_token == Some(sec.trim())
+    {
+        return Ok(());
     }
 
     Err(StatusCode::UNAUTHORIZED)

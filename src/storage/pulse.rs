@@ -352,6 +352,7 @@ impl PulseRepository {
         Ok(chart)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_chart(
         &self,
         user: Uuid,

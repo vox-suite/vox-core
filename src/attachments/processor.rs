@@ -147,15 +147,10 @@ pub async fn process_attachment(
         let now = Utc::now();
         let is_expired = secret_expires_at.is_none_or(|exp| exp <= now);
 
-        let provided_pw = if encrypted_secret.is_some() && nonce.is_some() && !is_expired {
-            decrypt_attachment_secret(
-                key,
-                job_id,
-                attachment_id,
-                encrypted_secret.unwrap(),
-                nonce.unwrap(),
-            )
-            .ok()
+        let provided_pw = if let (Some(secret), Some(nonce)) = (encrypted_secret, nonce)
+            && !is_expired
+        {
+            decrypt_attachment_secret(key, job_id, attachment_id, secret, nonce).ok()
         } else {
             None
         };

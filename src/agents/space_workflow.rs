@@ -311,65 +311,67 @@ impl SpaceRuntime {
             let output: Value = row.get("output");
             let role: String = row.get("role");
             let mut aliases = std::collections::HashMap::<String, Uuid>::new();
-            if role != "plan" {
-                if let Some(proposals) = output["followups"].as_array() {
-                    for proposal in proposals.iter().take(4) {
-                        let Some(role) = proposal["role"]
-                            .as_str()
-                            .filter(|r| crate::storage::space_tasks::valid_role(r))
-                        else {
-                            continue;
-                        };
-                        let mut dependencies: Vec<Uuid> = proposal["dependencies"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|v| v.as_str())
-                            .filter_map(|id| {
-                                Uuid::parse_str(id)
-                                    .ok()
-                                    .or_else(|| aliases.get(id).copied())
-                            })
-                            .collect();
-                        let requested = proposal["dependencies"].as_array().map_or(0, Vec::len);
-                        if dependencies.len() != requested {
-                            sqlx::query("UPDATE space_tasks SET status='failed',error='Follow-up contains an unresolved dependency' WHERE node_id=$1").bind(parent).execute(self.db.pool()).await.map_err(|_|AgentError::Provider)?;
-                            continue;
+            if role != "plan"
+                && let Some(proposals) = output["followups"].as_array()
+            {
+                for proposal in proposals.iter().take(4) {
+                    let Some(role) = proposal["role"]
+                        .as_str()
+                        .filter(|r| crate::storage::space_tasks::valid_role(r))
+                    else {
+                        continue;
+                    };
+                    let mut dependencies: Vec<Uuid> = proposal["dependencies"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(|id| {
+                            Uuid::parse_str(id)
+                                .ok()
+                                .or_else(|| aliases.get(id).copied())
+                        })
+                        .collect();
+                    let requested = proposal["dependencies"].as_array().map_or(0, Vec::len);
+                    if dependencies.len() != requested {
+                        sqlx::query("UPDATE space_tasks SET status='failed',error='Follow-up contains an unresolved dependency' WHERE node_id=$1").bind(parent).execute(self.db.pool()).await.map_err(|_|AgentError::Provider)?;
+                        continue;
+                    }
+                    if !dependencies.contains(&parent) {
+                        dependencies.push(parent);
+                    }
+                    let p = TaskProposal {
+                        role: role.into(),
+                        title: proposal["title"].as_str().unwrap_or("Follow-up").into(),
+                        brief: proposal["brief"].as_str().unwrap_or("").into(),
+                        dependencies,
+                    };
+                    match tasks
+                        .spawn_followup(
+                            space,
+                            &p,
+                            crate::config::DEFAULT_SPACE_MAX_STEPS as i64,
+                            crate::config::DEFAULT_SPACE_MAX_CHILDREN as i64,
+                            generation,
+                            parent,
+                        )
+                        .await
+                    {
+                        Ok(Some(id)) => {
+                            if let Some(alias) = proposal["id"].as_str() {
+                                aliases.insert(alias.into(), id);
+                            }
                         }
-                        if !dependencies.contains(&parent) {
-                            dependencies.push(parent);
-                        }
-                        let p = TaskProposal {
-                            role: role.into(),
-                            title: proposal["title"].as_str().unwrap_or("Follow-up").into(),
-                            brief: proposal["brief"].as_str().unwrap_or("").into(),
-                            dependencies,
-                        };
-                        match tasks
-                            .spawn_followup(
-                                space,
-                                &p,
-                                crate::config::DEFAULT_SPACE_MAX_STEPS as i64,
-                                crate::config::DEFAULT_SPACE_MAX_CHILDREN as i64,
-                                generation,
-                                parent,
+                        Ok(None) => {}
+                        Err(error) => {
+                            sqlx::query(
+                                "UPDATE space_tasks SET status='failed',error=$2 WHERE node_id=$1",
                             )
+                            .bind(parent)
+                            .bind(error.to_string())
+                            .execute(self.db.pool())
                             .await
-                        {
-                            Ok(Some(id)) => {
-                                if let Some(alias) = proposal["id"].as_str() {
-                                    aliases.insert(alias.into(), id);
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                sqlx::query("UPDATE space_tasks SET status='failed',error=$2 WHERE node_id=$1")
-                                    .bind(parent)
-                                    .bind(error.to_string())
-                                    .execute(self.db.pool())
-                                    .await
-                                    .map_err(|_| AgentError::Provider)?;
-                            }
+                            .map_err(|_| AgentError::Provider)?;
                         }
                     }
                 }

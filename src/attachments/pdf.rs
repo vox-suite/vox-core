@@ -126,10 +126,10 @@ pub fn extract_document_facts(
         amount_currency = caps.get(1).map(|currency| currency.as_str().to_lowercase());
         if let Some(m) = caps.get(2) {
             let s = m.as_str().replace(',', "");
-            if let Ok(val) = s.parse::<f64>() {
-                if val > 0.0 {
-                    amount = Some(val);
-                }
+            if let Ok(val) = s.parse::<f64>()
+                && val > 0.0
+            {
+                amount = Some(val);
             }
         }
     }

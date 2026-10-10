@@ -72,13 +72,12 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
         };
         for metric in metrics {
             let field = metric.get("field").and_then(|v| v.as_str());
-            if let Some(field) = field {
-                if field.is_empty()
+            if let Some(field) = field
+                && (field.is_empty()
                     || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    || p.fields.get(field).is_none_or(|ty| ty != "number")
-                {
-                    continue;
-                }
+                    || p.fields.get(field).is_none_or(|ty| ty != "number"))
+            {
+                continue;
             }
             if p.timing == "cumulative_lifetime_stat" || p.timing == "observed_counter_delta" {
                 continue;

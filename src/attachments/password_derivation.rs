@@ -166,7 +166,7 @@ fn extract_ddmm(dob: &str) -> Option<String> {
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '-' || *c == '/')
         .collect();
-    let parts: Vec<&str> = clean.split(|c| c == '-' || c == '/').collect();
+    let parts: Vec<&str> = clean.split(['-', '/']).collect();
     if parts.len() == 3 {
         if parts[0].len() == 4 {
             let mm = parts[1];
@@ -186,7 +186,7 @@ fn extract_ddmmyy(dob: &str) -> Option<String> {
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '-' || *c == '/')
         .collect();
-    let parts: Vec<&str> = clean.split(|c| c == '-' || c == '/').collect();
+    let parts: Vec<&str> = clean.split(['-', '/']).collect();
     if parts.len() == 3 {
         if parts[0].len() == 4 {
             let yy = &parts[0][2..];

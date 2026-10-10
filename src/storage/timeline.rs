@@ -504,13 +504,11 @@ impl TimelineRepository {
         let target_group_id = if let Some(gid) = input.group_id {
             gid
         } else if let Some(ref gval) = input.group_value {
-            let gid =
-                sqlx::query_scalar::<_, Uuid>("SELECT id FROM timeline_groups WHERE value = $1")
-                    .bind(gval)
-                    .fetch_optional(&mut **tx)
-                    .await?
-                    .ok_or(TimelineStorageError::GroupNotFound)?;
-            gid
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM timeline_groups WHERE value = $1")
+                .bind(gval)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or(TimelineStorageError::GroupNotFound)?
         } else {
             et_group_id
         };
