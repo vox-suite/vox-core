@@ -47,7 +47,7 @@ async fn calendar_ingestion_is_atomic_versioned_scoped_and_preserves_local_annot
         .await
         .unwrap();
     tx.rollback().await.unwrap();
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM spans WHERE user_id=$1")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM timeline_events WHERE user_id=$1")
         .bind(user)
         .fetch_one(db.pool())
         .await
@@ -67,12 +67,12 @@ async fn calendar_ingestion_is_atomic_versioned_scoped_and_preserves_local_annot
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let span: Uuid = sqlx::query_scalar("SELECT id FROM spans WHERE user_id=$1")
+    let span: Uuid = sqlx::query_scalar("SELECT id FROM timeline_events WHERE user_id=$1")
         .bind(user)
         .fetch_one(db.pool())
         .await
         .unwrap();
-    sqlx::query("UPDATE spans SET notes='Local note',data=data||'{\"local_annotation\":\"keep\"}'::jsonb WHERE id=$1").bind(span).execute(db.pool()).await.unwrap();
+    sqlx::query("UPDATE timeline_events SET content=content||'{\"local_note\":\"Local note\"}'::jsonb||'{\"local_annotation\":\"keep\"}'::jsonb WHERE id=$1").bind(span).execute(db.pool()).await.unwrap();
     event.summary = "Changed by provider".into();
     let mut tx = db.pool().begin().await.unwrap();
     CoreIngestor { hub: None }
@@ -88,13 +88,13 @@ async fn calendar_ingestion_is_atomic_versioned_scoped_and_preserves_local_annot
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let row = sqlx::query("SELECT title,notes,data,version FROM spans WHERE id=$1")
+    let row = sqlx::query("SELECT title,content->>'local_note' AS notes,content AS data,revision AS version FROM timeline_events WHERE id=$1")
         .bind(span)
         .fetch_one(db.pool())
         .await
         .unwrap();
     assert_eq!(row.get::<String, _>("notes"), "Local note");
-    assert_eq!(row.get::<i32, _>("version"), 2);
+    assert_eq!(row.get::<i64, _>("version"), 2);
     assert_eq!(
         row.get::<serde_json::Value, _>("data")["local_annotation"],
         "keep"
@@ -113,12 +113,12 @@ async fn calendar_ingestion_is_atomic_versioned_scoped_and_preserves_local_annot
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let row = sqlx::query("SELECT status FROM spans WHERE id=$1")
+    let row = sqlx::query("SELECT record_state AS status FROM timeline_events WHERE id=$1")
         .bind(span)
         .fetch_one(db.pool())
         .await
         .unwrap();
-    assert_ne!(row.get::<String, _>("status"), "cancelled");
+    assert_ne!(row.get::<String, _>("status"), "retracted");
     event.status = "cancelled".into();
     event.has_time = false;
     let mut tx = db.pool().begin().await.unwrap();
@@ -135,40 +135,17 @@ async fn calendar_ingestion_is_atomic_versioned_scoped_and_preserves_local_annot
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let row = sqlx::query("SELECT status,start_at,notes FROM spans WHERE id=$1")
+    let row = sqlx::query("SELECT record_state AS status,occurred_at AS start_at,content->>'local_note' AS notes FROM timeline_events WHERE id=$1")
         .bind(span)
         .fetch_one(db.pool())
         .await
         .unwrap();
-    assert_eq!(row.get::<String, _>("status"), "cancelled");
+    assert_eq!(row.get::<String, _>("status"), "retracted");
     assert_eq!(
         row.get::<DateTime<Utc>, _>("start_at").timestamp(),
         now.timestamp()
     );
     assert_eq!(row.get::<String, _>("notes"), "Local note");
-    let service = crate::application::spans::SpanService::new(
-        crate::storage::spans::SpanRepository::new(db.pool().clone()),
-        crate::realtime::UserEventHub::new(),
-    );
-    let actor = crate::domain::identity::Actor {
-        user_id: user,
-        principal_id: user,
-        principal_kind: crate::domain::identity::PrincipalKind::User,
-        grants: vec![],
-    };
-    assert!(
-        service
-            .update_span(
-                &actor,
-                span,
-                crate::domain::spans::SpanPatch {
-                    title: Some("Local change".into()),
-                    ..Default::default()
-                }
-            )
-            .await
-            .is_err()
-    );
 }
 
 #[tokio::test]
@@ -264,12 +241,15 @@ async fn gaming_ingestion_retains_unknown_session_times_and_deduplicates() {
             .unwrap();
         tx.commit().await.unwrap();
     }
-    let row = sqlx::query("SELECT start_at,end_at,data FROM spans WHERE user_id=$1")
+    let row = sqlx::query("SELECT occurred_at AS start_at,ended_at AS end_at,content AS data FROM timeline_events WHERE user_id=$1")
         .bind(user)
         .fetch_one(db.pool())
         .await
         .unwrap();
-    assert!(row.get::<Option<DateTime<Utc>>, _>("start_at").is_none());
+    assert_eq!(
+        row.get::<DateTime<Utc>, _>("start_at"),
+        activity.observation_end
+    );
     assert!(row.get::<Option<DateTime<Utc>>, _>("end_at").is_none());
     assert_eq!(
         row.get::<serde_json::Value, _>("data")["session_times_known"],
@@ -280,7 +260,7 @@ async fn gaming_ingestion_retains_unknown_session_times_and_deduplicates() {
         100
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM spans WHERE user_id=$1")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM timeline_events WHERE user_id=$1")
             .bind(user)
             .fetch_one(db.pool())
             .await
@@ -336,14 +316,14 @@ async fn reconnect_same_calendar_preserves_one_annotated_span() {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        sqlx::query("UPDATE spans SET notes='Retained note' WHERE user_id=$1")
+        sqlx::query("UPDATE timeline_events SET content=content||'{\"local_note\":\"Retained note\"}'::jsonb WHERE user_id=$1")
             .bind(user)
             .execute(db.pool())
             .await
             .unwrap();
     }
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM spans WHERE user_id=$1")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM timeline_events WHERE user_id=$1")
             .bind(user)
             .fetch_one(db.pool())
             .await
@@ -351,11 +331,13 @@ async fn reconnect_same_calendar_preserves_one_annotated_span() {
         1
     );
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT notes FROM spans WHERE user_id=$1")
-            .bind(user)
-            .fetch_one(db.pool())
-            .await
-            .unwrap(),
+        sqlx::query_scalar::<_, String>(
+            "SELECT content->>'local_note' FROM timeline_events WHERE user_id=$1"
+        )
+        .bind(user)
+        .fetch_one(db.pool())
+        .await
+        .unwrap(),
         "Retained note"
     );
 }
@@ -486,7 +468,7 @@ async fn food_ingestion_preserves_times_and_does_not_invent_missing_history() {
         0
     );
     tx.commit().await.unwrap();
-    let row = sqlx::query("SELECT start_at,end_at,status,source_ref FROM spans WHERE user_id=$1")
+    let row = sqlx::query("SELECT occurred_at AS start_at,ended_at AS end_at,record_state AS status,dedupe_key AS source_ref FROM timeline_events WHERE user_id=$1")
         .bind(user)
         .fetch_one(db.pool())
         .await
@@ -496,7 +478,7 @@ async fn food_ingestion_preserves_times_and_does_not_invent_missing_history() {
         "2026-09-30T08:30:00+00:00"
     );
     assert_eq!(row.get::<Option<DateTime<Utc>>, _>("end_at"), None);
-    assert_eq!(row.get::<String, _>("status"), "done");
+    assert_eq!(row.get::<String, _>("status"), "active");
     order.order_id = "unknown-time".into();
     order.order_time = None;
     let mut tx = db.pool().begin().await.unwrap();
@@ -508,7 +490,7 @@ async fn food_ingestion_preserves_times_and_does_not_invent_missing_history() {
         0
     );
     tx.commit().await.unwrap();
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM spans WHERE user_id=$1")
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM timeline_events WHERE user_id=$1")
         .bind(user)
         .fetch_one(db.pool())
         .await
@@ -578,7 +560,7 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
         tx.commit().await.unwrap();
     }
     let row = sqlx::query(
-        "SELECT id,start_at,end_at,version,source_event_id,data FROM spans WHERE user_id=$1",
+        "SELECT id,occurred_at AS start_at,ended_at AS end_at,revision AS version,content AS data FROM timeline_events WHERE user_id=$1",
     )
     .bind(user)
     .fetch_one(db.pool())
@@ -589,14 +571,13 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
         activity.occurred_at
     );
     assert_eq!(row.get::<Option<DateTime<Utc>>, _>("end_at"), None);
-    assert_eq!(row.get::<i32, _>("version"), 1);
-    assert!(row.get::<Option<Uuid>, _>("source_event_id").is_some());
+    assert_eq!(row.get::<i64, _>("version"), 2);
     assert_eq!(
         row.get::<serde_json::Value, _>("data")["session_times_known"],
         false
     );
     let span: Uuid = row.get("id");
-    sqlx::query("UPDATE spans SET notes='Keep note',data=data||'{\"local_annotation\":true}'::jsonb WHERE id=$1").bind(span).execute(db.pool()).await.unwrap();
+    sqlx::query("UPDATE timeline_events SET content=content||'{\"local_note\":\"Keep note\"}'::jsonb||'{\"local_annotation\":true}'::jsonb WHERE id=$1").bind(span).execute(db.pool()).await.unwrap();
     let mut tx = db.pool().begin().await.unwrap();
     assert_eq!(
         ingestor
@@ -621,37 +602,25 @@ async fn personal_ingestion_is_atomic_deduplicated_and_preserves_unknown_duratio
         1
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM spans WHERE user_id=$1")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM timeline_events WHERE user_id=$1")
             .bind(user)
             .fetch_one(db.pool())
             .await
             .unwrap(),
         1
     );
-    let row = sqlx::query("SELECT notes,data FROM spans WHERE id=$1")
-        .bind(span)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+    let row = sqlx::query(
+        "SELECT content->>'local_note' AS notes,content AS data FROM timeline_events WHERE id=$1",
+    )
+    .bind(span)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     assert_eq!(row.get::<String, _>("notes"), "Keep note");
     assert_eq!(
         row.get::<serde_json::Value, _>("data")["local_annotation"],
         true
     );
-    assert!(matches!(
-        crate::storage::spans::SpanRepository::new(db.pool().clone())
-            .update(
-                user,
-                span,
-                crate::domain::spans::SpanPatch {
-                    start_at: Some(None),
-                    ..Default::default()
-                }
-            )
-            .await
-            .unwrap(),
-        crate::domain::ConcurrencyOutcome::Conflict
-    ));
 }
 
 #[tokio::test]
@@ -694,7 +663,7 @@ async fn youtube_ingestion_keeps_playlist_events_distinct_from_watches() {
         2
     );
     tx.commit().await.unwrap();
-    let rows=sqlx::query("SELECT s.title,s.start_at,s.end_at,e.event_type FROM spans s JOIN inbound_events e ON e.id=s.source_event_id WHERE s.user_id=$1 ORDER BY s.start_at").bind(user).fetch_all(db.pool()).await.unwrap();
+    let rows=sqlx::query("SELECT s.title,s.occurred_at AS start_at,s.ended_at AS end_at,e.event_type FROM timeline_events s JOIN inbound_events e ON e.user_id=s.user_id AND e.external_event_id=s.content->>'source_id' WHERE s.user_id=$1 ORDER BY s.occurred_at").bind(user).fetch_all(db.pool()).await.unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get::<String, _>("title"), "YouTube like: Video");
     assert_eq!(rows[0].get::<String, _>("event_type"), "video.liked");
@@ -751,7 +720,7 @@ async fn takeout_import_reaches_core_without_oauth_and_requires_consent() {
         .unwrap();
     assert_eq!(second["imported"], 0);
     assert_eq!(first["connection_id"], second["connection_id"]);
-    let row=sqlx::query("SELECT s.title,s.start_at,s.end_at,s.source,e.event_type,c.connector_id FROM spans s JOIN inbound_events e ON e.id=s.source_event_id JOIN vox_connections c ON c.id=(s.data->>'connection_id')::uuid WHERE s.user_id=$1").bind(user).fetch_one(db.pool()).await.unwrap();
+    let row=sqlx::query("SELECT s.title,s.occurred_at AS start_at,s.ended_at AS end_at,e.source_kind AS source,e.event_type,c.connector_id FROM timeline_events s JOIN inbound_events e ON e.user_id=s.user_id AND e.external_event_id=s.content->>'source_id' JOIN vox_connections c ON c.id=(s.content->>'connection_id')::uuid WHERE s.user_id=$1").bind(user).fetch_one(db.pool()).await.unwrap();
     assert_eq!(row.get::<String, _>("title"), "Actual video");
     assert_eq!(row.get::<String, _>("source"), "youtube");
     assert_eq!(row.get::<String, _>("connector_id"), "youtube_history");

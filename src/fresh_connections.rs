@@ -221,7 +221,7 @@ impl TimelineIngestor for CoreIngestor {
             .fetch_one(&mut **tx)
             .await?;
 
-            let dedupe_key = format!("google_calendar:{}", event.id);
+            let dedupe_key = format!("google_calendar:{account_id}:{}", event.id);
             let record_state = if event.status == "cancelled" {
                 "retracted"
             } else {
@@ -256,7 +256,7 @@ impl TimelineIngestor for CoreIngestor {
 
             sqlx::query(
                 "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
-                 VALUES ($1, $2, 'google_calendar', $3, $4, $5)",
+                 VALUES ($1, $2, 'google_calendar', $3, $4, $5) ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO NOTHING",
             )
             .bind(timeline_id)
             .bind(user_id)
@@ -294,7 +294,8 @@ impl TimelineIngestor for CoreIngestor {
             let id: Uuid = r.get("id");
             let dkey: Option<String> = r.get("dedupe_key");
             if let Some(dk) = dkey {
-                let calendar_ref = dk.strip_prefix("google_calendar:").unwrap_or(&dk);
+                let account_prefix = format!("google_calendar:{account_id}:");
+                let calendar_ref = dk.strip_prefix(&account_prefix).unwrap_or(&dk);
                 let sref = format!("{account_id}:primary:{calendar_ref}");
                 if !seen_ids.contains(&sref) {
                     sqlx::query("UPDATE timeline_events SET record_state = 'retracted', revision = revision + 1, updated_at = now() WHERE id = $1")
@@ -393,7 +394,7 @@ impl TimelineIngestor for CoreIngestor {
 
                 sqlx::query(
                     "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
-                     VALUES ($1, $2, 'playstation', $3, $4, $5)",
+                     VALUES ($1, $2, 'playstation', $3, $4, $5) ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO NOTHING",
                 )
                 .bind(timeline_id)
                 .bind(user_id)
@@ -478,7 +479,7 @@ impl TimelineIngestor for CoreIngestor {
 
             sqlx::query(
                 "INSERT INTO timeline_evidence (timeline_event_id, user_id, source_type, source_id, raw_reference, observation_metadata) \
-                 VALUES ($1, $2, 'playstation', $3, $4, $5)",
+                 VALUES ($1, $2, 'playstation', $3, $4, $5) ON CONFLICT (timeline_event_id,user_id,evidence_hash) DO NOTHING",
             )
             .bind(timeline_id)
             .bind(user_id)
