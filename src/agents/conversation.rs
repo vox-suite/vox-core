@@ -763,10 +763,16 @@ mod governed_tool_surface_tests {
                 [
                     "clear_map",
                     "control_wiz_lights",
+                    "create_timeline_event_type",
+                    "find_schemas",
                     "get_agent_memory",
                     "library",
+                    "list_timeline_types",
                     "list_visits",
+                    "query_timeline_events",
+                    "query_user_data",
                     "read_connected_app",
+                    "save_timeline_event",
                     "show_on_map",
                     "update_agent_memory",
                     "update_user_name"

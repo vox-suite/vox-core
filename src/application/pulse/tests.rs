@@ -2,7 +2,13 @@ use super::measurements::*;
 use crate::domain::{charts::ChartType, pulse::*};
 use serde_json::json;
 fn profile(source: &str, action: &str, fields: serde_json::Value) -> SourceProfile {
-    serde_json::from_value(json!({"key":"fixture","source":source,"category":"activity","action":action,"timing":"provider_timestamp","count":12,"dated_count":12,"fields":fields,"samples":[],"currency":"","known_intervals":0})).unwrap()
+    let mut metrics = vec![json!({"aggregation":"count","title":action,"unit":"events"})];
+    for (field, kind) in fields.as_object().unwrap() {
+        if kind == "number" {
+            metrics.push(json!({"aggregation":"sum","field":field,"title":"Reported track length","unit":if source=="user" {"currency"} else {"ms"}}));
+        }
+    }
+    serde_json::from_value(json!({"key":"fixture","source":source,"category":"activity","action":action,"timing":"provider_timestamp","count":12,"dated_count":12,"fields":fields,"samples":[{"metrics":metrics,"dimensions":[]}],"currency":"","known_intervals":0})).unwrap()
 }
 #[test]
 fn spotify_plays_do_not_require_numeric_fields() {
@@ -14,18 +20,19 @@ fn spotify_plays_do_not_require_numeric_fields() {
     );
 }
 #[test]
-fn spotify_duration_is_qualified_as_estimate() {
+fn spotify_duration_is_reported_track_length() {
     let catalog = measurement_catalog(&[profile(
         "spotify",
         "listen",
-        json!({"provider_data.reported_track_duration_ms":"number"}),
+        json!({"reported_track_duration_ms":"number"}),
     )]);
     let duration = catalog
         .iter()
-        .find(|m| m.field.as_deref() == Some("provider_data.reported_track_duration_ms"))
-        .expect("estimate available");
-    assert_eq!(duration.quality, "estimated");
-    assert_eq!(duration.scale, 1.0 / 3_600_000.0);
+        .find(|m| m.field.as_deref() == Some("reported_track_duration_ms"))
+        .expect("published measurement available");
+    assert_eq!(duration.quality, "recorded");
+    assert!(duration.title.contains("Reported track length"));
+    assert_eq!(duration.scale, 1.0);
 }
 #[test]
 fn youtube_playlist_is_not_watch_history() {
@@ -42,22 +49,7 @@ fn playstation_deltas_cannot_be_bucketed_by_day() {
     );
     p.timing = "observed_counter_delta".into();
     let catalog = measurement_catalog(&[p]);
-    let m = catalog
-        .iter()
-        .find(|m| m.kind == MeasurementKind::NumericSum)
-        .unwrap();
-    let d = PulseDefinition {
-        version: 2,
-        measurement_id: m.id.clone(),
-        bucket: Some(Bucket::Day),
-        dimension: None,
-        offset_days: 0,
-        top_n: None,
-        period_days: 30,
-        timezone: "Asia/Kolkata".into(),
-        chart_type: ChartType::Bar,
-    };
-    assert!(validate_definition(&d, &catalog).is_err());
+    assert!(catalog.is_empty());
 }
 #[test]
 fn manual_definition_rejects_invalid_timezone_and_unknown_metric() {
