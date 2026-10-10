@@ -87,7 +87,7 @@ pub fn build_spec() -> Value {
     let generated = serde_json::to_value(ApiDoc::openapi()).unwrap_or(Value::Null);
     merge_object(&mut spec, &generated, "paths");
     if let Some(paths) = spec.get_mut("paths").and_then(Value::as_object_mut) {
-        paths.retain(|path,_| !path.starts_with("/v1/records"));
+        paths.retain(|path, _| !path.starts_with("/v1/records"));
     }
     if let Some(schemas) = generated
         .pointer("/components/schemas")

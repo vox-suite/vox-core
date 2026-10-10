@@ -112,9 +112,29 @@ impl TimelineRepository {
         input: NewEventType,
     ) -> Result<TimelineEventType, TimelineStorageError> {
         validate_schema_document(&input.content_schema)?;
-        if !input.analytics_definition.is_object() || !input.ui_hint.is_object() || serde_json::to_vec(&input.analytics_definition).map_or(true,|bytes|bytes.len()>65536) || serde_json::to_vec(&input.ui_hint).map_or(true,|bytes|bytes.len()>16384) || input.description.len()>4000 { return Err(TimelineStorageError::ValidationFailed("invalid analytics or UI metadata".into())); }
-        if input.value.is_empty() || input.value.len() > 80 || !input.value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') || input.label.trim().is_empty() || input.label.len() > 120 {
-            return Err(TimelineStorageError::ValidationFailed("invalid event type value or label".into()));
+        if !input.analytics_definition.is_object()
+            || !input.ui_hint.is_object()
+            || serde_json::to_vec(&input.analytics_definition)
+                .map_or(true, |bytes| bytes.len() > 65536)
+            || serde_json::to_vec(&input.ui_hint).map_or(true, |bytes| bytes.len() > 16384)
+            || input.description.len() > 4000
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid analytics or UI metadata".into(),
+            ));
+        }
+        if input.value.is_empty()
+            || input.value.len() > 80
+            || !input
+                .value
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            || input.label.trim().is_empty()
+            || input.label.len() > 120
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid event type value or label".into(),
+            ));
         }
         if let Err(err) = jsonschema::validator_for(&input.content_schema) {
             return Err(TimelineStorageError::InvalidJsonSchema(err.to_string()));
@@ -133,7 +153,9 @@ impl TimelineRepository {
 
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("event-type:{user_id}:{}", input.value)).execute(&mut *tx).await?;
+            .bind(format!("event-type:{user_id}:{}", input.value))
+            .execute(&mut *tx)
+            .await?;
         let next_version = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM timeline_event_types WHERE owner_user_id = $1 AND value = $2",
         )
@@ -177,13 +199,29 @@ impl TimelineRepository {
         })
     }
 
-    pub async fn day_counts(&self, user_id: Uuid, input: crate::domain::timeline::TimelineCountsQuery) -> Result<Vec<crate::domain::timeline::TimelineDayCount>, TimelineStorageError> {
-        if input.timezone.parse::<chrono_tz::Tz>().is_err() || input.end_at <= input.start_at || (input.end_at - input.start_at).num_days() > 366 {
-            return Err(TimelineStorageError::ValidationFailed("invalid timezone or date range; maximum 366 days".into()));
+    pub async fn day_counts(
+        &self,
+        user_id: Uuid,
+        input: crate::domain::timeline::TimelineCountsQuery,
+    ) -> Result<Vec<crate::domain::timeline::TimelineDayCount>, TimelineStorageError> {
+        if input.timezone.parse::<chrono_tz::Tz>().is_err()
+            || input.end_at <= input.start_at
+            || (input.end_at - input.start_at).num_days() > 366
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid timezone or date range; maximum 366 days".into(),
+            ));
         }
         let rows = sqlx::query("SELECT (e.occurred_at AT TIME ZONE $4)::date::text AS day,g.value AS category,count(*)::bigint AS count FROM timeline_events e JOIN timeline_groups g ON g.id=e.group_id WHERE e.user_id=$1 AND e.record_state='active' AND e.occurred_at >= $2 AND e.occurred_at < $3 AND ($5::text IS NULL OR g.value=$5) GROUP BY 1,2 ORDER BY 1")
             .bind(user_id).bind(input.start_at).bind(input.end_at).bind(input.timezone).bind(input.group_value).fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|row| crate::domain::timeline::TimelineDayCount { day: row.get("day"), category: row.get("category"), count: row.get("count") }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| crate::domain::timeline::TimelineDayCount {
+                day: row.get("day"),
+                category: row.get("category"),
+                count: row.get("count"),
+            })
+            .collect())
     }
 
     pub async fn query_events(
@@ -196,8 +234,8 @@ impl TimelineRepository {
                 let decoded = URL_SAFE_NO_PAD
                     .decode(cursor_str)
                     .map_err(|_| TimelineStorageError::InvalidCursor)?;
-                let text = String::from_utf8(decoded)
-                    .map_err(|_| TimelineStorageError::InvalidCursor)?;
+                let text =
+                    String::from_utf8(decoded).map_err(|_| TimelineStorageError::InvalidCursor)?;
                 let parts: Vec<&str> = text.split('|').collect();
                 if parts.len() != 2 {
                     return Err(TimelineStorageError::InvalidCursor);
@@ -205,8 +243,8 @@ impl TimelineRepository {
                 let dt = DateTime::parse_from_rfc3339(parts[0])
                     .map_err(|_| TimelineStorageError::InvalidCursor)?
                     .with_timezone(&Utc);
-                let id = Uuid::parse_str(parts[1])
-                    .map_err(|_| TimelineStorageError::InvalidCursor)?;
+                let id =
+                    Uuid::parse_str(parts[1]).map_err(|_| TimelineStorageError::InvalidCursor)?;
                 (Some(dt), Some(id))
             }
             None => (None, None),
@@ -327,7 +365,10 @@ impl TimelineRepository {
             .into_iter()
             .map(|e| {
                 let evid = evidence_map.remove(&e.id).unwrap_or_default();
-                TimelineEventWithEvidence { event: e, evidence: evid }
+                TimelineEventWithEvidence {
+                    event: e,
+                    evidence: evid,
+                }
             })
             .collect();
 
@@ -337,28 +378,93 @@ impl TimelineRepository {
         })
     }
 
-    pub async fn ingest_event(&self, user_id: Uuid, input: IngestTimelineEventInput) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
+    pub async fn ingest_event(
+        &self,
+        user_id: Uuid,
+        input: IngestTimelineEventInput,
+    ) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
         let mut tx = self.pool.begin().await?;
-        let mut result = self.ingest_event_in_transaction(&mut tx, user_id, input).await?;
+        let mut result = self
+            .ingest_event_in_transaction(&mut tx, user_id, input)
+            .await?;
         let finance: bool = sqlx::query_scalar("SELECT owner_user_id IS NULL AND value IN ('transaction','bill','statement','refund','transfer','repayment') FROM timeline_event_types WHERE id=$1")
             .bind(result.event.event_type_id).fetch_one(&mut *tx).await?;
         if finance {
-            crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&result.event.content).await?;
+            crate::finance_normalization::dedupe_or_settle_in_transaction(
+                &mut tx,
+                user_id,
+                result.event.id,
+                &result.event.content,
+            )
+            .await?;
             let row = sqlx::query("SELECT content,record_state,revision,updated_at FROM timeline_events WHERE id=$1 AND user_id=$2")
                 .bind(result.event.id).bind(user_id).fetch_one(&mut *tx).await?;
-            result.event.content=row.get("content");result.event.record_state=row.get("record_state");
-            result.event.revision=row.get("revision");result.event.updated_at=row.get("updated_at");
-            if result.event.record_state != "active" { result.evidence.clear(); }
+            result.event.content = row.get("content");
+            result.event.record_state = row.get("record_state");
+            result.event.revision = row.get("revision");
+            result.event.updated_at = row.get("updated_at");
+            if result.event.record_state != "active" {
+                result.evidence.clear();
+            }
         }
         tx.commit().await?;
         Ok(result)
     }
-    pub async fn ingest_event_in_transaction(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, user_id: Uuid, input: IngestTimelineEventInput) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
-        if input.title.trim().is_empty() || input.title.len() > 500 || !input.content.is_object() || serde_json::to_vec(&input.content).map_or(true,|v|v.len()>262_144) || input.evidence.len()>20 || input.evidence.iter().any(|item| item.source_type.is_empty() || item.source_type.len()>100 || !item.observation_metadata.is_object() || serde_json::to_vec(&item.observation_metadata).map_or(true,|bytes|bytes.len()>65536) || item.source_id.as_ref().is_some_and(|value|value.len()>1024) || item.raw_reference.as_ref().is_some_and(|value|value.len()>2048)) || !input.confidence.is_finite() || !(0.0..=1.0).contains(&input.confidence) || input.ended_at.is_some_and(|end|end<input.occurred_at) {
-            return Err(TimelineStorageError::ValidationFailed("invalid event title, content, confidence or time range".into()));
+    pub async fn ingest_event_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user_id: Uuid,
+        input: IngestTimelineEventInput,
+    ) -> Result<TimelineEventWithEvidence, TimelineStorageError> {
+        if input.title.trim().is_empty()
+            || input.title.len() > 500
+            || !input.content.is_object()
+            || serde_json::to_vec(&input.content).map_or(true, |v| v.len() > 262_144)
+            || input.evidence.len() > 20
+            || input.evidence.iter().any(|item| {
+                item.source_type.is_empty()
+                    || item.source_type.len() > 100
+                    || !item.observation_metadata.is_object()
+                    || serde_json::to_vec(&item.observation_metadata)
+                        .map_or(true, |bytes| bytes.len() > 65536)
+                    || item
+                        .source_id
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 1024)
+                    || item
+                        .raw_reference
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 2048)
+            })
+            || !input.confidence.is_finite()
+            || !(0.0..=1.0).contains(&input.confidence)
+            || input.ended_at.is_some_and(|end| end < input.occurred_at)
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid event title, content, confidence or time range".into(),
+            ));
         }
 
-        if !matches!(input.time_precision.as_str(),"year"|"month"|"day"|"hour"|"minute"|"second"|"millisecond") || input.source_timezone.as_ref().is_some_and(|timezone| timezone.parse::<chrono_tz::Tz>().is_err()) || input.dedupe_key.as_ref().is_some_and(|key|key.is_empty() || key.len()>1024) || input.summary.as_ref().is_some_and(|summary|summary.len()>8000) { return Err(TimelineStorageError::ValidationFailed("invalid precision, timezone, dedupe key or summary".into())); }
+        if !matches!(
+            input.time_precision.as_str(),
+            "year" | "month" | "day" | "hour" | "minute" | "second" | "millisecond"
+        ) || input
+            .source_timezone
+            .as_ref()
+            .is_some_and(|timezone| timezone.parse::<chrono_tz::Tz>().is_err())
+            || input
+                .dedupe_key
+                .as_ref()
+                .is_some_and(|key| key.is_empty() || key.len() > 1024)
+            || input
+                .summary
+                .as_ref()
+                .is_some_and(|summary| summary.len() > 8000)
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid precision, timezone, dedupe key or summary".into(),
+            ));
+        }
         let event_type_row = if let Some(et_id) = input.event_type_id {
             sqlx::query(
                 "SELECT id, owner_user_id, group_id, content_schema \
@@ -398,13 +504,12 @@ impl TimelineRepository {
         let target_group_id = if let Some(gid) = input.group_id {
             gid
         } else if let Some(ref gval) = input.group_value {
-            let gid = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM timeline_groups WHERE value = $1",
-            )
-            .bind(gval)
-            .fetch_optional(&mut **tx)
-            .await?
-            .ok_or(TimelineStorageError::GroupNotFound)?;
+            let gid =
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM timeline_groups WHERE value = $1")
+                    .bind(gval)
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .ok_or(TimelineStorageError::GroupNotFound)?;
             gid
         } else {
             et_group_id
@@ -565,31 +670,50 @@ impl TimelineRepository {
 
 fn validate_schema_document(value: &serde_json::Value) -> Result<(), TimelineStorageError> {
     if serde_json::to_vec(value).map_or(true, |v| v.len() > 65_536) {
-        return Err(TimelineStorageError::InvalidJsonSchema("schema exceeds 64 KiB".into()));
+        return Err(TimelineStorageError::InvalidJsonSchema(
+            "schema exceeds 64 KiB".into(),
+        ));
     }
     fn inspect(value: &serde_json::Value, depth: usize) -> bool {
-        if depth > 32 { return false; }
+        if depth > 32 {
+            return false;
+        }
         match value {
             serde_json::Value::Object(map) => map.iter().all(|(key, v)| {
                 if key == "$ref" || key == "$dynamicRef" || key == "$recursiveRef" {
                     v.as_str().is_some_and(|r| r.starts_with('#'))
-                } else if key == "$id" { false } else { inspect(v, depth + 1) }
+                } else if key == "$id" {
+                    false
+                } else {
+                    inspect(v, depth + 1)
+                }
             }),
             serde_json::Value::Array(items) => items.iter().all(|v| inspect(v, depth + 1)),
             _ => true,
         }
     }
     if !inspect(value, 0) {
-        return Err(TimelineStorageError::InvalidJsonSchema("only local references and depth <= 32 are supported".into()));
+        return Err(TimelineStorageError::InvalidJsonSchema(
+            "only local references and depth <= 32 are supported".into(),
+        ));
     }
     Ok(())
 }
 
-pub async fn validate_published_content(tx: &mut sqlx::Transaction<'_,sqlx::Postgres>,value:&str,content:&serde_json::Value) -> Result<(),TimelineStorageError> {
+pub async fn validate_published_content(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    value: &str,
+    content: &serde_json::Value,
+) -> Result<(), TimelineStorageError> {
     let schema: serde_json::Value = sqlx::query_scalar("SELECT content_schema FROM timeline_event_types WHERE value=$1 AND owner_user_id IS NULL AND state='published' ORDER BY version DESC LIMIT 1")
         .bind(value).fetch_optional(&mut **tx).await?.ok_or(TimelineStorageError::EventTypeNotFound)?;
     validate_schema_document(&schema)?;
-    let validator = jsonschema::validator_for(&schema).map_err(|error| TimelineStorageError::InvalidJsonSchema(error.to_string()))?;
-    if !validator.is_valid(content) { return Err(TimelineStorageError::ValidationFailed("content does not match published event type".into())); }
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|error| TimelineStorageError::InvalidJsonSchema(error.to_string()))?;
+    if !validator.is_valid(content) {
+        return Err(TimelineStorageError::ValidationFailed(
+            "content does not match published event type".into(),
+        ));
+    }
     Ok(())
 }

@@ -35,7 +35,8 @@ async fn main() {
         return;
     }
     let _traces = vox_core::telemetry::init("vox-core-api");
-    vox_core::storage::object_storage::validate_configuration().expect("Vox shared storage configuration is invalid");
+    vox_core::storage::object_storage::validate_configuration()
+        .expect("Vox shared storage configuration is invalid");
     let config = Config::from_env().expect("Vox Core configuration is invalid");
 
     let db = Db::connect_with_pool(
@@ -69,10 +70,7 @@ async fn main() {
                             .and_then(|v| v.as_str())
                             .and_then(|s| uuid::Uuid::parse_str(s).ok())
                     {
-                        span_notification_hub.notify(
-                            user_id,
-                            payload,
-                        );
+                        span_notification_hub.notify(user_id, payload);
                     }
                 }
             }

@@ -11,7 +11,6 @@ use crate::{
     openapi::get_openapi_spec,
     routes::{
         auth::exchange_token,
-
         client_logs::submit_client_logs,
         collections::{
             add_collection_span, archive_collection, create_collection, get_collection,
@@ -330,7 +329,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.connections.clone());
 
     let timeline_routes = Router::new()
-        .route("/v1/timeline/events/counts", post(crate::routes::timeline::day_counts))
+        .route(
+            "/v1/timeline/events/counts",
+            post(crate::routes::timeline::day_counts),
+        )
         .route(
             "/v1/timeline/groups",
             get(crate::routes::timeline::list_groups),
@@ -355,10 +357,7 @@ pub fn build_api_router(state: ApiState) -> Router {
             "/v1/updates/list",
             post(crate::routes::updates::list_updates),
         )
-        .route(
-            "/v1/updates/{id}",
-            get(crate::routes::updates::get_update),
-        )
+        .route("/v1/updates/{id}", get(crate::routes::updates::get_update))
         .route(
             "/v1/updates/{id}/read",
             post(crate::routes::updates::mark_update_read),
@@ -382,10 +381,14 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.updates.clone());
 
     let connector_ingest_routes = Router::new()
-        .route("/v1/connectors/gmail/device-access", post(crate::routes::gmail::device_access))
+        .route(
+            "/v1/connectors/gmail/device-access",
+            post(crate::routes::gmail::device_access),
+        )
         .route(
             "/v1/connectors/gmail/device-historical-import",
-            post(crate::routes::gmail::device_historical_import).layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
+            post(crate::routes::gmail::device_historical_import)
+                .layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
         )
         .route(
             "/v1/connectors/google/takeout/upload",

@@ -37,13 +37,19 @@ pub struct MinimalUserInfo {
 
 impl MinimalUserInfo {
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.first_name.is_none() && self.last_name.is_none()
-            && self.phone.is_none() && self.devices.is_empty()
-            && self.connections.is_empty() && self.channels.is_empty()
+        self.name.is_none()
+            && self.first_name.is_none()
+            && self.last_name.is_none()
+            && self.phone.is_none()
+            && self.devices.is_empty()
+            && self.connections.is_empty()
+            && self.channels.is_empty()
     }
 
     pub fn new(name: Option<String>, channels: Vec<MinimalChannel>, devices: Vec<String>) -> Self {
-        let name = name.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+        let name = name
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let phone = channels
             .iter()
             .find(|c| c.channel.eq_ignore_ascii_case("phone"))
@@ -246,9 +252,13 @@ impl ContextCache for RedisContextCache {
         let mut pipeline = redis::pipe();
         pipeline.atomic();
         for (user_id, info) in users {
-            if info.is_empty() { continue; }
+            if info.is_empty() {
+                continue;
+            }
             let payload = serde_json::to_string(info).map_err(|_| CacheError::Payload)?;
-            pipeline.set_ex(redis_keys::user(*user_id), payload, 86400).ignore();
+            pipeline
+                .set_ex(redis_keys::user(*user_id), payload, 86400)
+                .ignore();
             for channel in &info.channels {
                 pipeline
                     .set_ex(

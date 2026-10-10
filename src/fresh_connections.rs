@@ -92,18 +92,32 @@ impl TimelineIngestor for CoreIngestor {
                 .bind(event_type).bind(item.occurred_at).bind(event_payload)
                 .fetch_one(&mut **tx).await?;
             let type_val = match event_type {
-                "music.listened" => "music", "place.visited" => "visit", "video.watched" => "video_watch",
-                "video.liked" => "video_like", "video.playlist_added" => "video_playlist_addition", _ => "personal",
+                "music.listened" => "music",
+                "place.visited" => "visit",
+                "video.watched" => "video_watch",
+                "video.liked" => "video_like",
+                "video.playlist_added" => "video_playlist_addition",
+                _ => "personal",
             };
             if connector == "spotify" {
                 payload["track"] = json!(item.title);
-                let artists = item.provider_data["artists"].as_array().map(|artists| artists.iter().filter_map(|artist| artist["name"].as_str()).collect::<Vec<_>>().join(", "));
+                let artists = item.provider_data["artists"].as_array().map(|artists| {
+                    artists
+                        .iter()
+                        .filter_map(|artist| artist["name"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
                 payload["artist"] = json!(artists);
                 payload["album"] = item.provider_data["album"]["name"].clone();
             }
-            if connector == "google_maps" { payload["place_name"] = json!(item.title); }
-            if let Some(channel) = item.provider_data["channel"].as_str() { payload["channel"] = json!(channel); }
-            validate_content(tx,type_val,&payload).await?;
+            if connector == "google_maps" {
+                payload["place_name"] = json!(item.title);
+            }
+            if let Some(channel) = item.provider_data["channel"].as_str() {
+                payload["channel"] = json!(channel);
+            }
+            validate_content(tx, type_val, &payload).await?;
             let event_row = sqlx::query(
                 "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
                  SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
@@ -214,7 +228,7 @@ impl TimelineIngestor for CoreIngestor {
                 "active"
             };
 
-            validate_content(tx,"appointment",&payload).await?;
+            validate_content(tx, "appointment", &payload).await?;
             let event_row = sqlx::query(
                 "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, source_timezone, content, record_state, confidence, dedupe_key) \
                  SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, $7, $8, 1.0, $9 \
@@ -354,7 +368,7 @@ impl TimelineIngestor for CoreIngestor {
                     "connection_id": connection_id,
                 });
 
-                validate_content(tx,"gaming",&span_data).await?;
+                validate_content(tx, "gaming", &span_data).await?;
                 let event_row = sqlx::query(
                     "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
                      SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
@@ -439,7 +453,7 @@ impl TimelineIngestor for CoreIngestor {
                 "Lifetime playtime on {} · {:.1}h; {} provider play-count observations, session times unknown",
                 game.platform, hours, game.play_count
             );
-            validate_content(tx,"gaming",&data).await?;
+            validate_content(tx, "gaming", &data).await?;
             let event_row = sqlx::query(
                 "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
                  SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, 'active', 1.0, $7 \
@@ -573,7 +587,7 @@ impl TimelineIngestor for CoreIngestor {
                 _ => "active",
             };
 
-            validate_content(tx,"order",&payload).await?;
+            validate_content(tx, "order", &payload).await?;
             let event_row = sqlx::query(
                 "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
                  SELECT $1, et.id, et.group_id, $2, $3, $4, $5, 'second', $6, $7, 1.0, $8 \
@@ -812,6 +826,12 @@ mod configuration_tests {
 #[path = "connection_ingestion_tests.rs"]
 mod ingestion_tests;
 
-async fn validate_content(tx:&mut sqlx::Transaction<'_,sqlx::Postgres>,value:&str,content:&serde_json::Value) -> Result<(),FreshConnectionError> {
-    crate::storage::timeline::validate_published_content(tx,value,content).await.map_err(|error| FreshConnectionError::Invalid(error.to_string()))
+async fn validate_content(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    value: &str,
+    content: &serde_json::Value,
+) -> Result<(), FreshConnectionError> {
+    crate::storage::timeline::validate_published_content(tx, value, content)
+        .await
+        .map_err(|error| FreshConnectionError::Invalid(error.to_string()))
 }

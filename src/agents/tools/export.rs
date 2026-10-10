@@ -60,10 +60,22 @@ impl ToolExport {
             owner.clone(),
             EXPORT_AGENT.into(),
         ));
-        set.add_tool(timeline::ListTimelineTypes { db: db.clone(), user_id });
-        set.add_tool(timeline::CreateTimelineEventType { db: db.clone(), user_id });
-        set.add_tool(timeline::SaveTimelineEvent { db: db.clone(), user_id });
-        set.add_tool(timeline::QueryTimelineEvents { db: db.clone(), user_id });
+        set.add_tool(timeline::ListTimelineTypes {
+            db: db.clone(),
+            user_id,
+        });
+        set.add_tool(timeline::CreateTimelineEventType {
+            db: db.clone(),
+            user_id,
+        });
+        set.add_tool(timeline::SaveTimelineEvent {
+            db: db.clone(),
+            user_id,
+        });
+        set.add_tool(timeline::QueryTimelineEvents {
+            db: db.clone(),
+            user_id,
+        });
         set.add_tool(data_query::FindSchemas::new(db.clone(), user_id));
         set.add_tool(data_query::QueryUserData::new(db.clone(), user_id));
         set.add_tool(connections::ReadConnectedApp {
@@ -75,13 +87,27 @@ impl ToolExport {
             hub: Some(self.device_hub.clone()),
             user_id: user_id.0,
         });
-        set.add_tool(map_scene::ShowOnMap::new(Some(self.user_events.clone()), user_id.0));
-        set.add_tool(map_scene::ClearMap::new(Some(self.user_events.clone()), user_id.0));
+        set.add_tool(map_scene::ShowOnMap::new(
+            Some(self.user_events.clone()),
+            user_id.0,
+        ));
+        set.add_tool(map_scene::ClearMap::new(
+            Some(self.user_events.clone()),
+            user_id.0,
+        ));
         set.add_tool(visits::ListVisits::new(db.clone(), user_id));
-        set.add_tool(spans::CreateSpan::new(db.clone(), owner.clone(), self.user_events.clone()));
+        set.add_tool(spans::CreateSpan::new(
+            db.clone(),
+            owner.clone(),
+            self.user_events.clone(),
+        ));
         set.add_tool(spans::ListSpans::new(db.clone(), owner.clone()));
         set.add_tool(spans::GetSpan::new(db.clone(), owner.clone()));
-        set.add_tool(spans::UpdateSpan::new(db.clone(), owner, self.user_events.clone()));
+        set.add_tool(spans::UpdateSpan::new(
+            db.clone(),
+            owner,
+            self.user_events.clone(),
+        ));
         set.add_tool(event_actions::AdjustSpan::new(self.db.clone(), user_id.0));
         set.add_tool(records::DefineDataSchema::new(db.clone(), user_id));
         set.add_tool(records::ListDataSchemas::new(db, user_id));
@@ -89,7 +115,10 @@ impl ToolExport {
             http.clone(),
             self.google_maps_api_key.clone(),
         ));
-        set.add_tool(google_maps::GetRoute::new(http, self.google_maps_api_key.clone()));
+        set.add_tool(google_maps::GetRoute::new(
+            http,
+            self.google_maps_api_key.clone(),
+        ));
         if let Ok(search) = web_search::WebSearch::from_env() {
             set.add_tool(search);
         }

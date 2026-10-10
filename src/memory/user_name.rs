@@ -38,8 +38,14 @@ impl UserNameStatement {
         }
         let normalized_quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
         let lowered = normalized_quote.to_lowercase();
-        let states = ["fine", "good", "okay", "ok", "well", "great", "tired", "busy", "happy", "sad"];
-        if states.contains(&name.to_lowercase().as_str()) && !lowered.contains("my name") && !lowered.contains("call me") && !lowered.contains("name is") {
+        let states = [
+            "fine", "good", "okay", "ok", "well", "great", "tired", "busy", "happy", "sad",
+        ];
+        if states.contains(&name.to_lowercase().as_str())
+            && !lowered.contains("my name")
+            && !lowered.contains("call me")
+            && !lowered.contains("name is")
+        {
             return Err(UserNameError::InvalidEvidence);
         }
         let evidence_pattern = Regex::new(&format!(

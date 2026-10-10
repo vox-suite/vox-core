@@ -9,9 +9,7 @@ use vox_core::{
     application::updates::{UpdatesService, UpdatesServiceError},
     domain::{
         identity::Actor,
-        updates::{
-            JobActionResponse, JobInputRequest, JobRetryRequest, UpdateItem, UpdatesQuery,
-        },
+        updates::{JobActionResponse, JobInputRequest, JobRetryRequest, UpdateItem, UpdatesQuery},
     },
     storage::updates::UpdatesStorageError,
 };

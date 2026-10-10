@@ -49,7 +49,12 @@ impl PulseRepository {
         .await?;
 
         let (data_rev, disc_rev) = rev_row
-            .map(|r| (r.get::<i64, _>("data_revision"), r.get::<i64, _>("discovery_revision")))
+            .map(|r| {
+                (
+                    r.get::<i64, _>("data_revision"),
+                    r.get::<i64, _>("discovery_revision"),
+                )
+            })
             .unwrap_or((0, 0));
         let revision = format!("{data_rev}:{disc_rev}");
 
@@ -110,7 +115,10 @@ impl PulseRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let dismissed: Vec<String> = dismissed_rows.into_iter().map(|r| r.get("suggestion_key")).collect();
+        let dismissed: Vec<String> = dismissed_rows
+            .into_iter()
+            .map(|r| r.get("suggestion_key"))
+            .collect();
 
         let cache_rows = sqlx::query(
             "SELECT cache_key, payload FROM pulse_cache WHERE user_id = $1 AND expires_at > now()",
@@ -124,10 +132,16 @@ impl PulseRepository {
             caches.insert(r.get("cache_key"), r.get("payload"));
         }
 
-        let saved_definitions: Vec<serde_json::Value> = sqlx::query_scalar("SELECT definition FROM pulse_charts WHERE user_id=$1")
-            .bind(user).fetch_all(&self.pool).await?;
-        let saved_hashes = saved_definitions.into_iter().filter_map(|v| serde_json::from_value::<PulseDefinition>(v).ok())
-            .map(|d| crate::application::pulse::measurements::definition_hash(&d)).collect();
+        let saved_definitions: Vec<serde_json::Value> =
+            sqlx::query_scalar("SELECT definition FROM pulse_charts WHERE user_id=$1")
+                .bind(user)
+                .fetch_all(&self.pool)
+                .await?;
+        let saved_hashes = saved_definitions
+            .into_iter()
+            .filter_map(|v| serde_json::from_value::<PulseDefinition>(v).ok())
+            .map(|d| crate::application::pulse::measurements::definition_hash(&d))
+            .collect();
         Ok(PulseMetadata {
             revision,
             connections,
@@ -181,14 +195,26 @@ impl PulseRepository {
             let timing: String = r.get("timing");
             let cnt: i64 = r.get("count");
             total_records += cnt;
-            let fields: std::collections::BTreeMap<String, String> =
-                serde_json::from_value(r.get::<Option<serde_json::Value>, _>("fields").unwrap_or(serde_json::json!({})))
-                    .unwrap_or_default();
+            let fields: std::collections::BTreeMap<String, String> = serde_json::from_value(
+                r.get::<Option<serde_json::Value>, _>("fields")
+                    .unwrap_or(serde_json::json!({})),
+            )
+            .unwrap_or_default();
             profiles.push(SourceProfile {
-                key: format!("{id}:{curr}:{timing}"), schema_id: Some(id), connection_id: None,
-                source: act.clone(), category: cat, action: act, timing, currency: curr,
-                count: cnt, dated_count: cnt, first_at: r.get("first_at"), last_at: r.get("last_at"),
-                known_intervals: r.get("known_intervals"), fields,
+                key: format!("{id}:{curr}:{timing}"),
+                schema_id: Some(id),
+                connection_id: None,
+                source: act.clone(),
+                category: cat,
+                action: act,
+                timing,
+                currency: curr,
+                count: cnt,
+                dated_count: cnt,
+                first_at: r.get("first_at"),
+                last_at: r.get("last_at"),
+                known_intervals: r.get("known_intervals"),
+                fields,
                 samples: vec![r.get("analytics_definition")],
             });
         }
@@ -236,7 +262,11 @@ impl PulseRepository {
         Ok(charts)
     }
 
-    pub async fn get_chart(&self, user: Uuid, id: Uuid) -> Result<Option<SavedPulseChart>, sqlx::Error> {
+    pub async fn get_chart(
+        &self,
+        user: Uuid,
+        id: Uuid,
+    ) -> Result<Option<SavedPulseChart>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT id, title, chart_type, definition, created_at \
              FROM pulse_charts WHERE user_id = $1 AND id = $2",
@@ -271,7 +301,8 @@ impl PulseRepository {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!("pulse-charts:{user}"))
-            .execute(&mut *tx).await?;
+            .execute(&mut *tx)
+            .await?;
         if let Some(existing) = sqlx::query("SELECT id, title, definition, created_at FROM pulse_charts WHERE user_id = $1 AND idempotency_key = $2")
             .bind(user).bind(input.idempotency_key).fetch_optional(&mut *tx).await? {
             return Ok(SavedPulseChart {
@@ -286,7 +317,9 @@ impl PulseRepository {
             .await?;
 
         if count >= 50 {
-            return Err(sqlx::Error::Protocol("Maximum limit of 50 saved charts reached".into()));
+            return Err(sqlx::Error::Protocol(
+                "Maximum limit of 50 saved charts reached".into(),
+            ));
         }
 
         let chart_type = input.definition.chart_type.as_str();
@@ -404,11 +437,12 @@ impl PulseRepository {
     }
 
     pub async fn undismiss(&self, user: Uuid, key: &str) -> Result<bool, sqlx::Error> {
-        let res = sqlx::query("DELETE FROM pulse_dismissals WHERE user_id = $1 AND suggestion_key = $2")
-            .bind(user)
-            .bind(key)
-            .execute(&self.pool)
-            .await?;
+        let res =
+            sqlx::query("DELETE FROM pulse_dismissals WHERE user_id = $1 AND suggestion_key = $2")
+                .bind(user)
+                .bind(key)
+                .execute(&self.pool)
+                .await?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -490,15 +524,21 @@ impl PulseRepository {
         let mut tx = pool.begin().await?;
         let pending = sqlx::query("SELECT id, user_id FROM pulse_invalidations WHERE processed_at IS NULL ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED")
             .fetch_all(&mut *tx).await?;
-        let users: std::collections::BTreeSet<Uuid> = pending.iter().map(|r|r.get("user_id")).collect();
+        let users: std::collections::BTreeSet<Uuid> =
+            pending.iter().map(|r| r.get("user_id")).collect();
         for user in users {
             sqlx::query("DELETE FROM pulse_daily_aggregates WHERE user_id=$1 AND data_revision < coalesce((SELECT data_revision FROM pulse_revisions WHERE user_id=$1),0)")
                 .bind(user).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM pulse_cache WHERE user_id=$1 AND expires_at < now()")
-                .bind(user).execute(&mut *tx).await?;
+                .bind(user)
+                .execute(&mut *tx)
+                .await?;
         }
-        let ids: Vec<Uuid> = pending.iter().map(|r|r.get("id")).collect();
-        sqlx::query("UPDATE pulse_invalidations SET processed_at=now() WHERE id=ANY($1)").bind(&ids).execute(&mut *tx).await?;
+        let ids: Vec<Uuid> = pending.iter().map(|r| r.get("id")).collect();
+        sqlx::query("UPDATE pulse_invalidations SET processed_at=now() WHERE id=ANY($1)")
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(ids.len())
     }

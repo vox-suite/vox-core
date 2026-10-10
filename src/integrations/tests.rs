@@ -195,24 +195,48 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         .bind(a.user_id).bind(now).execute(&pool).await.unwrap();
     let inventory = service.charts.inventory(a.user_id).await.unwrap();
     let catalog = crate::application::pulse::measurements::measurement_catalog(&inventory.profiles);
-    let measurement = catalog.iter().find(|m| m.kind == crate::domain::pulse::MeasurementKind::NumericSum).unwrap();
+    let measurement = catalog
+        .iter()
+        .find(|m| m.kind == crate::domain::pulse::MeasurementKind::NumericSum)
+        .unwrap();
     let definition = crate::domain::pulse::PulseDefinition {
-        version: 2, measurement_id: measurement.id.clone(), bucket: Some(crate::domain::pulse::Bucket::Day),
-        dimension: None, period_days: 1, offset_days: 0, top_n: None,
-        timezone: "UTC".into(), chart_type: crate::domain::charts::ChartType::Bar,
+        version: 2,
+        measurement_id: measurement.id.clone(),
+        bucket: Some(crate::domain::pulse::Bucket::Day),
+        dimension: None,
+        period_days: 1,
+        offset_days: 0,
+        top_n: None,
+        timezone: "UTC".into(),
+        chart_type: crate::domain::charts::ChartType::Bar,
     };
-    let input = crate::domain::pulse::SavePulseInput { title: "Metric".into(), definition, idempotency_key: Uuid::new_v4() };
-    let chart = service.charts.save(a.user_id,&input,"","").await.unwrap();
-    let other_chart = service.charts.save(b.user_id,&input,"","").await.unwrap();
+    let input = crate::domain::pulse::SavePulseInput {
+        title: "Metric".into(),
+        definition,
+        idempotency_key: Uuid::new_v4(),
+    };
+    let chart = service
+        .charts
+        .save(a.user_id, &input, "", "")
+        .await
+        .unwrap();
+    let other_chart = service
+        .charts
+        .save(b.user_id, &input, "", "")
+        .await
+        .unwrap();
     let mut invalid_chart = auth(vec![]);
     invalid_chart.chart_ids = vec![other_chart.id];
-    assert!(matches!(service.authorize(&a,invalid_chart).await,Err(Error::Forbidden)));
+    assert!(matches!(
+        service.authorize(&a, invalid_chart).await,
+        Err(Error::Forbidden)
+    ));
     let mut pulse_grant = grant.clone();
     pulse_grant.collection_ids = vec![];
     pulse_grant.chart_ids = vec![chart.id];
     let pulse = service.context(&pulse_grant).await.unwrap();
     assert_eq!(pulse["spans"].as_array().unwrap().len(), 0);
-    assert_eq!(pulse["pulse"][0]["data"]["total"],1.5);
+    assert_eq!(pulse["pulse"][0]["data"]["total"], 1.5);
     let mut no_reads = grant.clone();
     no_reads.collection_ids = vec![];
     no_reads.chart_ids = vec![];

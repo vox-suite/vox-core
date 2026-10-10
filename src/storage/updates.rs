@@ -41,7 +41,11 @@ impl UpdatesRepository {
         user_id: Uuid,
         query: UpdatesQuery,
     ) -> Result<Vec<UpdateItem>, UpdatesStorageError> {
-        if query.before.is_some() != query.before_id.is_some() { return Err(UpdatesStorageError::InvalidInput("pagination requires date and ID".into())); }
+        if query.before.is_some() != query.before_id.is_some() {
+            return Err(UpdatesStorageError::InvalidInput(
+                "pagination requires date and ID".into(),
+            ));
+        }
         let fetch_limit = query.limit.unwrap_or(50).clamp(1, 100);
         let status_filter = query.status.unwrap_or_else(|| "active".to_string());
 
@@ -85,7 +89,9 @@ impl UpdatesRepository {
                     actions.push("read".to_string());
                 }
                 actions.push("dismiss".to_string());
-                if job_state.as_deref().is_none_or(|s| s == "completed") { actions.push("resolve".to_string()); }
+                if job_state.as_deref().is_none_or(|s| s == "completed") {
+                    actions.push("resolve".to_string());
+                }
 
                 if let Some(ref jstate) = job_state {
                     let attempts = attempt_count.unwrap_or(0);
@@ -295,11 +301,24 @@ impl UpdatesRepository {
         .ok_or(UpdatesStorageError::JobNotFound)?;
 
         let keys: serde_json::Value = job_row.get("action_idempotency_keys");
-        if request.idempotency_key.as_ref().is_some_and(|key| keys.as_array().is_some_and(|keys| keys.iter().any(|v| v.as_str() == Some(key)))) {
-            return Ok(JobActionResponse { job_id, status: "queued".into(), message: "Retry already accepted".into() });
+        if request.idempotency_key.as_ref().is_some_and(|key| {
+            keys.as_array()
+                .is_some_and(|keys| keys.iter().any(|v| v.as_str() == Some(key)))
+        }) {
+            return Ok(JobActionResponse {
+                job_id,
+                status: "queued".into(),
+                message: "Retry already accepted".into(),
+            });
         }
-        if request.idempotency_key.as_ref().is_some_and(|k| Uuid::parse_str(k).is_err()) {
-            return Err(UpdatesStorageError::InvalidInput("idempotency key must be a UUID".into()));
+        if request
+            .idempotency_key
+            .as_ref()
+            .is_some_and(|k| Uuid::parse_str(k).is_err())
+        {
+            return Err(UpdatesStorageError::InvalidInput(
+                "idempotency key must be a UUID".into(),
+            ));
         }
         let state: String = job_row.get("state");
         let attempt_count: i32 = job_row.get("attempt_count");
@@ -365,22 +384,28 @@ impl UpdatesRepository {
         if state == "running" || state == "completed" || (state == "pending" && wait.is_none()) {
             return Err(UpdatesStorageError::InvalidJobState);
         }
-        if job_row.get::<i32,_>("attempt_count") >= job_row.get::<i32,_>("max_attempts") {
+        if job_row.get::<i32, _>("attempt_count") >= job_row.get::<i32, _>("max_attempts") {
             return Err(UpdatesStorageError::BoundedAttemptsExceeded);
         }
         let input_type = input.input_type.trim();
         if input_type.is_empty() {
-            return Err(UpdatesStorageError::InvalidInput("missing input_type".into()));
+            return Err(UpdatesStorageError::InvalidInput(
+                "missing input_type".into(),
+            ));
         }
 
         match input_type {
             "password" | "attachment_password" => {
                 let password = input.data.get("password").and_then(|v| v.as_str());
                 let Some(pw) = password else {
-                    return Err(UpdatesStorageError::InvalidInput("password field required".into()));
+                    return Err(UpdatesStorageError::InvalidInput(
+                        "password field required".into(),
+                    ));
                 };
                 if pw.trim().is_empty() || pw.len() > 1024 {
-                    return Err(UpdatesStorageError::InvalidInput("password cannot be empty".into()));
+                    return Err(UpdatesStorageError::InvalidInput(
+                        "password cannot be empty".into(),
+                    ));
                 }
 
                 let att_row = sqlx::query(
@@ -392,18 +417,26 @@ impl UpdatesRepository {
                 .await?;
 
                 let Some(att) = att_row else {
-                    return Err(UpdatesStorageError::InvalidInput("no attachment pending input for this job".into()));
+                    return Err(UpdatesStorageError::InvalidInput(
+                        "no attachment pending input for this job".into(),
+                    ));
                 };
                 let attachment_id: Uuid = att.get("id");
 
-                let key = crate::attachments::crypto::attachment_master_key().map_err(|_| UpdatesStorageError::InvalidInput("attachment encryption key is not configured".into()))?;
+                let key = crate::attachments::crypto::attachment_master_key().map_err(|_| {
+                    UpdatesStorageError::InvalidInput(
+                        "attachment encryption key is not configured".into(),
+                    )
+                })?;
                 let (ciphertext, nonce) = crate::attachments::crypto::encrypt_attachment_secret(
                     &key,
                     job_id,
                     attachment_id,
                     pw,
                 )
-                .map_err(|e| UpdatesStorageError::InvalidInput(format!("encryption failed: {e}")))?;
+                .map_err(|e| {
+                    UpdatesStorageError::InvalidInput(format!("encryption failed: {e}"))
+                })?;
 
                 let ttl_expiry = Utc::now() + chrono::Duration::minutes(15);
                 let encrypted_meta = serde_json::json!({
@@ -451,10 +484,25 @@ impl UpdatesRepository {
                 let field_name = input.data.get("field").and_then(|v| v.as_str());
                 let field_value = input.data.get("value").and_then(|v| v.as_str());
                 let (Some(f_name), Some(f_val)) = (field_name, field_value) else {
-                    return Err(UpdatesStorageError::InvalidInput("field and value required".into()));
+                    return Err(UpdatesStorageError::InvalidInput(
+                        "field and value required".into(),
+                    ));
                 };
-                if !["name","full_name","dob","date_of_birth","bank_phone","pan"].contains(&f_name) || f_val.trim().is_empty() || f_val.len() > 120 {
-                    return Err(UpdatesStorageError::InvalidInput("field name and value cannot be empty".into()));
+                if ![
+                    "name",
+                    "full_name",
+                    "dob",
+                    "date_of_birth",
+                    "bank_phone",
+                    "pan",
+                ]
+                .contains(&f_name)
+                    || f_val.trim().is_empty()
+                    || f_val.len() > 120
+                {
+                    return Err(UpdatesStorageError::InvalidInput(
+                        "field name and value cannot be empty".into(),
+                    ));
                 }
 
                 sqlx::query(
@@ -487,7 +535,9 @@ impl UpdatesRepository {
                 .await?;
             }
             other => {
-                return Err(UpdatesStorageError::InvalidInput(format!("unrecognized input_type: {other}")));
+                return Err(UpdatesStorageError::InvalidInput(format!(
+                    "unrecognized input_type: {other}"
+                )));
             }
         }
 
@@ -561,7 +611,9 @@ pub fn validate_update_content(
     content: &serde_json::Value,
 ) -> Result<(), UpdatesStorageError> {
     if !content.is_object() {
-        return Err(UpdatesStorageError::InvalidInput("content must be a json object".into()));
+        return Err(UpdatesStorageError::InvalidInput(
+            "content must be a json object".into(),
+        ));
     }
     match kind {
         "briefing" => {
@@ -623,7 +675,9 @@ pub fn validate_update_content(
             }
         }
         other => {
-            return Err(UpdatesStorageError::InvalidInput(format!("unrecognized update kind: {other}")));
+            return Err(UpdatesStorageError::InvalidInput(format!(
+                "unrecognized update kind: {other}"
+            )));
         }
     }
     Ok(())

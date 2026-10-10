@@ -412,15 +412,31 @@ impl EventHandler {
         };
 
         let input = crate::domain::timeline::IngestTimelineEventInput {
-            event_type_id: None, event_type_value: Some(event_type_val.into()), group_id: None, group_value: None,
-            title: title.into(), summary: None, occurred_at, ended_at: None, time_precision: "second".into(),
-            source_timezone: None, content: data.clone(), confidence: 0.8, dedupe_key: Some(format!("inbound:{}", event_id.0)),
+            event_type_id: None,
+            event_type_value: Some(event_type_val.into()),
+            group_id: None,
+            group_value: None,
+            title: title.into(),
+            summary: None,
+            occurred_at,
+            ended_at: None,
+            time_precision: "second".into(),
+            source_timezone: None,
+            content: data.clone(),
+            confidence: 0.8,
+            dedupe_key: Some(format!("inbound:{}", event_id.0)),
             evidence: vec![crate::domain::timeline::NewEvidenceItem {
-                source_record_id: None, source_attachment_id: None, source_type: source_kind.into(),
-                source_id: Some(event_id.0.to_string()), raw_reference: None, observation_metadata: serde_json::json!({})
+                source_record_id: None,
+                source_attachment_id: None,
+                source_type: source_kind.into(),
+                source_id: Some(event_id.0.to_string()),
+                raw_reference: None,
+                observation_metadata: serde_json::json!({}),
             }],
         };
-        let saved = crate::storage::timeline::TimelineRepository::new(self.db.pool().clone()).ingest_event(user_id, input).await
+        let saved = crate::storage::timeline::TimelineRepository::new(self.db.pool().clone())
+            .ingest_event(user_id, input)
+            .await
             .map_err(|e| EventHandlerError::Database(sqlx::Error::Protocol(e.to_string())))?;
         let timeline_event_id = saved.event.id;
 

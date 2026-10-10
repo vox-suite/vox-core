@@ -42,7 +42,11 @@ pub fn parse_pdf(
         return Err(PdfError::InvalidPdfFormat);
     }
 
-    if !bytes.starts_with(b"%PDF-") && !bytes[..1024.min(bytes.len())].windows(5).any(|w| w == b"%PDF-") {
+    if !bytes.starts_with(b"%PDF-")
+        && !bytes[..1024.min(bytes.len())]
+            .windows(5)
+            .any(|w| w == b"%PDF-")
+    {
         return Err(PdfError::InvalidPdfFormat);
     }
 
@@ -71,7 +75,9 @@ pub fn parse_pdf(
 
     let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
     if pages.len() > 500 {
-        return Err(PdfError::ExtractionFailed("PDF exceeds the 500-page extraction limit".into()));
+        return Err(PdfError::ExtractionFailed(
+            "PDF exceeds the 500-page extraction limit".into(),
+        ));
     }
     if pages.is_empty() {
         return Err(PdfError::ExtractionFailed("No pages found in PDF".into()));
@@ -95,14 +101,29 @@ pub fn extract_document_facts(
     _password: Option<&str>,
 ) -> Result<ExtractedFinancialDocument, PdfError> {
     let lower = raw_text.to_lowercase();
-    if ["one time password","one-time password","verification code","payment failed","transaction declined","payment declined","authorisation request","authorization request","payment attempt"].iter().any(|phrase|lower.contains(phrase)) { return Err(PdfError::NoFactsFound); }
+    if [
+        "one time password",
+        "one-time password",
+        "verification code",
+        "payment failed",
+        "transaction declined",
+        "payment declined",
+        "authorisation request",
+        "authorization request",
+        "payment attempt",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+    {
+        return Err(PdfError::NoFactsFound);
+    }
     let amount_regex = Regex::new(r"(?i)(?:total\s+amount\s+due|total\s+amount|amount\s+paid|amount\s+due|total\s+due|total)\s*(?:is|:|of)?\s*(?:(₹|inr|us\$|usd|€|eur|£|gbp|rs\.?|\$)\s*)?([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?)").unwrap();
     let invoice_regex = Regex::new(r"(?i)(?:invoice|bill|ref|reference|order)\s*(?:no\.?|num\.?|#|id|number)\s*[:#]?\s*([A-Z0-9_-]{4,24})").unwrap();
 
     let mut amount = None;
     let mut amount_currency = None;
     if let Some(caps) = amount_regex.captures(raw_text) {
-        amount_currency = caps.get(1).map(|currency|currency.as_str().to_lowercase());
+        amount_currency = caps.get(1).map(|currency| currency.as_str().to_lowercase());
         if let Some(m) = caps.get(2) {
             let s = m.as_str().replace(',', "");
             if let Ok(val) = s.parse::<f64>() {
@@ -114,17 +135,22 @@ pub fn extract_document_facts(
     }
 
     let labelled_date = Regex::new(r"(?i)(?:statement date|bill date|invoice date|transaction date|payment date|date)\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{2}[/-]\d{2}[/-]\d{4}|\d{1,2} [A-Za-z]+ \d{4}|[A-Za-z]+ \d{1,2},? \d{4})").unwrap();
-    let occurred_at = labelled_date.captures(raw_text)
-        .and_then(|c| c.get(1)).and_then(|m| parse_date(m.as_str()))
+    let occurred_at = labelled_date
+        .captures(raw_text)
+        .and_then(|c| c.get(1))
+        .and_then(|m| parse_date(m.as_str()))
         .ok_or(PdfError::NoFactsFound)?;
 
-    let reference = invoice_regex.captures(raw_text).and_then(|caps| {
-        caps.get(1).map(|m| m.as_str().to_string())
-    });
+    let reference = invoice_regex
+        .captures(raw_text)
+        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()));
 
     let is_statement = lower.contains("statement") || lower.contains("account summary");
-    let is_bill = lower.contains("due date") || lower.contains("bill date") || lower.contains("pay before");
-    let is_receipt = lower.contains("receipt") || lower.contains("paid successfully") || lower.contains("payment confirmation");
+    let is_bill =
+        lower.contains("due date") || lower.contains("bill date") || lower.contains("pay before");
+    let is_receipt = lower.contains("receipt")
+        || lower.contains("paid successfully")
+        || lower.contains("payment confirmation");
 
     if (!is_statement && !is_bill && !is_receipt) || amount.is_none() {
         return Err(PdfError::NoFactsFound);
@@ -147,16 +173,38 @@ pub fn extract_document_facts(
     let summary = format!(
         "{} of {}{}",
         title,
-        amount.map(|a| format!("{:.2}", a)).unwrap_or_else(|| "unspecified amount".into()),
-        reference.as_ref().map(|r| format!(" (Ref: {})", r)).unwrap_or_default()
+        amount
+            .map(|a| format!("{:.2}", a))
+            .unwrap_or_else(|| "unspecified amount".into()),
+        reference
+            .as_ref()
+            .map(|r| format!(" (Ref: {})", r))
+            .unwrap_or_default()
     );
 
     let currency = match amount_currency.as_deref() {
-        Some("₹"|"inr") => Some("INR".into()),
-        Some("usd"|"us$") => Some("USD".into()),
-        Some("eur"|"€") => Some("EUR".into()),
-        Some("gbp"|"£") => Some("GBP".into()),
-        Some("rs"|"rs.") if biller_or_merchant.as_deref().is_some_and(|institution|["HDFC Bank","ICICI Bank","State Bank of India","SBI Card","Axis Bank","Kotak Mahindra","Airtel","Jio","BESCOM"].contains(&institution)) => Some("INR".into()),
+        Some("₹" | "inr") => Some("INR".into()),
+        Some("usd" | "us$") => Some("USD".into()),
+        Some("eur" | "€") => Some("EUR".into()),
+        Some("gbp" | "£") => Some("GBP".into()),
+        Some("rs" | "rs.")
+            if biller_or_merchant.as_deref().is_some_and(|institution| {
+                [
+                    "HDFC Bank",
+                    "ICICI Bank",
+                    "State Bank of India",
+                    "SBI Card",
+                    "Axis Bank",
+                    "Kotak Mahindra",
+                    "Airtel",
+                    "Jio",
+                    "BESCOM",
+                ]
+                .contains(&institution)
+            }) =>
+        {
+            Some("INR".into())
+        }
         _ => None,
     };
 
@@ -190,8 +238,19 @@ pub fn extract_document_facts(
 
 fn detect_institution(lower: &str) -> Option<String> {
     for name in [
-        "HDFC Bank", "ICICI Bank", "State Bank of India", "SBI Card", "Axis Bank",
-        "Kotak Mahindra", "Airtel", "Jio", "BESCOM", "Amazon", "Flipkart", "Swiggy", "Zomato",
+        "HDFC Bank",
+        "ICICI Bank",
+        "State Bank of India",
+        "SBI Card",
+        "Axis Bank",
+        "Kotak Mahindra",
+        "Airtel",
+        "Jio",
+        "BESCOM",
+        "Amazon",
+        "Flipkart",
+        "Swiggy",
+        "Zomato",
     ] {
         if lower.contains(&name.to_lowercase()) {
             return Some(name.to_string());
@@ -201,10 +260,24 @@ fn detect_institution(lower: &str) -> Option<String> {
 }
 
 fn parse_date(s: &str) -> Option<DateTime<Utc>> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) { return Some(dt.with_timezone(&Utc)); }
-    for format in ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y", "%b %d, %Y", "%B %d, %Y"] {
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(s,format) {
-            return date.and_hms_opt(0,0,0).map(|dt| DateTime::from_naive_utc_and_offset(dt,Utc));
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for format in [
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%b %d, %Y",
+        "%B %d, %Y",
+    ] {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(s, format) {
+            return date
+                .and_hms_opt(0, 0, 0)
+                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc));
         }
     }
     None

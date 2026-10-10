@@ -26,9 +26,12 @@ pub fn derive_key(seed: &str) -> [u8; 32] {
 }
 
 pub fn attachment_master_key() -> Result<[u8; 32], CryptoError> {
-    let seed = std::env::var("VOX_ATTACHMENT_SECRET_KEY").or_else(|_| std::env::var("VOX_CREDENTIAL_KEY"))
+    let seed = std::env::var("VOX_ATTACHMENT_SECRET_KEY")
+        .or_else(|_| std::env::var("VOX_CREDENTIAL_KEY"))
         .map_err(|_| CryptoError::InvalidKey)?;
-    if seed.len() < 32 { return Err(CryptoError::InvalidKey); }
+    if seed.len() < 32 {
+        return Err(CryptoError::InvalidKey);
+    }
     Ok(derive_key(&format!("vox-attachment-v1:{seed}")))
 }
 

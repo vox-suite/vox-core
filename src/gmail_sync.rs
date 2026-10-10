@@ -74,10 +74,17 @@ pub async fn process_gmail_delta(
     incoming_history_id: u64,
     last_synced_at: Option<DateTime<Utc>>,
 ) -> bool {
-    let Ok(mut lease) = pool.begin().await else { return false; };
-    let locked = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(format!("gmail-connection:{connection_id}")).fetch_one(&mut *lease).await;
-    if !matches!(locked, Ok(true)) { return false; }
+    let Ok(mut lease) = pool.begin().await else {
+        return false;
+    };
+    let locked =
+        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("gmail-connection:{connection_id}"))
+            .fetch_one(&mut *lease)
+            .await;
+    if !matches!(locked, Ok(true)) {
+        return false;
+    }
     let sync_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO connector_sync_runs (user_id, connector_id, connection_id, run_type, status, cursor_state, started_at) \
          VALUES ($1, 'gmail', $2, 'live', 'running', $3, now()) RETURNING id",
@@ -88,7 +95,9 @@ pub async fn process_gmail_delta(
     .fetch_one(pool)
     .await
     .unwrap_or(Uuid::nil());
-    if sync_run_id.is_nil() { return false; }
+    if sync_run_id.is_nil() {
+        return false;
+    }
 
     let connections_svc = vox_connections::accounts::FreshConnectionsService::new(
         pool.clone(),
@@ -104,7 +113,10 @@ pub async fn process_gmail_delta(
         return false;
     };
 
-    let Ok(tokens) = connections_service.get_gmail_tokens(user_id, connection_id).await else {
+    let Ok(tokens) = connections_service
+        .get_gmail_tokens(user_id, connection_id)
+        .await
+    else {
         let _ = sqlx::query("UPDATE connector_sync_runs SET status = 'failed', error = 'token_refresh_failed', completed_at = now() WHERE id = $1")
             .bind(sync_run_id)
             .execute(pool)
@@ -113,7 +125,9 @@ pub async fn process_gmail_delta(
     };
 
     let gmail_client = vox_connections::providers::gmail::GmailClient::new();
-    let history_res = gmail_client.list_history(&tokens.access_token, last_history_id).await;
+    let history_res = gmail_client
+        .list_history(&tokens.access_token, last_history_id)
+        .await;
 
     let (message_ids, new_cursor) = match history_res {
         Ok(res) => res,
@@ -132,7 +146,11 @@ pub async fn process_gmail_delta(
                     .and_then(|(created, meta)| {
                         meta.as_ref()
                             .and_then(|m| m.get("baseline_at").and_then(Value::as_str))
-                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc).timestamp()))
+                            .and_then(|s| {
+                                DateTime::parse_from_rfc3339(s)
+                                    .ok()
+                                    .map(|dt| dt.with_timezone(&Utc).timestamp())
+                            })
                             .or_else(|| created.map(|c| c.timestamp()))
                     })
                     .unwrap_or_else(|| Utc::now().timestamp());
@@ -142,7 +160,10 @@ pub async fn process_gmail_delta(
                     None => baseline_ts,
                 };
 
-                let recovered_ids = match gmail_client.list_messages_after(&tokens.access_token, since_ts).await {
+                let recovered_ids = match gmail_client
+                    .list_messages_after(&tokens.access_token, since_ts)
+                    .await
+                {
                     Ok(ids) => ids,
                     Err(error) => {
                         tracing::warn!(%connection_id, %error, "gmail history recovery failed; cursor retained");
@@ -174,7 +195,16 @@ pub async fn process_gmail_delta(
 
     for msg_id in &message_ids {
         records_extracted += 1;
-        match ingest_message(pool, &gmail_client, &tokens.access_token, user_id, email_address, msg_id).await {
+        match ingest_message(
+            pool,
+            &gmail_client,
+            &tokens.access_token,
+            user_id,
+            email_address,
+            msg_id,
+        )
+        .await
+        {
             Ok(ingested) => records_ingested += i32::from(ingested),
             Err(error) => {
                 all_processed_cleanly = false;
@@ -198,8 +228,10 @@ pub async fn process_gmail_delta(
                 .bind(user_id).execute(&mut *tx).await?;
             tx.commit().await
         }.await;
-        if let Err(error) = finalized { tracing::error!(%connection_id,%error,"gmail cursor finalization failed"); return false; }
-
+        if let Err(error) = finalized {
+            tracing::error!(%connection_id,%error,"gmail cursor finalization failed");
+            return false;
+        }
     } else {
         let _ = sqlx::query(
             "UPDATE connector_sync_runs SET status = 'failed', records_extracted = $1, records_ingested = $2, \
@@ -229,7 +261,8 @@ pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
         let conn_id: Uuid = row.get("id");
         let u_id: Uuid = row.get("user_id");
         let metadata: Value = row.get("metadata");
-        let email: String = row.get::<Option<String>, _>("account_id")
+        let email: String = row
+            .get::<Option<String>, _>("account_id")
             .or_else(|| row.get::<Option<String>, _>("account_display_id"))
             .unwrap_or_default();
         let last_synced: Option<DateTime<Utc>> = row.get("last_synced_at");
@@ -282,15 +315,23 @@ pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
 }
 
 async fn ingest_message(
-    pool: &PgPool, gmail: &vox_connections::providers::gmail::GmailClient,
-    token: &str, user_id: Uuid, email: &str, message_id: &str,
+    pool: &PgPool,
+    gmail: &vox_connections::providers::gmail::GmailClient,
+    token: &str,
+    user_id: Uuid,
+    email: &str,
+    message_id: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(format!("gmail:{user_id}:{message_id}")).execute(&mut *tx).await?;
+        .bind(format!("gmail:{user_id}:{message_id}"))
+        .execute(&mut *tx)
+        .await?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM source_records WHERE user_id=$1 AND connector_id='gmail' AND source_record_id=$2)")
         .bind(user_id).bind(message_id).fetch_one(&mut *tx).await?;
-    if exists { return Ok(false); }
+    if exists {
+        return Ok(false);
+    }
     let msg = gmail.get_message(token, message_id).await?;
     let safe_subject = msg.subject.as_deref().map(redact_email_codes);
     let safe_snippet = msg.snippet.as_deref().map(redact_email_codes);
@@ -332,18 +373,24 @@ async fn ingest_message(
     }.await;
     if let Err(error) = outcome {
         tx.rollback().await?;
-        for object in stored_objects { if let Err(error) = crate::storage::object_storage::delete_object(&object).await { tracing::warn!(%error,"gmail rollback object cleanup failed"); } }
+        for object in stored_objects {
+            if let Err(error) = crate::storage::object_storage::delete_object(&object).await {
+                tracing::warn!(%error,"gmail rollback object cleanup failed");
+            }
+        }
         return Err(error);
     }
     tx.commit().await?;
     Ok(true)
 }
 
-pub fn redact_email_codes(text:&str) -> String {
-    static FORWARD:std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static REVERSE:std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+pub fn redact_email_codes(text: &str) -> String {
+    static FORWARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static REVERSE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let forward = FORWARD.get_or_init(||regex::Regex::new(r"(?i)((?:\botp\b|one[- ]time password|verification code|security code|login code)\s*(?:is\s*)?[:=-]?\s*)([0-9]{4,8})\b").unwrap());
     let reverse = REVERSE.get_or_init(||regex::Regex::new(r"(?i)\b([0-9]{4,8})(\s+(?:is\s+)?(?:your\s+)?(?:otp\b|one[- ]time password|verification code|security code|login code))").unwrap());
-    let redacted=forward.replace_all(text,"${1}[redacted]");
-    reverse.replace_all(&redacted,"[redacted]${2}").into_owned()
+    let redacted = forward.replace_all(text, "${1}[redacted]");
+    reverse
+        .replace_all(&redacted, "[redacted]${2}")
+        .into_owned()
 }

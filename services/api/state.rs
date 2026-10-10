@@ -6,8 +6,8 @@ use std::sync::Arc;
 use vox_core::{
     agents::chart_suggester::SuggestingCharts,
     application::{
-        collections::CollectionService, devices::DeviceService, 
-        schemas::SchemaService, spans::SpanService,
+        collections::CollectionService, devices::DeviceService, schemas::SchemaService,
+        spans::SpanService,
     },
     consent::ConsentService,
     db::Db,
@@ -15,8 +15,8 @@ use vox_core::{
     memory::MemoryService,
     realtime::{DeviceHub, UserEventHub},
     storage::{
-        pulse::PulseRepository, collections::CollectionRepository, devices::DeviceRepository,
-         schemas::SchemaRepository, spans::SpanRepository,
+        collections::CollectionRepository, devices::DeviceRepository, pulse::PulseRepository,
+        schemas::SchemaRepository, spans::SpanRepository,
     },
 };
 

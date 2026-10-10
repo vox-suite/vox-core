@@ -21,8 +21,8 @@ pub mod spans;
 pub mod tools;
 pub mod voice;
 
+pub mod gmail;
 pub mod pulse;
+pub mod takeout;
 pub mod timeline;
 pub mod updates;
-pub mod gmail;
-pub mod takeout;

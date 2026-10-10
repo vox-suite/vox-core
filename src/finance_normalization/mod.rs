@@ -12,13 +12,16 @@ pub async fn dedupe_or_settle(
     data: &Value,
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    dedupe_or_settle_in_transaction(&mut tx,user_id,timeline_event_id,data).await?;
+    dedupe_or_settle_in_transaction(&mut tx, user_id, timeline_event_id, data).await?;
     tx.commit().await
 }
 
 pub async fn dedupe_or_settle_in_transaction(
-    tx: &mut sqlx::Transaction<'_,sqlx::Postgres>, user_id: Uuid, timeline_event_id: Uuid, data: &Value,
-) -> Result<(),sqlx::Error> {
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    timeline_event_id: Uuid,
+    data: &Value,
+) -> Result<(), sqlx::Error> {
     let direction = data.get("direction").and_then(Value::as_str);
     let is_due = direction == Some("due");
     let is_statement = direction == Some("statement")
@@ -30,9 +33,16 @@ pub async fn dedupe_or_settle_in_transaction(
     let account_hint = data.get("account_hint").and_then(Value::as_str);
     let merchant = data.get("merchant").and_then(Value::as_str);
     let amount = data.get("amount").and_then(Value::as_f64);
-    let effective: DateTime<Utc> = sqlx::query_scalar("SELECT occurred_at FROM timeline_events WHERE id=$1 AND user_id=$2")
-        .bind(timeline_event_id).bind(user_id).fetch_one(&mut **tx).await?;
-    let currency = data.get("currency").and_then(Value::as_str).unwrap_or("unknown");
+    let effective: DateTime<Utc> =
+        sqlx::query_scalar("SELECT occurred_at FROM timeline_events WHERE id=$1 AND user_id=$2")
+            .bind(timeline_event_id)
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let currency = data
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
 
     let is_spending = data.get("is_spending").and_then(Value::as_bool) == Some(true)
         && direction == Some("debit")
@@ -44,10 +54,14 @@ pub async fn dedupe_or_settle_in_transaction(
 
     let base_fp = fingerprint(is_due, reference, account_hint, merchant, amount, effective);
     let fp = if reference.is_some_and(|r| r.trim().len() >= 4) && amount.is_some() {
-        hex::encode(Sha256::digest(format!("{user_id}|{}|{currency}|{base_fp}", direction.unwrap_or("unknown"))))
-    } else { format!("financial:{timeline_event_id}") };
+        hex::encode(Sha256::digest(format!(
+            "{user_id}|{}|{currency}|{base_fp}",
+            direction.unwrap_or("unknown")
+        )))
+    } else {
+        format!("financial:{timeline_event_id}")
+    };
     let lock_key = i64::from_le_bytes(Sha256::digest(&fp)[0..8].try_into().unwrap());
-
 
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(lock_key)

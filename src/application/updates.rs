@@ -3,9 +3,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         identity::Actor,
-        updates::{
-            JobActionResponse, JobInputRequest, JobRetryRequest, UpdateItem, UpdatesQuery,
-        },
+        updates::{JobActionResponse, JobInputRequest, JobRetryRequest, UpdateItem, UpdatesQuery},
     },
     storage::updates::{UpdatesRepository, UpdatesStorageError},
 };

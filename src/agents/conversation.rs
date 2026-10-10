@@ -185,12 +185,42 @@ impl ConversationAgent {
                 ),
                 prompt.correlation.clone(),
             ))
-            .tool(tools::timing::TimedTool::new(tools::timeline::ListTimelineTypes { db: self.db.clone(), user_id: prompt.user_id }, prompt.correlation.clone()))
-            .tool(tools::timing::TimedTool::new(tools::timeline::CreateTimelineEventType { db: self.db.clone(), user_id: prompt.user_id }, prompt.correlation.clone()))
-            .tool(tools::timing::TimedTool::new(tools::timeline::SaveTimelineEvent { db: self.db.clone(), user_id: prompt.user_id }, prompt.correlation.clone()))
-            .tool(tools::timing::TimedTool::new(tools::timeline::QueryTimelineEvents { db: self.db.clone(), user_id: prompt.user_id },prompt.correlation.clone()))
-            .tool(tools::timing::TimedTool::new(tools::data_query::FindSchemas::new(self.db.clone(), prompt.user_id),prompt.correlation.clone()))
-            .tool(tools::timing::TimedTool::new(tools::data_query::QueryUserData::new(self.db.clone(), prompt.user_id),prompt.correlation.clone()))
+            .tool(tools::timing::TimedTool::new(
+                tools::timeline::ListTimelineTypes {
+                    db: self.db.clone(),
+                    user_id: prompt.user_id,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::timeline::CreateTimelineEventType {
+                    db: self.db.clone(),
+                    user_id: prompt.user_id,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::timeline::SaveTimelineEvent {
+                    db: self.db.clone(),
+                    user_id: prompt.user_id,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::timeline::QueryTimelineEvents {
+                    db: self.db.clone(),
+                    user_id: prompt.user_id,
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::data_query::FindSchemas::new(self.db.clone(), prompt.user_id),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::data_query::QueryUserData::new(self.db.clone(), prompt.user_id),
+                prompt.correlation.clone(),
+            ))
             .tool(tools::timing::TimedTool::new(
                 tools::user_name::UpdateUserName::new(
                     self.memory.clone(),

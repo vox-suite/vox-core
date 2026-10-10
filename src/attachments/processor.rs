@@ -60,8 +60,12 @@ pub async fn process_attachment(
     let max_attempts: i32 = row.get("max_attempts");
 
     let read_result = if object_ref.starts_with(&format!("vox-obj://{storage_owner_id}/")) {
-        crate::storage::object_storage::read_object(&object_ref).await.map_err(|e| e.to_string())
-    } else { Err("attachment reference does not belong to this user".into()) };
+        crate::storage::object_storage::read_object(&object_ref)
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        Err("attachment reference does not belong to this user".into())
+    };
 
     let bytes = match read_result {
         Ok(data) => data,
@@ -159,13 +163,12 @@ pub async fn process_attachment(
         if let Some(ref pw) = provided_pw {
             parse_pdf_off_runtime(&bytes, Some(pw)).await
         } else {
-            let user_facts: serde_json::Value = sqlx::query_scalar(
-                "SELECT profile_facts FROM users WHERE id = $1",
-            )
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .unwrap_or_else(|| serde_json::json!({}));
+            let user_facts: serde_json::Value =
+                sqlx::query_scalar("SELECT profile_facts FROM users WHERE id = $1")
+                    .bind(user_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .unwrap_or_else(|| serde_json::json!({}));
 
             let record_meta: serde_json::Value = sqlx::query_scalar(
                 "SELECT metadata FROM source_records WHERE id = $1 AND user_id = $2",
@@ -197,7 +200,10 @@ pub async fn process_attachment(
                     }
                 }
                 PasswordDerivationOutcome::MissingFact(fact) => {
-                    let wait_msg = format!("Missing profile fact '{}' required for provider password derivation", fact);
+                    let wait_msg = format!(
+                        "Missing profile fact '{}' required for provider password derivation",
+                        fact
+                    );
                     sqlx::query(
                         "UPDATE source_attachments SET parse_state = 'waiting_user', \
                                 error = $3, updated_at = now() \
@@ -239,9 +245,7 @@ pub async fn process_attachment(
                     tx.commit().await?;
                     return Ok(AttachmentOutcome::WaitingUser(wait_msg));
                 }
-                PasswordDerivationOutcome::NoProviderRule => {
-                    Err(PdfError::PasswordRequired)
-                }
+                PasswordDerivationOutcome::NoProviderRule => Err(PdfError::PasswordRequired),
             }
         }
     };
@@ -271,7 +275,16 @@ pub async fn process_attachment(
                 .execute(&mut *tx)
                 .await?;
 
-                record_issue(&mut tx,user_id,attachment_id,job_id,"Incorrect attachment password","Password incorrect. Enter the correct password.","encrypted_pdf").await?;
+                record_issue(
+                    &mut tx,
+                    user_id,
+                    attachment_id,
+                    job_id,
+                    "Incorrect attachment password",
+                    "Password incorrect. Enter the correct password.",
+                    "encrypted_pdf",
+                )
+                .await?;
 
                 tx.commit().await?;
                 Ok(AttachmentOutcome::WaitingUser("Incorrect password".into()))
@@ -298,10 +311,21 @@ pub async fn process_attachment(
                 .execute(&mut *tx)
                 .await?;
 
-                record_issue(&mut tx,user_id,attachment_id,job_id,"Attachment could not be unlocked","Maximum password attempts exceeded.","attempts_exhausted").await?;
+                record_issue(
+                    &mut tx,
+                    user_id,
+                    attachment_id,
+                    job_id,
+                    "Attachment could not be unlocked",
+                    "Maximum password attempts exceeded.",
+                    "attempts_exhausted",
+                )
+                .await?;
 
                 tx.commit().await?;
-                Ok(AttachmentOutcome::Failed("Maximum attempts exceeded".into()))
+                Ok(AttachmentOutcome::Failed(
+                    "Maximum attempts exceeded".into(),
+                ))
             }
         }
         Err(PdfError::PasswordRequired) => {
@@ -345,7 +369,8 @@ pub async fn process_attachment(
         }
         Err(err) => {
             let next_attempts = attempt_count + 1;
-            let will_retry = next_attempts < max_attempts && matches!(&err,PdfError::ExtractionFailed(message) if message.contains("time limit") || message.contains("unavailable") || message.contains("unexpectedly"));
+            let will_retry = next_attempts < max_attempts
+                && matches!(&err,PdfError::ExtractionFailed(message) if message.contains("time limit") || message.contains("unavailable") || message.contains("unexpectedly"));
             let (job_state, parse_state) = if will_retry {
                 ("pending", "processing")
             } else {
@@ -380,21 +405,57 @@ pub async fn process_attachment(
             .execute(&mut *tx)
             .await?;
 
-            record_issue(&mut tx,user_id,attachment_id,job_id,"Attachment parsing failed",&err.to_string(),"parse_error").await?;
+            record_issue(
+                &mut tx,
+                user_id,
+                attachment_id,
+                job_id,
+                "Attachment parsing failed",
+                &err.to_string(),
+                "parse_error",
+            )
+            .await?;
             tx.commit().await?;
             Ok(AttachmentOutcome::Failed(err.to_string()))
         }
         Ok(doc) => {
-            let result = crate::storage::timeline::TimelineRepository::new(pool.clone()).ingest_event_in_transaction(&mut tx,user_id,
-                crate::domain::timeline::IngestTimelineEventInput {
-                    event_type_id:None,event_type_value:Some(doc.kind.clone()),group_id:None,group_value:Some("finance".into()),
-                    title:doc.title.clone(),summary:Some(doc.summary.clone()),occurred_at:doc.occurred_at,ended_at:doc.ended_at,
-                    time_precision:"day".into(),source_timezone:None,content:doc.facts.clone(),confidence:0.8,
-                    dedupe_key:Some(format!("attachment:{attachment_id}")),
-                    evidence:vec![crate::domain::timeline::NewEvidenceItem {source_record_id:Some(source_record_id),source_attachment_id:Some(attachment_id),
-                        source_type:"source_attachment".into(),source_id:Some(attachment_id.to_string()),raw_reference:None,observation_metadata:doc.facts.clone()}],
-                }).await.map_err(|error| AttachmentError::Failed(error.to_string()))?;
-            crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&doc.facts).await?;
+            let result = crate::storage::timeline::TimelineRepository::new(pool.clone())
+                .ingest_event_in_transaction(
+                    &mut tx,
+                    user_id,
+                    crate::domain::timeline::IngestTimelineEventInput {
+                        event_type_id: None,
+                        event_type_value: Some(doc.kind.clone()),
+                        group_id: None,
+                        group_value: Some("finance".into()),
+                        title: doc.title.clone(),
+                        summary: Some(doc.summary.clone()),
+                        occurred_at: doc.occurred_at,
+                        ended_at: doc.ended_at,
+                        time_precision: "day".into(),
+                        source_timezone: None,
+                        content: doc.facts.clone(),
+                        confidence: 0.8,
+                        dedupe_key: Some(format!("attachment:{attachment_id}")),
+                        evidence: vec![crate::domain::timeline::NewEvidenceItem {
+                            source_record_id: Some(source_record_id),
+                            source_attachment_id: Some(attachment_id),
+                            source_type: "source_attachment".into(),
+                            source_id: Some(attachment_id.to_string()),
+                            raw_reference: None,
+                            observation_metadata: doc.facts.clone(),
+                        }],
+                    },
+                )
+                .await
+                .map_err(|error| AttachmentError::Failed(error.to_string()))?;
+            crate::finance_normalization::dedupe_or_settle_in_transaction(
+                &mut tx,
+                user_id,
+                result.event.id,
+                &doc.facts,
+            )
+            .await?;
 
             sqlx::query(
                 "UPDATE source_records SET temporary_content_ref = NULL \
@@ -446,25 +507,47 @@ pub async fn process_attachment(
     }
 }
 
-async fn record_issue(tx: &mut sqlx::Transaction<'_,sqlx::Postgres>,user_id:Uuid,attachment_id:Uuid,job_id:Uuid,title:&str,summary:&str,reason:&str) -> Result<(),sqlx::Error> {
+async fn record_issue(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    attachment_id: Uuid,
+    job_id: Uuid,
+    title: &str,
+    summary: &str,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO updates(user_id,kind,category,title,summary,content,priority,source_job_id,dedupe_key) VALUES($1,'processing_issue','attachments',$2,$3,jsonb_build_object('attachment_id',$4::text,'reason',$5::text),'high',$6,$7) ON CONFLICT(user_id,dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET status='active',title=EXCLUDED.title,summary=EXCLUDED.summary,content=EXCLUDED.content,read_at=NULL,updated_at=now()")
         .bind(user_id).bind(title).bind(summary).bind(attachment_id).bind(reason).bind(job_id).bind(format!("attachment_issue:{attachment_id}"))
         .execute(&mut **tx).await?;
     Ok(())
 }
 
-async fn parse_pdf_off_runtime(bytes: &[u8], password: Option<&str>) -> Result<crate::attachments::pdf::ExtractedFinancialDocument, PdfError> {
-    static PARSERS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
-    let permit = tokio::time::timeout(std::time::Duration::from_secs(10),PARSERS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2))).clone().acquire_owned()).await
-        .map_err(|_| PdfError::ExtractionFailed("PDF parser unavailable: capacity wait exceeded".into()))?
-        .map_err(|_| PdfError::ExtractionFailed("PDF parser unavailable".into()))?;
+async fn parse_pdf_off_runtime(
+    bytes: &[u8],
+    password: Option<&str>,
+) -> Result<crate::attachments::pdf::ExtractedFinancialDocument, PdfError> {
+    static PARSERS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    let permit = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        PARSERS
+            .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
+            .clone()
+            .acquire_owned(),
+    )
+    .await
+    .map_err(|_| {
+        PdfError::ExtractionFailed("PDF parser unavailable: capacity wait exceeded".into())
+    })?
+    .map_err(|_| PdfError::ExtractionFailed("PDF parser unavailable".into()))?;
     let bytes = bytes.to_vec();
     let password = password.map(str::to_owned);
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         parse_pdf(&bytes, password.as_deref())
     });
-    tokio::time::timeout(std::time::Duration::from_secs(45), task).await
+    tokio::time::timeout(std::time::Duration::from_secs(45), task)
+        .await
         .map_err(|_| PdfError::ExtractionFailed("PDF extraction exceeded its time limit".into()))?
         .map_err(|_| PdfError::ExtractionFailed("PDF parser stopped unexpectedly".into()))?
 }

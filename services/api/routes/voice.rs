@@ -1,3 +1,4 @@
+use axum::extract::Query;
 /**
  * Real-time bidirectional voice WebSocket endpoint for desktop and mobile clients.
  *
@@ -15,7 +16,6 @@ use axum::{
     },
     response::IntoResponse,
 };
-use axum::extract::Query;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -653,7 +653,11 @@ async fn handle_voice_socket(
                             .unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
                     }
-                    Ok(VoiceClientMessage::Turn { conversation_id, text, tool_results }) => {
+                    Ok(VoiceClientMessage::Turn {
+                        conversation_id,
+                        text,
+                        tool_results,
+                    }) => {
                         let audio = std::mem::take(&mut pending_audio);
                         let typed = text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                         if audio.is_empty() && typed.is_none() {

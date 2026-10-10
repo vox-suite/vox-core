@@ -138,8 +138,15 @@ pub async fn ingest_event(
 #[utoipa::path(post, path="/v1/timeline/events/counts", tag="timeline",
     request_body=vox_core::domain::timeline::TimelineCountsQuery,
     responses((status=200, body=Vec<vox_core::domain::timeline::TimelineDayCount>)))]
-pub async fn day_counts(State(service): State<TimelineService>, Extension(actor): Extension<Actor>,
-    Json(input): Json<vox_core::domain::timeline::TimelineCountsQuery>) -> Result<impl IntoResponse, StatusCode> {
-    let counts = service.repo().day_counts(actor.user_id, input).await.map_err(|e| status_for(e.into()))?;
+pub async fn day_counts(
+    State(service): State<TimelineService>,
+    Extension(actor): Extension<Actor>,
+    Json(input): Json<vox_core::domain::timeline::TimelineCountsQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let counts = service
+        .repo()
+        .day_counts(actor.user_id, input)
+        .await
+        .map_err(|e| status_for(e.into()))?;
     Ok(Json(counts))
 }

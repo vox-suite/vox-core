@@ -160,4 +160,6 @@ pub struct TimelineDayCount {
     pub count: i64,
 }
 
-fn empty_metadata() -> serde_json::Value { serde_json::json!({}) }
+fn empty_metadata() -> serde_json::Value {
+    serde_json::json!({})
+}

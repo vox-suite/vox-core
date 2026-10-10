@@ -20,9 +20,9 @@ pub mod pulse;
 pub mod timeline;
 pub mod updates;
 
-pub mod space_tasks;
 pub mod object_storage;
+pub mod space_tasks;
 
+pub use object_storage::*;
 pub use timeline::*;
 pub use updates::*;
-pub use object_storage::*;

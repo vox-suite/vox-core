@@ -286,23 +286,53 @@ impl IntegrationService {
             }
         }
         for id in &g.chart_ids {
-            if let Some(chart) = self.charts.get_chart(g.user_id,*id).await? {
-                let data = self.chart_data(g,&chart).await?;
+            if let Some(chart) = self.charts.get_chart(g.user_id, *id).await? {
+                let data = self.chart_data(g, &chart).await?;
                 pulse.push(serde_json::json!({"id":chart.id,"title":chart.title,"definition":chart.definition,"data":data}));
             }
         }
         Ok(serde_json::json!({"collections":collections,"spans":spans,"pulse":pulse}))
     }
-    async fn chart_data(&self,g:&Grant,chart:&crate::domain::pulse::SavedPulseChart) -> Result<serde_json::Value,Error> {
+    async fn chart_data(
+        &self,
+        g: &Grant,
+        chart: &crate::domain::pulse::SavedPulseChart,
+    ) -> Result<serde_json::Value, Error> {
         use chrono::TimeZone;
-        let timezone=chart.definition.timezone.parse::<chrono_tz::Tz>().map_err(|_| Error::Invalid)?;
-        let now=chrono::Utc::now();
-        let last=now.with_timezone(&timezone).date_naive()-chrono::Duration::days(i64::from(chart.definition.offset_days));
-        let first=last-chrono::Duration::days(i64::from(chart.definition.period_days)-1);
-        let start=timezone.from_local_datetime(&first.and_hms_opt(0,0,0).ok_or(Error::Invalid)?).earliest().ok_or(Error::Invalid)?.with_timezone(&chrono::Utc);
-        let end=if chart.definition.offset_days==0 {now} else {timezone.from_local_datetime(&(last+chrono::Duration::days(1)).and_hms_opt(0,0,0).ok_or(Error::Invalid)?).earliest().ok_or(Error::Invalid)?.with_timezone(&chrono::Utc)};
-        if g.span_from.is_none_or(|from| from>start) || g.span_to.is_none_or(|to| to<end) {return Err(Error::Forbidden);}
-        let result=crate::application::pulse::service::PulseService::new(self.charts.clone()).preview(&Actor::user(g.user_id),chart.definition.clone()).await.map_err(|_| Error::Invalid)?;
+        let timezone = chart
+            .definition
+            .timezone
+            .parse::<chrono_tz::Tz>()
+            .map_err(|_| Error::Invalid)?;
+        let now = chrono::Utc::now();
+        let last = now.with_timezone(&timezone).date_naive()
+            - chrono::Duration::days(i64::from(chart.definition.offset_days));
+        let first = last - chrono::Duration::days(i64::from(chart.definition.period_days) - 1);
+        let start = timezone
+            .from_local_datetime(&first.and_hms_opt(0, 0, 0).ok_or(Error::Invalid)?)
+            .earliest()
+            .ok_or(Error::Invalid)?
+            .with_timezone(&chrono::Utc);
+        let end = if chart.definition.offset_days == 0 {
+            now
+        } else {
+            timezone
+                .from_local_datetime(
+                    &(last + chrono::Duration::days(1))
+                        .and_hms_opt(0, 0, 0)
+                        .ok_or(Error::Invalid)?,
+                )
+                .earliest()
+                .ok_or(Error::Invalid)?
+                .with_timezone(&chrono::Utc)
+        };
+        if g.span_from.is_none_or(|from| from > start) || g.span_to.is_none_or(|to| to < end) {
+            return Err(Error::Forbidden);
+        }
+        let result = crate::application::pulse::service::PulseService::new(self.charts.clone())
+            .preview(&Actor::user(g.user_id), chart.definition.clone())
+            .await
+            .map_err(|_| Error::Invalid)?;
         serde_json::to_value(result).map_err(|_| Error::Invalid)
     }
     pub async fn plan(&self, g: &Grant, p: Plan) -> Result<Uuid, Error> {

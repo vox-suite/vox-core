@@ -1,5 +1,4 @@
 pub mod agent_memory;
-pub mod user_name;
 pub mod connections;
 /**
 * Agent tool implementations and schema declarations for external integrations.
@@ -14,6 +13,7 @@ pub mod map_scene;
 pub mod records;
 pub mod space_graph;
 pub mod spans;
+pub mod user_name;
 pub mod visits;
 pub mod web_search;
 pub mod wiz;

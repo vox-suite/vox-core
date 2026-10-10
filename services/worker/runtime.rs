@@ -1,6 +1,6 @@
+use sqlx::Row;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use sqlx::Row;
 use uuid::Uuid;
 use vox_core::{
     agents::{
@@ -87,7 +87,8 @@ pub async fn run_worker(
             }
         }
     });
-    let retention_sweeper = vox_core::attachments::AttachmentRetentionSweeper::new(db.pool().clone());
+    let retention_sweeper =
+        vox_core::attachments::AttachmentRetentionSweeper::new(db.pool().clone());
     let retention_cancel = cancellation.clone();
     let retention_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));

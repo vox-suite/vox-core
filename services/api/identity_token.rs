@@ -436,7 +436,11 @@ pub(crate) async fn google_jwk(kid: &str) -> Result<GoogleKey, StatusCode> {
     })
 }
 
-pub(crate) fn rsa_sha256_valid(key: &GoogleKey, message: &str, signature: &str) -> Result<bool, StatusCode> {
+pub(crate) fn rsa_sha256_valid(
+    key: &GoogleKey,
+    message: &str,
+    signature: &str,
+) -> Result<bool, StatusCode> {
     use rsa::pkcs1v15::{Signature, VerifyingKey};
     use rsa::signature::Verifier;
     use rsa::{BigUint, RsaPublicKey};

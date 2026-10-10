@@ -42,7 +42,9 @@ impl PulseService {
             repo,
             suggester: None,
             locks: Arc::default(),
-            gate: GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2))).clone(),
+            gate: GATE
+                .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
+                .clone(),
         }
     }
     pub fn with_suggester(mut self, suggester: Arc<dyn SuggestingCharts>) -> Self {
@@ -121,7 +123,10 @@ impl PulseService {
             return serde_json::from_value(value.clone())
                 .map_err(|_| PulseError::Invalid("Invalid cached result".into()));
         }
-        let _permit = tokio::time::timeout(std::time::Duration::from_secs(3),self.gate.acquire()).await.map_err(|_|PulseError::Busy)?.map_err(|_| PulseError::Busy)?;
+        let _permit = tokio::time::timeout(std::time::Duration::from_secs(3), self.gate.acquire())
+            .await
+            .map_err(|_| PulseError::Busy)?
+            .map_err(|_| PulseError::Busy)?;
         let results = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             execution::execute_cached(
@@ -200,8 +205,11 @@ impl PulseService {
         if !catalog.is_empty()
             && let Some(suggester) = &self.suggester
             && let Ok(_permit) = {
-                static SUGGESTIONS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
-                SUGGESTIONS.get_or_init(||tokio::sync::Semaphore::new(2)).try_acquire()
+                static SUGGESTIONS: std::sync::OnceLock<tokio::sync::Semaphore> =
+                    std::sync::OnceLock::new();
+                SUGGESTIONS
+                    .get_or_init(|| tokio::sync::Semaphore::new(2))
+                    .try_acquire()
             }
         {
             let ranked = tokio::time::timeout(

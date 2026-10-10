@@ -15,9 +15,7 @@ use uuid::Uuid;
 #[allow(unused_imports)]
 pub use vox_core::gmail_sync::reconcile_all_gmail_connections;
 use vox_core::{
-    domain::identity::Actor,
-    gmail_sync::process_gmail_delta,
-    storage::object_storage::store_object,
+    domain::identity::Actor, gmail_sync::process_gmail_delta, storage::object_storage::store_object,
 };
 
 #[derive(Deserialize)]
@@ -61,7 +59,10 @@ struct GoogleOidcClaims {
     email_verified: Option<bool>,
 }
 
-async fn verify_pubsub_auth(headers: &HeaderMap, query_token: Option<&str>) -> Result<(), StatusCode> {
+async fn verify_pubsub_auth(
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<(), StatusCode> {
     let auth_header = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
@@ -72,7 +73,9 @@ async fn verify_pubsub_auth(headers: &HeaderMap, query_token: Option<&str>) -> R
         .or_else(|| auth_header.strip_prefix("bearer "))
         .map(str::trim);
 
-    let expected_secret = std::env::var("GMAIL_PUBSUB_SECRET").ok().filter(|s| !s.trim().is_empty());
+    let expected_secret = std::env::var("GMAIL_PUBSUB_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
     let expected_service_account = std::env::var("GMAIL_PUBSUB_SERVICE_ACCOUNT")
         .or_else(|_| std::env::var("GOOGLE_PUBSUB_SERVICE_ACCOUNT"))
         .ok()
@@ -83,8 +86,12 @@ async fn verify_pubsub_auth(headers: &HeaderMap, query_token: Option<&str>) -> R
         .ok()
         .filter(|s| !s.trim().is_empty());
 
-    let is_dev = std::env::var("VOX_DEV_STORAGE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
-        || std::env::var("VOX_ENV").map(|v| v.eq_ignore_ascii_case("development") || v.eq_ignore_ascii_case("test")).unwrap_or(false);
+    let is_dev = std::env::var("VOX_DEV_STORAGE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || std::env::var("VOX_ENV")
+            .map(|v| v.eq_ignore_ascii_case("development") || v.eq_ignore_ascii_case("test"))
+            .unwrap_or(false);
 
     if let Some(token) = bearer_token {
         if is_dev {
@@ -96,22 +103,29 @@ async fn verify_pubsub_auth(headers: &HeaderMap, query_token: Option<&str>) -> R
         }
 
         if let Ok((header, payload, signature)) = crate::identity_token::split_jwt(token) {
-            let header_json: Value = serde_json::from_slice(&crate::identity_token::decode_part(header)?)
-                .map_err(|_| StatusCode::UNAUTHORIZED)?;
-            if header_json.get("alg").and_then(Value::as_str) != Some("RS256") { return Err(StatusCode::UNAUTHORIZED); }
+            let header_json: Value =
+                serde_json::from_slice(&crate::identity_token::decode_part(header)?)
+                    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            if header_json.get("alg").and_then(Value::as_str) != Some("RS256") {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
             let kid = header_json
                 .get("kid")
                 .and_then(|v| v.as_str())
                 .ok_or(StatusCode::UNAUTHORIZED)?;
 
             let jwk = crate::identity_token::google_jwk(kid).await?;
-            if !crate::identity_token::rsa_sha256_valid(&jwk, &format!("{header}.{payload}"), signature)? {
+            if !crate::identity_token::rsa_sha256_valid(
+                &jwk,
+                &format!("{header}.{payload}"),
+                signature,
+            )? {
                 return Err(StatusCode::UNAUTHORIZED);
             }
 
             let claims_bytes = crate::identity_token::decode_part(payload)?;
-            let claims: GoogleOidcClaims = serde_json::from_slice(&claims_bytes)
-                .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            let claims: GoogleOidcClaims =
+                serde_json::from_slice(&claims_bytes).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
             if claims.iss != "https://accounts.google.com" && claims.iss != "accounts.google.com" {
                 return Err(StatusCode::UNAUTHORIZED);
@@ -165,8 +179,8 @@ pub async fn pubsub_webhook(
         .decode(payload.message.data.as_bytes())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let notification: GmailNotificationData = serde_json::from_slice(&raw_data)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let notification: GmailNotificationData =
+        serde_json::from_slice(&raw_data).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let incoming_history_id = match notification.history_id {
         Value::Number(n) => n.as_u64().unwrap_or(0),
@@ -203,17 +217,27 @@ pub async fn pubsub_webhook(
         return Ok(StatusCode::OK);
     }
 
-    if incoming_history_id == 0 { return Err(StatusCode::BAD_REQUEST); }
-    if !process_gmail_delta(&pool, user_id, connection_id, &notification.email_address, last_history_id, incoming_history_id, last_synced_at).await {
+    if incoming_history_id == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if !process_gmail_delta(
+        &pool,
+        user_id,
+        connection_id,
+        &notification.email_address,
+        last_history_id,
+        incoming_history_id,
+        last_synced_at,
+    )
+    .await
+    {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     Ok(StatusCode::OK)
 }
 
-
-
-# [derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct DeviceHistoricalImportRequest {
     pub messages: Vec<DeviceHistoricalImportItem>,
 }
@@ -271,15 +295,27 @@ pub async fn device_historical_import(
         return Err(StatusCode::BAD_REQUEST);
     }
     for item in &payload.messages {
-        if item.uncertainty || !item.user_reviewed || item.message_id.is_empty() || item.message_id.len() > 256
-            || item.body_text.as_ref().is_some_and(|body| body.len() > 256 * 1024)
-            || (item.proposed_event.is_none() && item.attachments.as_ref().is_none_or(Vec::is_empty)) {
+        if item.uncertainty
+            || !item.user_reviewed
+            || item.message_id.is_empty()
+            || item.message_id.len() > 256
+            || item
+                .body_text
+                .as_ref()
+                .is_some_and(|body| body.len() > 256 * 1024)
+            || (item.proposed_event.is_none()
+                && item.attachments.as_ref().is_none_or(Vec::is_empty))
+        {
             return Err(StatusCode::BAD_REQUEST);
         }
         if let Some(attachments) = &item.attachments {
-            if attachments.len() > 10 { return Err(StatusCode::BAD_REQUEST); }
+            if attachments.len() > 10 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
             for attachment in attachments {
-                if attachment.mime_type != "application/pdf" || attachment.content_base64.len() > 35 * 1024 * 1024 {
+                if attachment.mime_type != "application/pdf"
+                    || attachment.content_base64.len() > 35 * 1024 * 1024
+                {
                     return Err(StatusCode::BAD_REQUEST);
                 }
             }
@@ -347,11 +383,14 @@ pub async fn device_historical_import(
             }
         }
     }
-    Ok((StatusCode::OK,Json(outcome?)))
+    Ok((StatusCode::OK, Json(outcome?)))
 }
 
-#[derive(Serialize,utoipa::ToSchema)]
-pub struct DeviceAccessResponse { pub access_token:String,pub expires_in:i64 }
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct DeviceAccessResponse {
+    pub access_token: String,
+    pub expires_in: i64,
+}
 
 #[utoipa::path(post,path="/v1/connectors/gmail/device-access",responses((status=200,body=DeviceAccessResponse),(status=409,description="Gmail connection required")))]
 pub async fn device_access(
@@ -361,11 +400,30 @@ pub async fn device_access(
     let connection_id: Uuid = sqlx::query_scalar("SELECT id FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized'")
         .bind(actor.user_id).fetch_optional(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::CONFLICT)?;
     let key = std::env::var("VOX_CREDENTIAL_KEY").ok();
-    let service = vox_connections::accounts::FreshConnectionsService::new(pool,key.as_deref(),std::sync::Arc::new(vox_core::gmail_sync::DummyIngestor),
-        std::env::var("GOOGLE_CLIENT_ID").ok(),std::env::var("GOOGLE_CLIENT_SECRET").ok(),std::env::var("VOX_CORE_API_URL").ok())
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let tokens = service.get_gmail_tokens(actor.user_id,connection_id).await.map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if tokens.expires_in < 30 { return Err(StatusCode::UNAUTHORIZED); }
-    Ok(([ (axum::http::header::CACHE_CONTROL,"no-store"), (axum::http::header::PRAGMA,"no-cache") ],
-        Json(DeviceAccessResponse {access_token:tokens.access_token,expires_in:tokens.expires_in})))
+    let service = vox_connections::accounts::FreshConnectionsService::new(
+        pool,
+        key.as_deref(),
+        std::sync::Arc::new(vox_core::gmail_sync::DummyIngestor),
+        std::env::var("GOOGLE_CLIENT_ID").ok(),
+        std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+        std::env::var("VOX_CORE_API_URL").ok(),
+    )
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let tokens = service
+        .get_gmail_tokens(actor.user_id, connection_id)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    if tokens.expires_in < 30 {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok((
+        [
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+            (axum::http::header::PRAGMA, "no-cache"),
+        ],
+        Json(DeviceAccessResponse {
+            access_token: tokens.access_token,
+            expires_in: tokens.expires_in,
+        }),
+    ))
 }
