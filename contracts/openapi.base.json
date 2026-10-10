@@ -759,139 +759,6 @@
           }
         }
       },
-      "DeviceHistoricalAttachmentItem": {
-        "type": "object",
-        "required": [
-          "filename",
-          "mime_type",
-          "content_base64"
-        ],
-        "properties": {
-          "filename": {
-            "type": "string"
-          },
-          "mime_type": {
-            "type": "string"
-          },
-          "content_base64": {
-            "type": "string"
-          }
-        }
-      },
-      "ProposedEventItem": {
-        "type": "object",
-        "required": [
-          "event_type_value",
-          "group_value",
-          "title",
-          "occurred_at",
-          "content"
-        ],
-        "properties": {
-          "event_type_value": {
-            "type": "string"
-          },
-          "group_value": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "occurred_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "content": {
-            "type": "object"
-          }
-        }
-      },
-      "DeviceHistoricalImportItem": {
-        "type": "object",
-        "required": [
-          "message_id",
-          "user_reviewed",
-          "uncertainty"
-        ],
-        "properties": {
-          "message_id": {
-            "type": "string"
-          },
-          "internal_date": {
-            "type": "integer"
-          },
-          "from": {
-            "type": "string"
-          },
-          "subject": {
-            "type": "string"
-          },
-          "date": {
-            "type": "string"
-          },
-          "snippet": {
-            "type": "string"
-          },
-          "body_text": {
-            "type": "string"
-          },
-          "user_reviewed": {
-            "type": "boolean"
-          },
-          "uncertainty": {
-            "type": "boolean"
-          },
-          "proposed_event": {
-            "$ref": "#/components/schemas/ProposedEventItem"
-          },
-          "attachments": {
-            "items": {
-              "$ref": "#/components/schemas/DeviceHistoricalAttachmentItem"
-            },
-            "type": "array"
-          }
-        }
-      },
-      "DeviceHistoricalImportRequest": {
-        "type": "object",
-        "required": [
-          "messages"
-        ],
-        "properties": {
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/DeviceHistoricalImportItem"
-            },
-            "type": "array"
-          }
-        }
-      },
-      "DeviceHistoricalImportResponse": {
-        "type": "object",
-        "required": [
-          "imported_records",
-          "events_created",
-          "attachments_queued",
-          "uncertain_count"
-        ],
-        "properties": {
-          "imported_records": {
-            "type": "integer"
-          },
-          "events_created": {
-            "type": "integer"
-          },
-          "attachments_queued": {
-            "type": "integer"
-          },
-          "uncertain_count": {
-            "type": "integer"
-          }
-        }
-      },
       "TakeoutUploadResponse": {
         "type": "object",
         "required": [
@@ -910,6 +777,165 @@
             "type": "integer"
           }
         }
+      },
+      "HistoricalCandidate": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractedEvent"
+            },
+            "type": "array"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uncertainty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message_id",
+          "reason",
+          "uncertainty",
+          "events"
+        ],
+        "type": "object"
+      },
+      "HistoricalPageRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "end_date": {
+            "type": "string"
+          },
+          "page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date"
+        ],
+        "type": "object"
+      },
+      "HistoricalPageResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/HistoricalCandidate"
+            },
+            "type": "array"
+          },
+          "excluded": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "candidates",
+          "excluded"
+        ],
+        "type": "object"
+      },
+      "HistoricalImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "message_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "message_ids"
+        ],
+        "type": "object"
+      },
+      "HistoricalImportResponse": {
+        "properties": {
+          "imported_records": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "imported_records"
+        ],
+        "type": "object"
+      },
+      "ExtractedEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {},
+          "event_type_value": {
+            "type": "string"
+          },
+          "evidence_text": {
+            "type": "string"
+          },
+          "group_value": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "source_date": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_type_value",
+          "group_value",
+          "title",
+          "occurred_at",
+          "content",
+          "evidence_text",
+          "source_date"
+        ],
+        "type": "object"
       }
     }
   },
@@ -2035,42 +2061,6 @@
         ]
       }
     },
-    "/v1/connectors/gmail/device-historical-import": {
-      "post": {
-        "operationId": "gmail_device_historical_import",
-        "summary": "Import client-reviewed historical Gmail messages",
-        "security": [
-          {
-            "SessionAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeviceHistoricalImportRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Historical messages imported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeviceHistoricalImportResponse"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "connectors"
-        ]
-      }
-    },
     "/v1/connectors/google/takeout/upload": {
       "post": {
         "operationId": "upload_takeout",
@@ -2105,6 +2095,84 @@
         },
         "tags": [
           "connectors"
+        ]
+      }
+    },
+    "/v1/connectors/gmail/history/import": {
+      "post": {
+        "operationId": "historical_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoricalImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalImportResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid message IDs"
+          },
+          "409": {
+            "description": "Enable Gmail timeline sync"
+          },
+          "503": {
+            "description": "Import failed; safe to retry"
+          }
+        },
+        "tags": [
+          "crate::routes::gmail"
+        ]
+      }
+    },
+    "/v1/connectors/gmail/history/page": {
+      "post": {
+        "operationId": "historical_page",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoricalPageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalPageResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid date range"
+          },
+          "409": {
+            "description": "Enable Gmail timeline sync"
+          },
+          "503": {
+            "description": "Server extraction unavailable"
+          }
+        },
+        "tags": [
+          "crate::routes::gmail"
         ]
       }
     }

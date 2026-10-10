@@ -82,6 +82,13 @@ impl ToolExport {
             service: Some(self.connections.clone()),
             user_id: user_id.0,
         });
+        set.add_tool(super::desktop::ControlDesktopApp {
+            db: db.clone(),
+            hub: Some(self.device_hub.clone()),
+            user_id: user_id.0,
+            session: None,
+            turn: None,
+        });
         set.add_tool(wiz::ControlWizLights {
             db: db.clone(),
             hub: Some(self.device_hub.clone()),

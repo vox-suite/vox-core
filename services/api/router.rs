@@ -382,13 +382,12 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let connector_ingest_routes = Router::new()
         .route(
-            "/v1/connectors/gmail/device-access",
-            post(crate::routes::gmail::device_access),
+            "/v1/connectors/gmail/history/page",
+            post(crate::routes::gmail::historical_page),
         )
         .route(
-            "/v1/connectors/gmail/device-historical-import",
-            post(crate::routes::gmail::device_historical_import)
-                .layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
+            "/v1/connectors/gmail/history/import",
+            post(crate::routes::gmail::historical_import),
         )
         .route(
             "/v1/connectors/google/takeout/upload",
@@ -405,7 +404,32 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(state.pool.clone());
 
+    let desktop_voice_public = Router::new()
+        .route(
+            "/v1/me/desktop-actions",
+            post(crate::routes::desktop_actions::execute),
+        )
+        .route(
+            "/v1/me/desktop-voice/sessions",
+            post(crate::routes::desktop_voice::bootstrap),
+        )
+        .with_state(state.clone());
+    let desktop_voice_internal = Router::new()
+        .route(
+            "/internal/v1/desktop-voice/redeem",
+            post(crate::routes::desktop_voice::redeem),
+        )
+        .route(
+            "/internal/v1/desktop-voice/{id}/stream",
+            post(crate::routes::desktop_voice::respond_stream),
+        )
+        .route(
+            "/internal/v1/desktop-voice/{id}/complete",
+            post(crate::routes::desktop_voice::complete),
+        )
+        .with_state(state.clone());
     let protected_routes = span_routes
+        .merge(desktop_voice_public)
         .merge(integration_authorize)
         .merge(collection_routes)
         .merge(schema_routes)
@@ -439,6 +463,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(auth_routes)
         .merge(integration_public)
         .merge(internal_routes)
+        .merge(desktop_voice_internal)
         .merge(google_callback_route)
         .merge(gmail_pubsub_route)
         .merge(protected_routes)

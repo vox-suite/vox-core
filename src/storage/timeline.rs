@@ -269,6 +269,9 @@ impl TimelineRepository {
                AND ($7::timestamptz IS NULL OR e.occurred_at < $7) \
                AND ($8::text IS NULL OR e.record_state = $8) \
                AND ($9::timestamptz IS NULL OR (e.occurred_at, e.id) < ($9, $10)) \
+               AND (NOT coalesce($12::boolean,false) OR (et.value='transaction' AND e.content->>'is_spending'='true' AND lower(coalesce(e.content->>'status','')) NOT IN ('pending','failed','declined','authorization','authorized','attempted'))) \
+               AND ($13::text IS NULL OR strpos(lower(coalesce(e.content->>'merchant','')),lower($13))>0) \
+               AND ($14::text IS NULL OR lower(coalesce(e.content->>'category',''))=lower($14)) \
              ORDER BY e.occurred_at DESC, e.id DESC \
              LIMIT $11",
         )
@@ -283,6 +286,9 @@ impl TimelineRepository {
         .bind(cursor_time)
         .bind(cursor_id)
         .bind(fetch_limit + 1)
+        .bind(query.spending_only)
+        .bind(query.merchant.as_deref())
+        .bind(query.category.as_deref())
         .fetch_all(&self.pool)
         .await?;
 

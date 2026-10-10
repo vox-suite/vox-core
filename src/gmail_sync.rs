@@ -85,6 +85,11 @@ pub async fn process_gmail_delta(
     if !matches!(locked, Ok(true)) {
         return false;
     }
+    let enabled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vox_connections WHERE id=$1 AND user_id=$2 AND authorization_state='authorized' AND sync_timeline=true)")
+        .bind(connection_id).bind(user_id).fetch_one(pool).await.unwrap_or(false);
+    if !enabled {
+        return true;
+    }
     let sync_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO connector_sync_runs (user_id, connector_id, connection_id, run_type, status, cursor_state, started_at) \
          VALUES ($1, 'gmail', $2, 'live', 'running', $3, now()) RETURNING id",
@@ -202,6 +207,7 @@ pub async fn process_gmail_delta(
             user_id,
             email_address,
             msg_id,
+            false,
         )
         .await
         {
@@ -251,7 +257,7 @@ pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
     let rows = sqlx::query(
         "SELECT c.id, c.user_id, c.metadata, c.account_id, c.account_display_id, c.last_synced_at \
          FROM vox_connections c \
-         WHERE c.connector_id = 'gmail' AND c.authorization_state = 'authorized'",
+         WHERE c.connector_id = 'gmail' AND c.authorization_state = 'authorized' AND c.sync_timeline = true",
     )
     .fetch_all(pool)
     .await
@@ -314,35 +320,56 @@ pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
     }
 }
 
-async fn ingest_message(
+pub async fn ingest_message(
     pool: &PgPool,
     gmail: &vox_connections::providers::gmail::GmailClient,
     token: &str,
     user_id: Uuid,
     email: &str,
     message_id: &str,
+    historical: bool,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM source_records WHERE user_id=$1 AND connector_id='gmail' AND source_record_id=$2)")
+        .bind(user_id).bind(message_id).fetch_one(pool).await?;
+    if exists {
+        return Ok(false);
+    }
+    let generation: Option<(Uuid,Uuid)> = sqlx::query_as("SELECT credential_generation,generation FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true AND (account_id=$2 OR account_display_id=$2)")
+        .bind(user_id).bind(email).fetch_optional(pool).await?;
+    let generation = generation
+        .ok_or_else(|| std::io::Error::other("Gmail timeline sync is paused or disconnected"))?;
+    let msg = gmail.get_message(token, message_id).await?;
+    let extraction = crate::document_extraction::extract(&extraction_source(&msg)).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind(format!("gmail:{user_id}:{message_id}"))
         .execute(&mut *tx)
         .await?;
+    let current: Option<(Uuid,Uuid)> = sqlx::query_as("SELECT credential_generation,generation FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true AND (account_id=$2 OR account_display_id=$2) FOR SHARE")
+        .bind(user_id).bind(email).fetch_optional(&mut *tx).await?;
+    if current != Some(generation) {
+        return Err(std::io::Error::other("Gmail authorization changed during extraction").into());
+    }
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM source_records WHERE user_id=$1 AND connector_id='gmail' AND source_record_id=$2)")
         .bind(user_id).bind(message_id).fetch_one(&mut *tx).await?;
     if exists {
         return Ok(false);
     }
-    let msg = gmail.get_message(token, message_id).await?;
     let safe_subject = msg.subject.as_deref().map(redact_email_codes);
     let safe_snippet = msg.snippet.as_deref().map(redact_email_codes);
     let metadata = json!({"from":msg.from,"to":msg.to,"subject":safe_subject,"date":msg.date,
-        "snippet":safe_snippet,"internal_date":msg.internal_date,"attachment_count":msg.attachments.len()});
+        "snippet":safe_snippet,"internal_date":msg.internal_date,"attachment_count":msg.attachments.len(),"historical_import":historical});
+    let metadata = if extraction.useful || extraction.uncertainty {
+        metadata
+    } else {
+        json!({"excluded":true})
+    };
     let hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&metadata)?));
     let record_id: Uuid = sqlx::query_scalar("INSERT INTO source_records(user_id,connector_id,source_account_id,source_record_id,record_hash,disposition,metadata) VALUES($1,'gmail',$2,$3,$4,'retained',$5) RETURNING id")
         .bind(user_id).bind(email).bind(message_id).bind(hash).bind(&metadata).fetch_one(&mut *tx).await?;
     let mut stored_objects = Vec::new();
     let outcome: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
-        for attachment in &msg.attachments {
+        for attachment in msg.attachments.iter().filter(|_| extraction.useful) {
             if attachment.mime_type != "application/pdf" && !attachment.filename.to_ascii_lowercase().ends_with(".pdf") { continue; }
             if attachment.size_bytes > 25 * 1024 * 1024 { return Err(std::io::Error::other("attachment exceeds 25 MiB limit").into()); }
             let bytes = gmail.get_attachment(token, message_id, &attachment.attachment_id).await?;
@@ -354,20 +381,22 @@ async fn ingest_message(
             sqlx::query("INSERT INTO jobs(user_id,kind,payload_reference_id,state,max_attempts) VALUES($1,'process_attachment',$2,'pending',5)")
                 .bind(user_id).bind(id).execute(&mut *tx).await?;
         }
-        let facts = msg.body_text.as_deref().and_then(|body| crate::attachments::pdf::extract_document_facts(body, None).ok());
-        if let Some(doc) = facts {
+        for (index, event) in extraction.events.iter().enumerate() {
             let result = crate::storage::timeline::TimelineRepository::new(pool.clone()).ingest_event_in_transaction(&mut tx,user_id,
-                crate::domain::timeline::IngestTimelineEventInput {event_type_id:None,event_type_value:Some(doc.kind),group_id:None,group_value:Some("finance".into()),
-                    title:doc.title,summary:Some(doc.summary),occurred_at:doc.occurred_at,ended_at:None,time_precision:"day".into(),source_timezone:None,
-                    content:doc.facts.clone(),confidence:0.8,dedupe_key:Some(format!("gmail:{message_id}")),
+                crate::domain::timeline::IngestTimelineEventInput {event_type_id:None,event_type_value:Some(event.event_type_value.clone()),group_id:None,group_value:Some(event.group_value.clone()),
+                    title:event.title.clone(),summary:event.summary.clone(),occurred_at:event.occurred_at,ended_at:None,time_precision:"day".into(),source_timezone:None,
+                    content:event.content.clone(),confidence:0.8,dedupe_key:Some(format!("gmail:{message_id}:{index}")),
                     evidence:vec![crate::domain::timeline::NewEvidenceItem {source_record_id:Some(record_id),source_attachment_id:None,
                         source_type:"gmail".into(),source_id:Some(message_id.into()),raw_reference:None,observation_metadata:metadata.clone()}],
                 }).await?;
-            crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&doc.facts).await?;
-        } else {
+            if event.group_value == "finance" {
+                crate::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&event.content).await?;
+            }
+        }
+        if extraction.uncertainty || (extraction.useful && extraction.events.is_empty() && msg.attachments.is_empty()) {
             sqlx::query("INSERT INTO updates(user_id,kind,content_version,category,title,summary,content,priority,status,dedupe_key) VALUES($1,'email_notice',1,'email',$2,$3,$4,'low','active',$5)")
-                .bind(user_id).bind(safe_subject.as_deref().unwrap_or("Email notification"))
-                .bind(&safe_snippet).bind(&metadata).bind(format!("email_notice:{message_id}")).execute(&mut *tx).await?;
+                .bind(user_id).bind(safe_subject.as_deref().unwrap_or("Email needs review"))
+                .bind(&extraction.reason).bind(&metadata).bind(format!("email_notice:{message_id}")).execute(&mut *tx).await?;
         }
         Ok(())
     }.await;
@@ -393,4 +422,69 @@ pub fn redact_email_codes(text: &str) -> String {
     reverse
         .replace_all(&redacted, "[redacted]${2}")
         .into_owned()
+}
+
+pub fn extraction_source(message: &vox_connections::providers::gmail::GmailMessageItem) -> String {
+    format!(
+        "Sender: {}\nSubject: {}\nAttachments: {}\nBody:\n{}",
+        message.from.as_deref().unwrap_or(""),
+        message
+            .subject
+            .as_deref()
+            .map(redact_email_codes)
+            .unwrap_or_default(),
+        serde_json::to_string(&message.attachments).unwrap_or_default(),
+        message
+            .body_text
+            .as_deref()
+            .map(redact_email_codes)
+            .unwrap_or_default()
+    )
+}
+
+pub async fn process_pending_gmail(pool: &PgPool) {
+    let rows = sqlx::query("SELECT id,user_id,account_id,account_display_id,metadata,last_synced_at FROM vox_connections WHERE connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true AND COALESCE((metadata->>'pending_history_id')::numeric,0)>COALESCE((metadata->>'last_history_id')::numeric,0) AND (metadata->>'gmail_retry_after' IS NULL OR (metadata->>'gmail_retry_after')::timestamptz<=now()) LIMIT 20")
+        .fetch_all(pool).await;
+    let Ok(rows) = rows else {
+        tracing::warn!("Cannot read pending Gmail work");
+        return;
+    };
+    for row in rows {
+        let metadata: Value = row.get("metadata");
+        let cursor = |key: &str| {
+            metadata[key]
+                .as_u64()
+                .or_else(|| metadata[key].as_str().and_then(|value| value.parse().ok()))
+                .unwrap_or(0)
+        };
+        let email: Option<String> = row
+            .get::<Option<String>, _>("account_id")
+            .or_else(|| row.get("account_display_id"));
+        if let Some(email) = email {
+            let completed = process_gmail_delta(
+                pool,
+                row.get("user_id"),
+                row.get("id"),
+                &email,
+                cursor("last_history_id"),
+                cursor("pending_history_id"),
+                row.get("last_synced_at"),
+            )
+            .await;
+            let retry_after = if completed {
+                Utc::now()
+            } else {
+                Utc::now() + chrono::Duration::minutes(5)
+            };
+            if sqlx::query("UPDATE vox_connections SET metadata=metadata || $2 WHERE id=$1")
+                .bind(row.get::<Uuid, _>("id"))
+                .bind(json!({"gmail_retry_after":retry_after}))
+                .execute(pool)
+                .await
+                .is_err()
+            {
+                tracing::warn!("Cannot update Gmail retry backoff");
+            }
+        }
+    }
 }

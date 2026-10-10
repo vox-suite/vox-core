@@ -61,6 +61,11 @@ pub mod user_notifications;
 pub mod workers;
 
 pub mod attachments;
+pub mod document_extraction;
 pub mod finance_normalization;
 pub mod gmail_sync;
 pub mod integrations;
+
+pub mod desktop_voice;
+
+pub mod desktop;

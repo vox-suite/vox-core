@@ -4,6 +4,8 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(paths(
+    crate::routes::desktop_voice::bootstrap,
+    crate::routes::desktop_actions::execute,
     crate::routes::connections::list_connectors,
     crate::routes::connections::read_personal,
     crate::routes::connections::import_youtube_history,
@@ -68,8 +70,8 @@ use utoipa::OpenApi;
     crate::routes::updates::resolve_update,
     crate::routes::updates::retry_job,
     crate::routes::updates::provide_job_input,
-    crate::routes::gmail::device_historical_import,
-    crate::routes::gmail::device_access,
+    crate::routes::gmail::historical_import,
+    crate::routes::gmail::historical_page,
     crate::routes::takeout::upload_takeout
 ))]
 struct ApiDoc;

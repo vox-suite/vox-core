@@ -26,3 +26,6 @@ pub mod pulse;
 pub mod takeout;
 pub mod timeline;
 pub mod updates;
+
+pub mod desktop_actions;
+pub mod desktop_voice;

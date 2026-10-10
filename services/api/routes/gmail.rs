@@ -5,18 +5,17 @@ use axum::{
     response::IntoResponse,
 };
 use base64::Engine as _;
-use chrono::{DateTime, Utc};
+
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use chrono::Utc;
+use vox_core::domain::identity::Actor;
 #[allow(unused_imports)]
 pub use vox_core::gmail_sync::reconcile_all_gmail_connections;
-use vox_core::{
-    domain::identity::Actor, gmail_sync::process_gmail_delta, storage::object_storage::store_object,
-};
 
 #[derive(Deserialize)]
 pub struct PubSubQuery {
@@ -187,9 +186,9 @@ pub async fn pubsub_webhook(
     };
 
     let conn_row = sqlx::query(
-        "SELECT id, user_id, metadata, access_ciphertext, refresh_ciphertext, access_expires_at, last_synced_at \
+        "SELECT id, metadata \
          FROM vox_connections \
-         WHERE connector_id = 'gmail' AND (account_id = $1 OR account_display_id = $1) AND authorization_state = 'authorized'",
+         WHERE connector_id = 'gmail' AND (account_id = $1 OR account_display_id = $1) AND authorization_state = 'authorized' AND sync_timeline=true",
     )
     .bind(&notification.email_address)
     .fetch_optional(&pool)
@@ -201,9 +200,7 @@ pub async fn pubsub_webhook(
     };
 
     let connection_id: Uuid = conn.get("id");
-    let user_id: Uuid = conn.get("user_id");
     let metadata: Value = conn.get("metadata");
-    let last_synced_at: Option<DateTime<Utc>> = conn.get("last_synced_at");
 
     let last_history_id = match metadata.get("last_history_id") {
         Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
@@ -218,188 +215,51 @@ pub async fn pubsub_webhook(
     if incoming_history_id == 0 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if !process_gmail_delta(
-        &pool,
-        user_id,
-        connection_id,
-        &notification.email_address,
-        last_history_id,
-        incoming_history_id,
-        last_synced_at,
-    )
-    .await
-    {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
+    sqlx::query("UPDATE vox_connections SET metadata=jsonb_set(COALESCE(metadata,'{}'::jsonb),'{pending_history_id}',to_jsonb(GREATEST(COALESCE((metadata->>'pending_history_id')::numeric,0),$2::numeric)::text)),updated_at=now() WHERE id=$1 AND authorization_state='authorized' AND sync_timeline=true")
+        .bind(connection_id).bind(incoming_history_id.to_string()).execute(&pool).await.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     Ok(StatusCode::OK)
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-pub struct DeviceHistoricalImportRequest {
-    pub messages: Vec<DeviceHistoricalImportItem>,
+#[serde(deny_unknown_fields)]
+pub struct HistoricalPageRequest {
+    pub start_date: String,
+    pub end_date: String,
+    pub page_token: Option<String>,
 }
 
-#[derive(Deserialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-pub struct DeviceHistoricalImportItem {
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct HistoricalCandidate {
     pub message_id: String,
-    pub internal_date: Option<i64>,
-    pub from: Option<String>,
     pub subject: Option<String>,
-    pub date: Option<String>,
-    pub snippet: Option<String>,
-    pub body_text: Option<String>,
-    pub user_reviewed: bool,
+    pub from: Option<String>,
+    pub reason: String,
     pub uncertainty: bool,
-    pub proposed_event: Option<ProposedEventItem>,
-    pub attachments: Option<Vec<DeviceHistoricalAttachmentItem>>,
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-pub struct ProposedEventItem {
-    pub event_type_value: String,
-    pub group_value: String,
-    pub title: String,
-    pub summary: Option<String>,
-    pub occurred_at: DateTime<Utc>,
-    pub content: Value,
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-pub struct DeviceHistoricalAttachmentItem {
-    pub filename: String,
-    pub mime_type: String,
-    pub content_base64: String,
+    pub events: Vec<vox_core::document_extraction::ExtractedEvent>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
-pub struct DeviceHistoricalImportResponse {
-    pub imported_records: usize,
-    pub events_created: usize,
-    pub attachments_queued: usize,
-    pub uncertain_count: usize,
+pub struct HistoricalPageResponse {
+    pub candidates: Vec<HistoricalCandidate>,
+    pub excluded: usize,
+    pub next_page_token: Option<String>,
 }
 
-#[utoipa::path(post,path="/v1/connectors/gmail/device-historical-import",operation_id="gmail_device_historical_import",request_body=DeviceHistoricalImportRequest,responses((status=200,body=DeviceHistoricalImportResponse),(status=400,description="Invalid or unreviewed import"),(status=409,description="Gmail connection required"),(status=422,description="Invalid timeline event")))]
-pub async fn device_historical_import(
-    State(pool): State<PgPool>,
-    Extension(actor): Extension<Actor>,
-    Json(payload): Json<DeviceHistoricalImportRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let user_id = actor.user_id;
-    if payload.messages.is_empty() || payload.messages.len() > 25 {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    for item in &payload.messages {
-        if item.uncertainty
-            || !item.user_reviewed
-            || item.message_id.is_empty()
-            || item.message_id.len() > 256
-            || item
-                .body_text
-                .as_ref()
-                .is_some_and(|body| body.len() > 256 * 1024)
-            || (item.proposed_event.is_none()
-                && item.attachments.as_ref().is_none_or(Vec::is_empty))
-        {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        if let Some(attachments) = &item.attachments {
-            if attachments.len() > 10 {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            for attachment in attachments {
-                if attachment.mime_type != "application/pdf"
-                    || attachment.content_base64.len() > 35 * 1024 * 1024
-                {
-                    return Err(StatusCode::BAD_REQUEST);
-                }
-            }
-        }
-    }
-    let connection_id: Uuid = sqlx::query_scalar("SELECT id FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized'")
-        .bind(user_id).fetch_optional(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::CONFLICT)?;
-    let repo = vox_core::storage::timeline::TimelineRepository::new(pool.clone());
-    let mut stored_objects = Vec::new();
-    let outcome: Result<DeviceHistoricalImportResponse, StatusCode> = async {
-        let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let sync_run_id: Uuid = sqlx::query_scalar("INSERT INTO connector_sync_runs(user_id,connector_id,connection_id,run_type,status,started_at) VALUES($1,'gmail',$2,'import','running',now()) RETURNING id")
-            .bind(user_id).bind(connection_id).fetch_one(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let mut imported_records = 0;
-        let mut events_created = 0;
-        let mut attachments_queued = 0;
-        for item in payload.messages {
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-                .bind(format!("gmail:{user_id}:{}",item.message_id)).execute(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let metadata = json!({"from":item.from,"subject":item.subject,"date":item.date,"snippet":item.snippet,"internal_date":item.internal_date,"user_reviewed":true,"historical_import":true});
-            let source_record_id: Option<Uuid> = sqlx::query_scalar("INSERT INTO source_records(user_id,connector_id,source_record_id,record_hash,disposition,metadata) VALUES($1,'gmail',$2,$3,'retained',$4) ON CONFLICT(user_id,connector_id,source_record_id) DO NOTHING RETURNING id")
-                .bind(user_id).bind(&item.message_id).bind(format!("{:x}",Sha256::digest(serde_json::to_vec(&metadata).map_err(|_| StatusCode::BAD_REQUEST)?)))
-                .bind(&metadata).fetch_optional(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let Some(source_record_id) = source_record_id else { continue; };
-            imported_records += 1;
-            for attachment in item.attachments.unwrap_or_default() {
-                let bytes = base64::engine::general_purpose::STANDARD.decode(attachment.content_base64.as_bytes()).map_err(|_| StatusCode::BAD_REQUEST)?;
-                if bytes.len() > 25 * 1024 * 1024 || !bytes.starts_with(b"%PDF-") { return Err(StatusCode::BAD_REQUEST); }
-                let object_ref = store_object(user_id,"attachments",&attachment.filename,&bytes).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                stored_objects.push(object_ref.clone());
-                let attachment_id: Uuid = sqlx::query_scalar("INSERT INTO source_attachments(user_id,source_record_id,object_ref,content_hash,mime_type,size_bytes,parse_state,expires_at) VALUES($1,$2,$3,$4,'application/pdf',$5,'pending',now()+interval '7 days') RETURNING id")
-                    .bind(user_id).bind(source_record_id).bind(object_ref).bind(format!("{:x}",Sha256::digest(&bytes))).bind(bytes.len() as i64)
-                    .fetch_one(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                sqlx::query("INSERT INTO jobs(user_id,kind,payload_reference_id,state,max_attempts) VALUES($1,'process_attachment',$2,'pending',5)")
-                    .bind(user_id).bind(attachment_id).execute(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                attachments_queued += 1;
-            }
-            if let Some(event) = item.proposed_event {
-                let facts=event.content.clone();
-                let financial=event.group_value=="finance";
-                let result=repo.ingest_event_in_transaction(&mut tx,user_id,vox_core::domain::timeline::IngestTimelineEventInput {
-                    event_type_id:None,event_type_value:Some(event.event_type_value),group_id:None,group_value:Some(event.group_value),
-                    title:event.title,summary:event.summary,occurred_at:event.occurred_at,ended_at:None,time_precision:"day".into(),source_timezone:None,
-                    content:event.content,confidence:0.8,dedupe_key:Some(format!("gmail:{}",item.message_id)),
-                    evidence:vec![vox_core::domain::timeline::NewEvidenceItem {source_record_id:Some(source_record_id),source_attachment_id:None,
-                        source_type:"gmail".into(),source_id:Some(item.message_id),raw_reference:None,observation_metadata:metadata}],
-                }).await.map_err(|error| { tracing::warn!(%user_id,%error,"historical email rejected by timeline contract"); StatusCode::UNPROCESSABLE_ENTITY })?;
-                if financial { vox_core::finance_normalization::dedupe_or_settle_in_transaction(&mut tx,user_id,result.event.id,&facts).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?; }
-                events_created += 1;
-            }
-        }
-        sqlx::query("UPDATE connector_sync_runs SET status='completed',records_extracted=$1,records_ingested=$2,completed_at=now() WHERE id=$3")
-            .bind(imported_records as i32).bind(events_created as i32).bind(sync_run_id).execute(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query("UPDATE connector_coverage SET metadata=metadata || $1,updated_at=now() WHERE user_id=$2 AND connector_id='gmail'")
-            .bind(json!({"historical_import":{"records":imported_records,"events":events_created,"coverage":"selected_messages_only","completed_at":Utc::now()}}))
-            .bind(user_id).execute(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(DeviceHistoricalImportResponse {imported_records,events_created,attachments_queued,uncertain_count:0})
-    }.await;
-    if outcome.is_err() {
-        for object in stored_objects {
-            if let Err(error) = vox_core::storage::object_storage::delete_object(&object).await {
-                tracing::error!(%user_id,%error,"historical import rollback object cleanup failed");
-            }
-        }
-    }
-    Ok((StatusCode::OK, Json(outcome?)))
+fn history_permit() -> Result<tokio::sync::SemaphorePermit<'static>, StatusCode> {
+    static CAPACITY: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    CAPACITY
+        .get_or_init(|| tokio::sync::Semaphore::new(2))
+        .try_acquire()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)
 }
 
-#[derive(Serialize, utoipa::ToSchema)]
-pub struct DeviceAccessResponse {
-    pub access_token: String,
-    pub expires_in: i64,
-}
-
-#[utoipa::path(post,path="/v1/connectors/gmail/device-access",responses((status=200,body=DeviceAccessResponse),(status=409,description="Gmail connection required")))]
-pub async fn device_access(
-    State(pool): State<PgPool>,
-    Extension(actor): Extension<Actor>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let connection_id: Uuid = sqlx::query_scalar("SELECT id FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized'")
-        .bind(actor.user_id).fetch_optional(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::CONFLICT)?;
+async fn gmail_access(pool: &PgPool, user_id: Uuid) -> Result<(Uuid, String), StatusCode> {
+    let connection_id: Uuid = sqlx::query_scalar("SELECT id FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true")
+        .bind(user_id).fetch_optional(pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::CONFLICT)?;
     let key = std::env::var("VOX_CREDENTIAL_KEY").ok();
     let service = vox_connections::accounts::FreshConnectionsService::new(
-        pool,
+        pool.clone(),
         key.as_deref(),
         std::sync::Arc::new(vox_core::gmail_sync::DummyIngestor),
         std::env::var("GOOGLE_CLIENT_ID").ok(),
@@ -408,20 +268,184 @@ pub async fn device_access(
     )
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let tokens = service
-        .get_gmail_tokens(actor.user_id, connection_id)
+        .get_gmail_tokens(user_id, connection_id)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if tokens.expires_in < 30 {
-        return Err(StatusCode::UNAUTHORIZED);
+    Ok((connection_id, tokens.access_token))
+}
+
+#[utoipa::path(post,path="/v1/connectors/gmail/history/page",request_body=HistoricalPageRequest,responses((status=200,body=HistoricalPageResponse),(status=400,description="Invalid date range"),(status=409,description="Enable Gmail timeline sync"),(status=503,description="Server extraction unavailable")))]
+pub async fn historical_page(
+    State(pool): State<PgPool>,
+    Extension(actor): Extension<Actor>,
+    Json(payload): Json<HistoricalPageRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let _permit = history_permit()?;
+    let start = chrono::NaiveDate::parse_from_str(&payload.start_date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let end = chrono::NaiveDate::parse_from_str(&payload.end_date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if end <= start
+        || (end - start).num_days() > 366
+        || payload
+            .page_token
+            .as_ref()
+            .is_some_and(|token| token.len() > 2048)
+    {
+        return Err(StatusCode::BAD_REQUEST);
     }
-    Ok((
-        [
-            (axum::http::header::CACHE_CONTROL, "no-store"),
-            (axum::http::header::PRAGMA, "no-cache"),
-        ],
-        Json(DeviceAccessResponse {
-            access_token: tokens.access_token,
-            expires_in: tokens.expires_in,
-        }),
-    ))
+    let (_, token) = gmail_access(&pool, actor.user_id).await?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut query = vec![
+        (
+            "q",
+            format!(
+                "after:{} before:{}",
+                start.format("%Y/%m/%d"),
+                end.format("%Y/%m/%d")
+            ),
+        ),
+        ("maxResults", "3".into()),
+    ];
+    if let Some(page) = payload.page_token {
+        query.push(("pageToken", page));
+    }
+    let page: Value = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
+        .bearer_auth(&token)
+        .query(&query)
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+        .error_for_status()
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+        .json()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let provider = vox_connections::providers::gmail::GmailClient::new();
+    let mut candidates = Vec::new();
+    let mut excluded = 0;
+    let ids: Vec<String> = page["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|message| {
+            message["id"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(StatusCode::BAD_GATEWAY)
+        })
+        .collect::<Result<_, _>>()?;
+    let mut results = stream::iter(ids.into_iter().map(|id| {
+        let provider = provider.clone();
+        let token = token.clone();
+        async move {
+            let mail = provider
+                .get_message(&token, &id)
+                .await
+                .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            let result = vox_core::document_extraction::extract(
+                &vox_core::gmail_sync::extraction_source(&mail),
+            )
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            Ok::<_, StatusCode>((id, mail, result))
+        }
+    }))
+    .buffered(3);
+    while let Some(result) = results.next().await {
+        let (id, mail, result) = result?;
+        if !result.useful && !result.uncertainty {
+            excluded += 1;
+            continue;
+        }
+        candidates.push(HistoricalCandidate {
+            message_id: id,
+            subject: mail.subject,
+            from: mail.from,
+            reason: result.reason,
+            uncertainty: result.uncertainty,
+            events: result.events,
+        });
+    }
+    Ok(Json(HistoricalPageResponse {
+        candidates,
+        excluded,
+        next_page_token: page["nextPageToken"].as_str().map(str::to_owned),
+    }))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalImportRequest {
+    pub message_ids: Vec<String>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct HistoricalImportResponse {
+    pub imported_records: usize,
+}
+
+#[utoipa::path(post,path="/v1/connectors/gmail/history/import",request_body=HistoricalImportRequest,responses((status=200,body=HistoricalImportResponse),(status=400,description="Invalid message IDs"),(status=409,description="Enable Gmail timeline sync"),(status=503,description="Import failed; safe to retry")))]
+pub async fn historical_import(
+    State(pool): State<PgPool>,
+    Extension(actor): Extension<Actor>,
+    Json(payload): Json<HistoricalImportRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let _permit = history_permit()?;
+    if payload.message_ids.is_empty()
+        || payload.message_ids.len() > 5
+        || payload.message_ids.iter().any(|id| {
+            id.is_empty() || id.len() > 256 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (connection_id, token) = gmail_access(&pool, actor.user_id).await?;
+    let provider = vox_connections::providers::gmail::GmailClient::new();
+    let email = provider
+        .get_profile(&token)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+        .email_address;
+    let sync_run: Uuid = sqlx::query_scalar("INSERT INTO connector_sync_runs(user_id,connector_id,connection_id,run_type,status,started_at) VALUES($1,'gmail',$2,'import','running',now()) RETURNING id")
+        .bind(actor.user_id).bind(connection_id).fetch_one(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut imported = 0;
+    for id in payload.message_ids {
+        let current_token = match gmail_access(&pool, actor.user_id).await {
+            Ok((_, token)) => token,
+            Err(status) => {
+                sqlx::query("UPDATE connector_sync_runs SET status='failed',error='connection_unavailable',records_ingested=$2,completed_at=now() WHERE id=$1")
+                    .bind(sync_run).bind(imported as i32).execute(&pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+                return Err(status);
+            }
+        };
+        match vox_core::gmail_sync::ingest_message(
+            &pool,
+            &provider,
+            &current_token,
+            actor.user_id,
+            &email,
+            &id,
+            true,
+        )
+        .await
+        {
+            Ok(true) => imported += 1,
+            Ok(false) => {}
+            Err(_) => {
+                sqlx::query("UPDATE connector_sync_runs SET status='failed',error='server_import_failed',records_ingested=$2,completed_at=now() WHERE id=$1")
+                    .bind(sync_run).bind(imported as i32).execute(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+    }
+    sqlx::query("UPDATE connector_sync_runs SET status='completed',records_ingested=$2,completed_at=now() WHERE id=$1")
+        .bind(sync_run).bind(imported as i32).execute(&pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(HistoricalImportResponse {
+        imported_records: imported,
+    }))
 }

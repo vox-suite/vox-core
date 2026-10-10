@@ -69,6 +69,14 @@ impl TimelineService {
         actor: &Actor,
         query: TimelineQuery,
     ) -> Result<TimelinePage, TimelineServiceError> {
+        if query.merchant.as_ref().is_some_and(|s| s.len() > 500)
+            || query.category.as_ref().is_some_and(|s| s.len() > 100)
+            || matches!((query.start_at,query.end_at),(Some(a),Some(b)) if a>=b)
+        {
+            return Err(TimelineServiceError::Invalid(
+                "Invalid timeline filter".into(),
+            ));
+        }
         self.repo
             .query_events(actor.user_id, query)
             .await

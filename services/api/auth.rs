@@ -17,7 +17,7 @@ use vox_core::domain::identity::Actor;
 
 const LIVE_SOCKET_PATH: &str = "/v1/me/events/socket";
 const SUBPROTOCOL_TOKEN_PREFIX: &str = "bearer.";
-const WEB_SCOPE_PREFIXES: [&str; 9] = [
+const WEB_SCOPE_PREFIXES: [&str; 10] = [
     "/v1/spans",
     "/v1/integrations/authorize",
     "/v1/collections",
@@ -26,6 +26,7 @@ const WEB_SCOPE_PREFIXES: [&str; 9] = [
     "/v1/me/spaces",
     "/v1/me/connectors",
     "/v1/me/connections",
+    "/v1/connectors/gmail/history",
     LIVE_SOCKET_PATH,
 ];
 

@@ -21,3 +21,5 @@ pub mod wiz;
 pub mod timing;
 
 pub mod timeline;
+
+pub mod desktop;

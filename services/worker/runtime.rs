@@ -61,11 +61,18 @@ pub async fn run_worker(
     let gmail_pool = db.pool().clone();
     let gmail_cancel = cancellation.clone();
     let gmail_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut reconcile = tokio::time::interval(std::time::Duration::from_secs(900));
         loop {
             tokio::select! {
                 _ = gmail_cancel.cancelled() => break,
                 _ = interval.tick() => {
+                    tokio::select! {
+                        _ = gmail_cancel.cancelled() => break,
+                        _ = vox_core::gmail_sync::process_pending_gmail(&gmail_pool) => {}
+                    }
+                }
+                _ = reconcile.tick() => {
                     tokio::select! {
                         _ = gmail_cancel.cancelled() => break,
                         _ = vox_core::gmail_sync::reconcile_all_gmail_connections(&gmail_pool) => {}

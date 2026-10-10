@@ -40,7 +40,7 @@ pub async fn process_attachment(
 
     let row = sqlx::query(
         "SELECT a.id, a.user_id, a.storage_owner_id, a.source_record_id, a.object_ref, a.encryption_metadata, \
-                a.parse_state, j.attempt_count, j.max_attempts \
+                a.parse_state, j.attempt_count, j.max_attempts, j.lease_owner, j.lease_generation \
          FROM source_attachments a \
          JOIN jobs j ON j.id = $3 AND j.user_id = a.user_id \
          WHERE a.id = $1 AND a.user_id = $2 AND j.payload_reference_id=a.id AND j.kind='process_attachment' AND j.state='running' FOR UPDATE OF a, j",
@@ -59,6 +59,10 @@ pub async fn process_attachment(
     let attempt_count: i32 = row.get("attempt_count");
     let max_attempts: i32 = row.get("max_attempts");
 
+    let lease_owner: String = row.get("lease_owner");
+    let lease_generation: i64 = row.get("lease_generation");
+    tx.commit().await?;
+
     let read_result = if object_ref.starts_with(&format!("vox-obj://{storage_owner_id}/")) {
         crate::storage::object_storage::read_object(&object_ref)
             .await
@@ -70,6 +74,15 @@ pub async fn process_attachment(
     let bytes = match read_result {
         Ok(data) => data,
         Err(err) => {
+            let mut tx = attachment_transaction(
+                pool,
+                user_id,
+                attachment_id,
+                job_id,
+                &lease_owner,
+                lease_generation,
+            )
+            .await?;
             let error_msg = format!("Attachment file unreadable at {}: {}", object_ref, err);
             let next_attempts = attempt_count + 1;
             let will_retry = next_attempts < max_attempts;
@@ -161,7 +174,7 @@ pub async fn process_attachment(
             let user_facts: serde_json::Value =
                 sqlx::query_scalar("SELECT profile_facts FROM users WHERE id = $1")
                     .bind(user_id)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(pool)
                     .await?
                     .unwrap_or_else(|| serde_json::json!({}));
 
@@ -170,7 +183,7 @@ pub async fn process_attachment(
             )
             .bind(source_record_id)
             .bind(user_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(pool)
             .await?
             .unwrap_or_else(|| serde_json::json!({}));
 
@@ -195,6 +208,15 @@ pub async fn process_attachment(
                     }
                 }
                 PasswordDerivationOutcome::MissingFact(fact) => {
+                    let mut tx = attachment_transaction(
+                        pool,
+                        user_id,
+                        attachment_id,
+                        job_id,
+                        &lease_owner,
+                        lease_generation,
+                    )
+                    .await?;
                     let wait_msg = format!(
                         "Missing profile fact '{}' required for provider password derivation",
                         fact
@@ -245,6 +267,25 @@ pub async fn process_attachment(
         }
     };
 
+    let parse_result = match parse_result {
+        Ok(text) => match crate::document_extraction::extract(&text).await {
+            Ok(extracted) if !extracted.uncertainty && !extracted.events.is_empty() => {
+                Ok(extracted.events)
+            }
+            Ok(_) => Err(PdfError::NoFactsFound),
+            Err(error) => Err(PdfError::ExtractionFailed(error.to_string())),
+        },
+        Err(error) => Err(error),
+    };
+    let mut tx = attachment_transaction(
+        pool,
+        user_id,
+        attachment_id,
+        job_id,
+        &lease_owner,
+        lease_generation,
+    )
+    .await?;
     match parse_result {
         Err(PdfError::WrongPassword) => {
             let next_attempts = attempt_count + 1;
@@ -413,45 +454,48 @@ pub async fn process_attachment(
             tx.commit().await?;
             Ok(AttachmentOutcome::Failed(err.to_string()))
         }
-        Ok(doc) => {
-            let result = crate::storage::timeline::TimelineRepository::new(pool.clone())
-                .ingest_event_in_transaction(
-                    &mut tx,
-                    user_id,
-                    crate::domain::timeline::IngestTimelineEventInput {
-                        event_type_id: None,
-                        event_type_value: Some(doc.kind.clone()),
-                        group_id: None,
-                        group_value: Some("finance".into()),
-                        title: doc.title.clone(),
-                        summary: Some(doc.summary.clone()),
-                        occurred_at: doc.occurred_at,
-                        ended_at: doc.ended_at,
-                        time_precision: "day".into(),
-                        source_timezone: None,
-                        content: doc.facts.clone(),
-                        confidence: 0.8,
-                        dedupe_key: Some(format!("attachment:{attachment_id}")),
-                        evidence: vec![crate::domain::timeline::NewEvidenceItem {
-                            source_record_id: Some(source_record_id),
-                            source_attachment_id: Some(attachment_id),
-                            source_type: "source_attachment".into(),
-                            source_id: Some(attachment_id.to_string()),
-                            raw_reference: None,
-                            observation_metadata: doc.facts.clone(),
-                        }],
-                    },
-                )
-                .await
-                .map_err(|error| AttachmentError::Failed(error.to_string()))?;
-            crate::finance_normalization::dedupe_or_settle_in_transaction(
-                &mut tx,
-                user_id,
-                result.event.id,
-                &doc.facts,
-            )
-            .await?;
-
+        Ok(docs) => {
+            for (index, doc) in docs.into_iter().enumerate() {
+                let result = crate::storage::timeline::TimelineRepository::new(pool.clone())
+                    .ingest_event_in_transaction(
+                        &mut tx,
+                        user_id,
+                        crate::domain::timeline::IngestTimelineEventInput {
+                            event_type_id: None,
+                            event_type_value: Some(doc.event_type_value.clone()),
+                            group_id: None,
+                            group_value: Some(doc.group_value.clone()),
+                            title: doc.title.clone(),
+                            summary: doc.summary.clone(),
+                            occurred_at: doc.occurred_at,
+                            ended_at: None,
+                            time_precision: "day".into(),
+                            source_timezone: None,
+                            content: doc.content.clone(),
+                            confidence: 0.8,
+                            dedupe_key: Some(format!("attachment:{attachment_id}:{index}")),
+                            evidence: vec![crate::domain::timeline::NewEvidenceItem {
+                                source_record_id: Some(source_record_id),
+                                source_attachment_id: Some(attachment_id),
+                                source_type: "source_attachment".into(),
+                                source_id: Some(attachment_id.to_string()),
+                                raw_reference: None,
+                                observation_metadata: doc.content.clone(),
+                            }],
+                        },
+                    )
+                    .await
+                    .map_err(|error| AttachmentError::Failed(error.to_string()))?;
+                if doc.group_value == "finance" {
+                    crate::finance_normalization::dedupe_or_settle_in_transaction(
+                        &mut tx,
+                        user_id,
+                        result.event.id,
+                        &doc.content,
+                    )
+                    .await?;
+                }
+            }
             sqlx::query(
                 "UPDATE source_records SET temporary_content_ref = NULL \
                  WHERE id = $1 AND user_id = $2",
@@ -502,6 +546,23 @@ pub async fn process_attachment(
     }
 }
 
+async fn attachment_transaction<'a>(
+    pool: &'a PgPool,
+    user_id: Uuid,
+    attachment_id: Uuid,
+    job_id: Uuid,
+    owner: &str,
+    generation: i64,
+) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, AttachmentError> {
+    let mut tx = pool.begin().await?;
+    let current: Option<Uuid> = sqlx::query_scalar("SELECT a.id FROM source_attachments a JOIN jobs j ON j.payload_reference_id=a.id AND j.user_id=a.user_id WHERE a.id=$1 AND a.user_id=$2 AND j.id=$3 AND j.state='running' AND j.lease_owner=$4 AND j.lease_generation=$5 AND j.lease_expires_at>now() FOR UPDATE OF a,j")
+        .bind(attachment_id).bind(user_id).bind(job_id).bind(owner).bind(generation).fetch_optional(&mut *tx).await?;
+    if current.is_none() {
+        return Err(AttachmentError::Failed("attachment job lease lost".into()));
+    }
+    Ok(tx)
+}
+
 async fn record_issue(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -517,10 +578,7 @@ async fn record_issue(
     Ok(())
 }
 
-async fn parse_pdf_off_runtime(
-    bytes: &[u8],
-    password: Option<&str>,
-) -> Result<crate::attachments::pdf::ExtractedFinancialDocument, PdfError> {
+async fn parse_pdf_off_runtime(bytes: &[u8], password: Option<&str>) -> Result<String, PdfError> {
     static PARSERS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
         std::sync::OnceLock::new();
     let permit = tokio::time::timeout(
@@ -541,8 +599,9 @@ async fn parse_pdf_off_runtime(
         let _permit = permit;
         parse_pdf(&bytes, password.as_deref())
     });
-    tokio::time::timeout(std::time::Duration::from_secs(45), task)
+    let text = tokio::time::timeout(std::time::Duration::from_secs(45), task)
         .await
         .map_err(|_| PdfError::ExtractionFailed("PDF extraction exceeded its time limit".into()))?
-        .map_err(|_| PdfError::ExtractionFailed("PDF parser stopped unexpectedly".into()))?
+        .map_err(|_| PdfError::ExtractionFailed("PDF parser stopped unexpectedly".into()))??;
+    Ok(text)
 }

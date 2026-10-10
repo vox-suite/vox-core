@@ -86,6 +86,9 @@ pub struct TimelineEventWithEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineQuery {
+    pub spending_only: Option<bool>,
+    pub merchant: Option<String>,
+    pub category: Option<String>,
     pub group_id: Option<Uuid>,
     pub group_value: Option<String>,
     pub event_type_id: Option<Uuid>,

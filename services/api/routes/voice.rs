@@ -71,14 +71,21 @@ pub struct VoiceSocketParams {
     /// streams text only.
     #[serde(default)]
     pub audio: Option<String>,
+    #[serde(default)]
+    pub input: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceServerMessage<'a> {
     Connected {
+        session_id: &'a str,
         format: &'a str,
         sample_rate: u32,
+        input_mode: &'a str,
+    },
+    AudioTurnSubmitted {
+        audio_ms: u64,
     },
     /// The server's transcription of the audio for this turn.
     UserTranscript {
@@ -86,6 +93,7 @@ pub enum VoiceServerMessage<'a> {
         text: &'a str,
     },
     Thinking {
+        kind: &'a str,
         turn_id: &'a str,
     },
     TextDelta {
@@ -113,7 +121,8 @@ pub async fn voice_socket(
     if local_audio {
         state.tts = None;
     }
-    ws.on_upgrade(move |socket| handle_voice_socket(socket, state, actor, local_audio))
+    let continuous = params.input.as_deref() == Some("stream");
+    ws.on_upgrade(move |socket| handle_voice_socket(socket, state, actor, local_audio, continuous))
 }
 
 enum OutboundFrame {
@@ -121,6 +130,7 @@ enum OutboundFrame {
     Binary {
         bytes: Bytes,
         queued_at: Instant,
+        cancel_token: CancellationToken,
         stats: Arc<SpeakStats>,
     },
     Pong(Bytes),
@@ -213,6 +223,7 @@ impl Drop for SpeakStats {
             1 => "completed",
             2 => "failed",
             3 => "empty_transcript",
+            4 => "text_only_completed",
             _ => "cancelled",
         };
         tracing::info!(conversation_id = %self.conversation_id, kind = self.kind, session_id = %self.session_id, turn_id = %self.turn_id, outcome,
@@ -275,6 +286,7 @@ async fn speak_sentence(
                     .send(OutboundFrame::Binary {
                         bytes,
                         queued_at: Instant::now(),
+                        cancel_token: cancel_token.clone(),
                         stats: Arc::clone(stats),
                     })
                     .await
@@ -359,6 +371,7 @@ where
     } = reply;
     let mut chunker = SentenceChunker::new();
     let (sentence_tx, sentence_rx) = mpsc::unbounded_channel::<String>();
+    let text_only = tts.is_none();
     let speaker_task = tokio::spawn(
         run_speaker(
             sentence_rx,
@@ -426,6 +439,8 @@ where
             0
         } else if failed {
             2
+        } else if text_only {
+            4
         } else {
             1
         },
@@ -460,6 +475,7 @@ async fn handle_voice_socket(
     state: VoiceSocketState,
     actor: Actor,
     local_audio: bool,
+    continuous: bool,
 ) {
     let tts_provider = if local_audio { "local" } else { "elevenlabs" };
     let session_id = Uuid::new_v4().to_string();
@@ -479,8 +495,13 @@ async fn handle_voice_socket(
                 OutboundFrame::Binary {
                     bytes,
                     queued_at,
+                    cancel_token,
                     stats,
                 } => {
+                    if cancel_token.is_cancelled() {
+                        tracing::debug!(session_id = %stats.session_id, turn_id = %stats.turn_id, bytes = bytes.len(), "VOICE_CANCELLED_AUDIO_DROPPED");
+                        continue;
+                    }
                     let write_started = Instant::now();
                     let queue_ms = queued_at.elapsed().as_millis() as u64;
                     if ws_sender.send(Message::Binary(bytes)).await.is_err() {
@@ -510,8 +531,10 @@ async fn handle_voice_socket(
     });
 
     let connected_msg = serde_json::to_string(&VoiceServerMessage::Connected {
+        session_id: &session_id,
         format: "mp3",
         sample_rate: 44100,
+        input_mode: if continuous { "stream" } else { "turn" },
     })
     .unwrap_or_default();
     let _ = out_tx.send(OutboundFrame::Text(connected_msg)).await;
@@ -561,6 +584,8 @@ async fn handle_voice_socket(
     let mut current_turn_cancel: Option<CancellationToken> = None;
     let mut last_turn: Option<tokio::task::JoinHandle<()>> = None;
     let mut pending_audio: Vec<u8> = Vec::new();
+    let mut last_voice_arrival: Option<Instant> = None;
+    let mut activity = vox_core::stt::voice_activity::VoiceActivity::default();
     let mut bytes_in = 0u64;
 
     if let Some(conversations) = state.conversations.clone() {
@@ -607,7 +632,7 @@ async fn handle_voice_socket(
                 "VOICE_GREETING_START"
             );
             let thinking =
-                serde_json::to_string(&VoiceServerMessage::Thinking { turn_id: &turn_id })
+                serde_json::to_string(&VoiceServerMessage::Thinking { kind: "greeting", turn_id: &turn_id })
                     .unwrap_or_default();
             let _ = out_tx_clone.send(OutboundFrame::Text(thinking)).await;
             let reply = Reply {
@@ -634,6 +659,61 @@ async fn handle_voice_socket(
             }
         };
 
+        let msg = if let Message::Binary(bytes) = &msg {
+            if (continuous && bytes.len() > 3200) || !bytes.len().is_multiple_of(2) {
+                let error = serde_json::to_string(&VoiceServerMessage::Error {
+                    message: "Audio frames must contain at most 100ms of aligned PCM16",
+                })
+                .unwrap_or_default();
+                let _ = out_tx.send(OutboundFrame::Text(error)).await;
+                break;
+            }
+            if continuous {
+                bytes_in += bytes.len() as u64;
+                let samples: Vec<i16> = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                let mut segment = None;
+                for event in activity.push(&samples) {
+                    if event.voiced {
+                        last_voice_arrival = Some(Instant::now());
+                    }
+                    if event.started {
+                        tracing::info!(session_id = %session_id, detector = "earshot", "VOICE_SPEECH_STARTED");
+                        if let Some(cancel) = current_turn_cancel.take() {
+                            cancel.cancel();
+                        }
+                        let interrupted = serde_json::to_string(&VoiceServerMessage::Interrupted)
+                            .unwrap_or_default();
+                        let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
+                    }
+                    if event.segment.is_some() {
+                        segment = event.segment;
+                    }
+                }
+                let Some(segment) = segment else {
+                    continue;
+                };
+                let audio_ms = segment.len() as u64 * 1000 / 16000;
+                tracing::info!(session_id = %session_id, detector = "earshot", audio_ms, speech_end_source = "earshot_audio_arrival", speech_to_endpoint_ms = last_voice_arrival.map(|at| at.elapsed().as_millis() as u64), endpoint_silence_ms = 640, "VOICE_AUDIO_ENDPOINT");
+                pending_audio = segment.into_iter().flat_map(i16::to_le_bytes).collect();
+                let submitted =
+                    serde_json::to_string(&VoiceServerMessage::AudioTurnSubmitted { audio_ms })
+                        .unwrap_or_default();
+                let _ = out_tx.send(OutboundFrame::Text(submitted)).await;
+                Message::Text(r#"{"type":"turn"}"#.into())
+            } else {
+                if pending_audio.len() + bytes.len() > 960000 {
+                    break;
+                }
+                msg
+            }
+        } else {
+            msg
+        };
         match msg {
             Message::Text(raw) => {
                 let parsed: Result<VoiceClientMessage, _> = serde_json::from_str(&raw);
@@ -649,6 +729,8 @@ async fn handle_voice_socket(
                             cancel.cancel();
                         }
                         pending_audio.clear();
+                        activity = vox_core::stt::voice_activity::VoiceActivity::default();
+                        last_voice_arrival = None;
                         let interrupted = serde_json::to_string(&VoiceServerMessage::Interrupted)
                             .unwrap_or_default();
                         let _ = out_tx.send(OutboundFrame::Text(interrupted)).await;
@@ -729,7 +811,10 @@ async fn handle_voice_socket(
                                 .sqrt();
                             let stt_started = Instant::now();
                             let text =
-                                match stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE).await {
+                                match tokio::select! {
+                                    _ = cancel_token.cancelled() => { return; }
+                                    result = stt.transcribe_pcm16(&pcm, VOICE_INPUT_SAMPLE_RATE) => result
+                                } {
                                     Ok(text) => text,
                                     Err(e) => {
                                         stats.outcome.store(2, Ordering::Relaxed);
@@ -760,6 +845,7 @@ async fn handle_voice_socket(
                             );
                                 text
                             };
+                            if cancel_token.is_cancelled() { return; }
                             if text.is_empty() {
                                 stats.outcome.store(3, Ordering::Relaxed);
                                 return;
@@ -774,6 +860,7 @@ async fn handle_voice_socket(
                             let _ = out_tx_clone.send(OutboundFrame::Text(transcript_msg)).await;
 
                             let thinking = serde_json::to_string(&VoiceServerMessage::Thinking {
+                                kind: "turn",
                                 turn_id: &turn_id,
                             })
                             .unwrap_or_default();

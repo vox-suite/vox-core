@@ -68,6 +68,9 @@ impl AssemblyAiClient {
             .await
             .map_err(|e| format!("AssemblyAI upload response invalid: {e}"))?;
 
+        let upload_ms = started.elapsed().as_millis() as u64;
+        tracing::info!(upload_ms, sample_count = pcm.len(), "VOICE_STT_UPLOAD");
+        let create_started = std::time::Instant::now();
         let body = serde_json::json!({ "audio_url": upload.upload_url });
         let response = self
             .http
@@ -93,6 +96,9 @@ impl AssemblyAiClient {
             .await
             .map_err(|e| format!("AssemblyAI transcript response invalid: {e}"))?;
 
+        let create_ms = create_started.elapsed().as_millis() as u64;
+        tracing::info!(create_ms, "VOICE_STT_JOB_CREATED");
+        let polling_started = std::time::Instant::now();
         let poll_url = format!(
             "{}/v2/transcript/{}",
             self.endpoint.trim_end_matches('/'),
@@ -101,7 +107,7 @@ impl AssemblyAiClient {
 
         // Utterances here are a few seconds at most; 30 polls at 500ms
         // covers well past any realistic completion time before giving up.
-        for _ in 0..30 {
+        for poll_index in 0..30 {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             let poll: TranscriptResponse = self
@@ -119,10 +125,15 @@ impl AssemblyAiClient {
 
             match poll.status.as_str() {
                 "completed" => {
-                    tracing::debug!(
+                    tracing::info!(
                         sample_count = pcm.len(),
-                        latency_ms = started.elapsed().as_millis(),
-                        "AssemblyAI transcription completed"
+                        upload_ms,
+                        create_ms,
+                        polls = poll_index + 1,
+                        scheduled_poll_wait_ms = (poll_index + 1) * 500,
+                        polling_ms = polling_started.elapsed().as_millis() as u64,
+                        total_ms = started.elapsed().as_millis() as u64,
+                        "VOICE_STT_COMPLETED"
                     );
                     return Ok(poll.text.unwrap_or_default());
                 }

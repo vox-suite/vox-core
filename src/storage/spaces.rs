@@ -55,6 +55,17 @@ impl SpaceRepository {
         intent: &str,
     ) -> Result<Space, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
+        let space = Self::create_workflow_space_in(&mut tx, user_id, title, intent).await?;
+        tx.commit().await?;
+        Ok(space)
+    }
+
+    pub async fn create_workflow_space_in(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user_id: Uuid,
+        title: &str,
+        intent: &str,
+    ) -> Result<Space, sqlx::Error> {
         let query = format!(
             "INSERT INTO spaces(user_id,title,intent,state,agent_spec) VALUES($1,$2,$3,'ideating',$4) RETURNING {SPACE_COLUMNS}"
         );
@@ -63,15 +74,14 @@ impl SpaceRepository {
             .bind(title)
             .bind(intent)
             .bind(serde_json::json!({"workflow_version":2}))
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
         let space = map_space_row(row);
-        sqlx::query("INSERT INTO space_nodes(space_id,kind,title,body,state) VALUES($1,'goal','Your vision',$2,'done')").bind(space.id).bind(intent).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO space_nodes(space_id,kind,title,body,state) VALUES($1,'goal','Your vision',$2,'done')").bind(space.id).bind(intent).execute(&mut **tx).await?;
         sqlx::query("INSERT INTO jobs(kind,payload_reference_id) VALUES('run_space',$1)")
             .bind(space.id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        tx.commit().await?;
         Ok(space)
     }
 

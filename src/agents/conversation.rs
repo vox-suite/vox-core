@@ -239,6 +239,16 @@ impl ConversationAgent {
                 prompt.correlation.clone(),
             ))
             .tool(tools::timing::TimedTool::new(
+                tools::desktop::ControlDesktopApp {
+                    db: self.db.clone(),
+                    hub: self.device_hub.clone(),
+                    user_id: prompt.user_id.0,
+                    session: prompt.correlation.conversation_id.clone(),
+                    turn: prompt.correlation.turn_id.clone(),
+                },
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
                 tools::wiz::ControlWizLights {
                     db: self.db.clone(),
                     hub: self.device_hub.clone(),
@@ -762,6 +772,7 @@ mod governed_tool_surface_tests {
                 names,
                 [
                     "clear_map",
+                    "control_desktop_app",
                     "control_wiz_lights",
                     "create_timeline_event_type",
                     "find_schemas",

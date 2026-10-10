@@ -90,7 +90,7 @@ async fn handle_socket(
                 let Some(Ok(message)) = message else { break };
                 let Message::Text(text) = message else { continue };
                 if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
-                    state.hub.resolve_incoming(device_id, &frame);
+                    state.hub.resolve_from_generation(device_id, generation, &frame);
                 }
             }
             _ = &mut forward_task => break,

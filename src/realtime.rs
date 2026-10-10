@@ -200,6 +200,34 @@ impl DeviceHub {
             .cloned()
     }
 
+    pub fn resolve_from_generation(&self, device_id: Uuid, generation: u64, frame: &Value) {
+        let link = self
+            .conns
+            .lock()
+            .expect("device hub lock poisoned")
+            .get(&device_id)
+            .cloned();
+        if let Some(link) = link
+            && link.generation == generation
+        {
+            let Some(id) = frame
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|s| Uuid::parse_str(s).ok())
+            else {
+                return;
+            };
+            if let Some(tx) = link
+                .pending
+                .lock()
+                .expect("device pending lock poisoned")
+                .remove(&id)
+            {
+                let _ = tx.send(frame.clone());
+            }
+        }
+    }
+
     /// Delivers an incoming frame from a device to whichever pending request
     /// it correlates with, identified by the frame's `id` field.
     pub fn resolve_incoming(&self, device_id: Uuid, frame: &Value) {

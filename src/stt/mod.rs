@@ -4,3 +4,5 @@
 pub mod assemblyai;
 
 pub use assemblyai::AssemblyAiClient;
+
+pub mod voice_activity;
