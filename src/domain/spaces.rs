@@ -133,6 +133,8 @@ pub struct SpaceMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Space {
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
     pub id: Uuid,
     pub user_id: Uuid,
     pub title: String,
@@ -161,6 +163,9 @@ pub struct SpaceNode {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub replaces: Option<Uuid>,
+    pub is_current: bool,
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

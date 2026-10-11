@@ -1,6 +1,19 @@
 {
   "components": {
     "schemas": {
+      "BootstrapInput": {
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Bucket": {
         "enum": [
           "day",
@@ -231,6 +244,83 @@
         ],
         "type": "object"
       },
+      "ContextNode": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectCitation"
+            },
+            "type": "array"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ContextVersion"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "origin",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ContextVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectCitation"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "citations",
+          "updated_at",
+          "origin"
+        ],
+        "type": "object"
+      },
       "CreateCollectionInput": {
         "properties": {
           "description": {
@@ -273,6 +363,21 @@
         ],
         "type": "object"
       },
+      "CreateProjectInput": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ProjectData"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "data"
+        ],
+        "type": "object"
+      },
       "CreateSchemaVersionInput": {
         "properties": {
           "description": {
@@ -305,6 +410,13 @@
         "properties": {
           "intent": {
             "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "title": {
             "type": [
@@ -725,6 +837,27 @@
         ],
         "type": "object"
       },
+      "IssuedSession": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "session_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ticket": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "ticket",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "JobActionResponse": {
         "properties": {
           "job_id": {
@@ -1061,6 +1194,270 @@
         },
         "type": "object"
       },
+      "Project": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ProjectData"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "data",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ProjectActivity": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ProjectChatInput": {
+        "properties": {
+          "excerpts": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectExcerpt"
+            },
+            "type": "array"
+          },
+          "message": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ProjectCitation": {
+        "properties": {
+          "end_line": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "start_line": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "hash"
+        ],
+        "type": "object"
+      },
+      "ProjectCount": {
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "ProjectData": {
+        "properties": {
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectActivity"
+            },
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectMessage"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/ContextNode"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectSource"
+            },
+            "type": "array"
+          },
+          "template": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProjectExcerpt": {
+        "properties": {
+          "citation": {
+            "$ref": "#/components/schemas/ProjectCitation"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "citation",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ProjectList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ProjectMessage": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/ContextNode"
+            },
+            "type": "array"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "body",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ProjectSource": {
+        "properties": {
+          "files": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "indexed_at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "symbols": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "files",
+          "symbols",
+          "fingerprint",
+          "indexed_at"
+        ],
+        "type": "object"
+      },
       "PubSubPushMessage": {
         "properties": {
           "message": {
@@ -1120,6 +1517,22 @@
         ],
         "type": "object"
       },
+      "PulseCount": {
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "revision"
+        ],
+        "type": "object"
+      },
       "PulseDefinition": {
         "additionalProperties": false,
         "properties": {
@@ -1135,6 +1548,12 @@
           },
           "chart_type": {
             "$ref": "#/components/schemas/ChartType"
+          },
+          "compare_with": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "dimension": {
             "type": [
@@ -1235,6 +1654,12 @@
             "format": "int64",
             "type": "integer"
           },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/PulseSeriesResult"
+            },
+            "type": "array"
+          },
           "source": {
             "type": "string"
           },
@@ -1262,6 +1687,52 @@
           "record_count",
           "undated_count",
           "computed_at"
+        ],
+        "type": "object"
+      },
+      "PulseSeriesResult": {
+        "properties": {
+          "measurement_id": {
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PulsePoint"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "record_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "total": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "measurement_id",
+          "title",
+          "source",
+          "unit",
+          "quality",
+          "record_count",
+          "points"
         ],
         "type": "object"
       },
@@ -1342,6 +1813,32 @@
         "required": [
           "refreshed",
           "spans_created"
+        ],
+        "type": "object"
+      },
+      "ResourceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "arguments": {},
+          "command_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "space_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "command_id",
+          "action",
+          "arguments"
         ],
         "type": "object"
       },
@@ -1568,6 +2065,13 @@
           "intent": {
             "type": "string"
           },
+          "project_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "run_error": {
             "type": [
               "string",
@@ -1602,6 +2106,22 @@
           "run_state",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "SpaceCount": {
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "rev"
         ],
         "type": "object"
       },
@@ -1713,11 +2233,24 @@
             "format": "uuid",
             "type": "string"
           },
+          "is_current": {
+            "type": "boolean"
+          },
+          "is_final": {
+            "type": "boolean"
+          },
           "kind": {
             "type": "string"
           },
           "position": {},
           "provenance": {},
+          "replaces": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "space_id": {
             "format": "uuid",
             "type": "string"
@@ -1750,7 +2283,9 @@
           "provenance",
           "version",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "is_current",
+          "is_final"
         ],
         "type": "object"
       },
@@ -2290,6 +2825,22 @@
         ],
         "type": "object"
       },
+      "TimelineCategoryCount": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "count"
+        ],
+        "type": "object"
+      },
       "TimelineCountsQuery": {
         "additionalProperties": false,
         "properties": {
@@ -2335,6 +2886,52 @@
           "day",
           "category",
           "count"
+        ],
+        "type": "object"
+      },
+      "TimelineDaySummary": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineCategoryCount"
+            },
+            "type": "array"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "day": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day",
+          "count",
+          "rev",
+          "categories"
+        ],
+        "type": "object"
+      },
+      "TimelineDaysResponse": {
+        "properties": {
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineDaySummary"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "days"
         ],
         "type": "object"
       },
@@ -2612,6 +3209,12 @@
       "TimelineQuery": {
         "additionalProperties": false,
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cursor": {
             "type": [
               "string",
@@ -2658,9 +3261,21 @@
               "null"
             ]
           },
+          "merchant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "record_state": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "spending_only": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -2820,6 +3435,26 @@
           "created_at",
           "updated_at",
           "available_actions"
+        ],
+        "type": "object"
+      },
+      "UpdateProjectInput": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ProjectData"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "data",
+          "revision"
         ],
         "type": "object"
       },
@@ -4316,6 +4951,312 @@
         ]
       }
     },
+    "/v1/me/desktop-actions": {
+      "post": {
+        "operationId": "execute",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "desktop"
+        ]
+      }
+    },
+    "/v1/me/desktop-voice/sessions": {
+      "post": {
+        "operationId": "bootstrap",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootstrapInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSession"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "desktop"
+        ]
+      }
+    },
+    "/v1/me/projects": {
+      "get": {
+        "operationId": "list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectList"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/me/projects/count": {
+      "get": {
+        "operationId": "count",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectCount"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/me/projects/{id}": {
+      "delete": {
+        "operationId": "archive",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      },
+      "get": {
+        "operationId": "get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      },
+      "put": {
+        "operationId": "update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/me/projects/{id}/chat": {
+      "post": {
+        "operationId": "chat",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/me/projects/{id}/plans/{plan}/attach": {
+      "post": {
+        "operationId": "attach",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "plan",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "projects"
+        ]
+      }
+    },
     "/v1/me/pulse/canvas": {
       "get": {
         "operationId": "get_canvas",
@@ -4434,6 +5375,26 @@
         ]
       }
     },
+    "/v1/me/pulse/charts/count": {
+      "get": {
+        "operationId": "count_charts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PulseCount"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
     "/v1/me/pulse/charts/{id}": {
       "delete": {
         "operationId": "delete_chart",
@@ -4521,6 +5482,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SavedPulseChart"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "pulse"
+        ]
+      }
+    },
+    "/v1/me/pulse/charts/{id}/result": {
+      "get": {
+        "operationId": "chart_result",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PulseResult"
                 }
               }
             },
@@ -4724,6 +5735,17 @@
     "/v1/me/spaces": {
       "get": {
         "operationId": "list_spaces",
+        "parameters": [
+          {
+            "description": "Omit agent_spec payloads",
+            "in": "query",
+            "name": "summary",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -4761,6 +5783,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Space"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "spaces"
+        ]
+      }
+    },
+    "/v1/me/spaces/count": {
+      "get": {
+        "operationId": "count_spaces",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceCount"
                 }
               }
             },
@@ -5465,6 +6507,36 @@
                     "$ref": "#/components/schemas/TimelineDayCount"
                   },
                   "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "timeline"
+        ]
+      }
+    },
+    "/v1/timeline/events/days": {
+      "post": {
+        "operationId": "day_summaries",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimelineCountsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineDaysResponse"
                 }
               }
             },

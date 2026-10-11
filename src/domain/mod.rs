@@ -34,3 +34,5 @@ pub mod updates;
 
 pub use timeline::*;
 pub use updates::*;
+
+pub mod projects;

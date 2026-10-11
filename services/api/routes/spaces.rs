@@ -33,6 +33,8 @@ pub struct SpaceApiState {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSpaceInput {
     #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
     pub title: Option<String>,
     pub intent: String,
 }
@@ -81,11 +83,32 @@ pub async fn create_space(
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .unwrap_or("New space");
-    let space = state
-        .spaces
-        .create_workflow_space(actor.user_id, title, intent)
+    if let Some(id) = input.project_id {
+        let _project = vox_core::storage::projects::ProjectRepository(state.pool.clone())
+            .get(actor.user_id, id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+    }
+    let mut tx = state
+        .pool
+        .begin()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut space =
+        SpaceRepository::create_workflow_space_in(&mut tx, actor.user_id, title, intent)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query("UPDATE spaces SET project_id=$2 WHERE id=$1")
+        .bind(space.id)
+        .bind(input.project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    space.project_id = input.project_id;
 
     let runtime = state.runtime.clone();
     let space_id = space.id;
@@ -408,7 +431,7 @@ pub async fn commit_space(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let node_rows = sqlx::query(
-        "SELECT id, kind, title, body, data FROM space_nodes WHERE space_id = $1 AND state = 'done' ORDER BY created_at ASC",
+        "SELECT id, kind, title, body, data FROM space_nodes n WHERE space_id = $1 AND state = 'done' AND is_current AND (kind <> 'plan' OR is_final OR NOT EXISTS(SELECT 1 FROM space_nodes f WHERE f.space_id = n.space_id AND f.is_final AND f.is_current)) ORDER BY created_at ASC",
     )
     .bind(id)
     .fetch_all(&mut *tx)
@@ -570,7 +593,31 @@ pub async fn update_space_node(
         if matches!(current.as_str(), "committed" | "dropped") {
             return Err(StatusCode::CONFLICT);
         }
-        sqlx::query("UPDATE space_nodes SET title=coalesce($3,title),body=coalesce($4,body),position=coalesce($5,position),state=coalesce($6,state),version=version+1,updated_at=now() WHERE space_id=$1 AND id=$2").bind(id).bind(node_id).bind(&input.title).bind(&input.body).bind(&input.position).bind(parsed_state.map(NodeState::as_str)).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut node_id = node_id;
+        if input.title.is_some() || input.body.is_some() {
+            let new_id = Uuid::new_v4();
+            for sql in [
+                "INSERT INTO space_nodes(id,space_id,kind,title,body,data,state,position,derived_from,provenance,version,replaces,is_final) SELECT $3,space_id,kind,coalesce($4,title),coalesce($5,body),data,coalesce($6,state),position,derived_from,provenance,version+1,id,is_final FROM space_nodes WHERE space_id=$1 AND id=$2",
+                "UPDATE space_nodes SET is_current=false,is_final=false WHERE space_id=$1 AND id=$2",
+                "INSERT INTO space_edges(space_id,from_node,to_node) SELECT space_id,from_node,$3 FROM space_edges WHERE space_id=$1 AND to_node=$2",
+                "UPDATE space_edges SET from_node=$3 WHERE space_id=$1 AND from_node=$2",
+                "UPDATE space_nodes SET derived_from=array_replace(derived_from,$2,$3) WHERE space_id=$1 AND $2=ANY(derived_from)",
+                "UPDATE space_tasks SET node_id=$3,input_versions=(input_versions-($2::text))||jsonb_build_object($3::text,coalesce((input_versions->>($2::text))::int,0)+1) WHERE space_id=$1 AND node_id=$2",
+            ] {
+                let mut q = sqlx::query(sql).bind(id).bind(node_id).bind(new_id);
+                if sql.starts_with("INSERT INTO space_nodes") {
+                    q = q
+                        .bind(&input.title)
+                        .bind(&input.body)
+                        .bind(parsed_state.map(NodeState::as_str));
+                }
+                q.execute(&mut *tx)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            }
+            node_id = new_id;
+        }
+        sqlx::query("UPDATE space_nodes SET position=coalesce($3,position),state=coalesce($4,state),version=version+1,updated_at=now() WHERE space_id=$1 AND id=$2").bind(id).bind(node_id).bind(&input.position).bind(parsed_state.map(NodeState::as_str)).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
         if input.title.is_some()
             || input.body.is_some()
             || parsed_state == Some(NodeState::Rejected)

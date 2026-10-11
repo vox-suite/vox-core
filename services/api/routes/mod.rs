@@ -29,3 +29,5 @@ pub mod updates;
 
 pub mod desktop_actions;
 pub mod desktop_voice;
+
+pub mod projects;

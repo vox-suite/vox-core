@@ -24,6 +24,8 @@ use vox_core::{
 pub struct ApiState {
     pub legacy: AppState,
     pub pool: PgPool,
+    pub project_ai_key: String,
+    pub project_ai_model: String,
     pub spans: SpanService,
     pub collections: CollectionService,
     pub schemas: SchemaService,
@@ -98,6 +100,8 @@ impl ApiState {
 
         Self {
             legacy,
+            project_ai_key: config.gemini_api_key.clone(),
+            project_ai_model: config.gemini_model.clone(),
             pool,
             spans,
             collections,

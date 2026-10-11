@@ -264,6 +264,28 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .with_state(space_api_state);
 
+    let project_routes = Router::new()
+        .route(
+            "/v1/me/projects",
+            get(crate::routes::projects::list).post(crate::routes::projects::create),
+        )
+        .route("/v1/me/projects/count", get(crate::routes::projects::count))
+        .route(
+            "/v1/me/projects/{id}",
+            get(crate::routes::projects::get)
+                .put(crate::routes::projects::update)
+                .delete(crate::routes::projects::archive),
+        )
+        .route(
+            "/v1/me/projects/{id}/chat",
+            post(crate::routes::projects::chat),
+        )
+        .route(
+            "/v1/me/projects/{id}/plans/{plan}/attach",
+            post(crate::routes::projects::attach),
+        )
+        .with_state(state.clone());
+
     let web_token_routes = Router::new()
         .route(
             "/v1/auth/web-token",
@@ -462,6 +484,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(tool_routes)
         .merge(pulse_routes)
         .merge(space_routes)
+        .merge(project_routes)
         .merge(web_token_routes)
         .merge(connection_routes)
         .merge(timeline_routes)

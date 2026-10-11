@@ -26,3 +26,5 @@ pub mod space_tasks;
 pub use object_storage::*;
 pub use timeline::*;
 pub use updates::*;
+
+pub mod projects;

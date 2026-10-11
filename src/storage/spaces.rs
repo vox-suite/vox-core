@@ -5,7 +5,7 @@ use crate::domain::spaces::{
     NodeState, RunState, Space, SpaceEdge, SpaceGraph, SpaceMessage, SpaceNode, SpaceState,
 };
 
-const SPACE_COLUMNS: &str = "id, user_id, title, intent, state, agent_spec, committed_collection_id, run_state, run_error, created_at, updated_at";
+const SPACE_COLUMNS: &str = "id, user_id, title, intent, state, agent_spec, committed_collection_id, project_id, run_state, run_error, created_at, updated_at";
 
 #[derive(Clone)]
 pub struct SpaceRepository {
@@ -382,7 +382,7 @@ impl SpaceRepository {
     ) -> Result<Option<SpaceNode>, sqlx::Error> {
         let row = sqlx::query(
             r#"
-            SELECT id, space_id, kind, title, body, data, state, position, derived_from, provenance, version, created_at, updated_at
+            SELECT id, space_id, kind, title, body, data, state, position, derived_from, provenance, version, created_at, updated_at, replaces, is_current, is_final
             FROM space_nodes
             WHERE space_id = $1 AND id = $2
             "#,
@@ -398,7 +398,7 @@ impl SpaceRepository {
     pub async fn list_nodes(&self, space_id: Uuid) -> Result<Vec<SpaceNode>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, space_id, kind, title, body, data, state, position, derived_from, provenance, version, created_at, updated_at
+            SELECT id, space_id, kind, title, body, data, state, position, derived_from, provenance, version, created_at, updated_at, replaces, is_current, is_final
             FROM space_nodes
             WHERE space_id = $1
             ORDER BY created_at ASC
@@ -620,6 +620,7 @@ fn map_space_row(row: sqlx::postgres::PgRow) -> Space {
         state: SpaceState::parse(&state_raw).unwrap_or(SpaceState::Ideating),
         agent_spec: row.get("agent_spec"),
         committed_collection_id: row.get("committed_collection_id"),
+        project_id: row.try_get("project_id").unwrap_or(None),
         run_state: RunState::parse(&run_state_raw).unwrap_or(RunState::Idle),
         run_error: row.get("run_error"),
         created_at: row.get("created_at"),
@@ -643,6 +644,9 @@ fn map_node_row(row: sqlx::postgres::PgRow) -> SpaceNode {
         version: row.get("version"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        replaces: row.try_get("replaces").ok().flatten(),
+        is_current: row.try_get("is_current").unwrap_or(true),
+        is_final: row.try_get("is_final").unwrap_or(false),
     }
 }
 

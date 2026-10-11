@@ -4,6 +4,14 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(paths(
+    crate::routes::projects::count,
+    crate::routes::projects::list,
+    crate::routes::projects::create,
+    crate::routes::projects::get,
+    crate::routes::projects::update,
+    crate::routes::projects::archive,
+    crate::routes::projects::chat,
+    crate::routes::projects::attach,
     crate::routes::desktop_voice::bootstrap,
     crate::routes::desktop_actions::execute,
     crate::routes::connections::list_connectors,

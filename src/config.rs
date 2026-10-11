@@ -14,8 +14,8 @@ pub const DEFAULT_ELEVENLABS_OUTPUT_FORMAT: &str = "mp3_44100_128";
 pub const DEFAULT_REDIS_URL: &str = "redis://redis:6379";
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 pub const DEFAULT_DB_ACQUIRE_TIMEOUT_SECS: u64 = 5;
-pub const DEFAULT_SPACE_MAX_STEPS: usize = 20;
-pub const DEFAULT_SPACE_MAX_CHILDREN: usize = 5;
+pub const DEFAULT_SPACE_MAX_STEPS: usize = 60;
+pub const DEFAULT_SPACE_MAX_CHILDREN: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct Config {
