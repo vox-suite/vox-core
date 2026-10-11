@@ -1369,6 +1369,95 @@
         ],
         "type": "object"
       },
+      "ProjectFlow": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectFlowEdge"
+            },
+            "type": "array"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectFlowNode"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "nodes",
+          "edges"
+        ],
+        "type": "object"
+      },
+      "ProjectFlowEdge": {
+        "properties": {
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectCitation"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "label",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "ProjectFlowNode": {
+        "properties": {
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectCitation"
+            },
+            "type": "array"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "detail"
+        ],
+        "type": "object"
+      },
       "ProjectList": {
         "properties": {
           "items": {
@@ -1397,6 +1486,16 @@
           },
           "body": {
             "type": "string"
+          },
+          "flow": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFlow"
+              }
+            ]
           },
           "id": {
             "format": "uuid",
