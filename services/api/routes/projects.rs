@@ -174,13 +174,13 @@ pub async fn chat(
 ) -> Result<Json<Project>, StatusCode> {
     if input.message.trim().is_empty()
         || input.message.len() > 12000
-        || input.excerpts.len() > 8
+        || input.excerpts.len() > 32
         || input
             .excerpts
             .iter()
             .map(|e| e.text.chars().count())
             .sum::<usize>()
-            > 24000
+            > 96000
     {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -241,6 +241,7 @@ pub async fn chat(
         body: input.message,
         at: at.clone(),
         proposals: vec![],
+        flow: None,
     });
     p.data.messages.push(ProjectMessage {
         id: Uuid::new_v4(),
@@ -248,6 +249,7 @@ pub async fn chat(
         body: reply.reply,
         at,
         proposals: reply.proposals,
+        flow: reply.flow,
     });
     if p.data.messages.len() > 100 {
         p.data.messages.drain(..p.data.messages.len() - 100);

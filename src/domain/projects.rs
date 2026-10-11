@@ -55,6 +55,33 @@ pub struct ProjectActivity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProjectFlowNode {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub detail: String,
+    #[serde(default)]
+    pub citations: Vec<ProjectCitation>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProjectFlowEdge {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+    pub evidence: String,
+    #[serde(default)]
+    pub citations: Vec<ProjectCitation>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ProjectFlow {
+    pub title: String,
+    pub nodes: Vec<ProjectFlowNode>,
+    pub edges: Vec<ProjectFlowEdge>,
+    #[serde(default)]
+    pub gaps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProjectMessage {
     pub id: Uuid,
     pub role: String,
@@ -62,6 +89,8 @@ pub struct ProjectMessage {
     pub at: String,
     #[serde(default)]
     pub proposals: Vec<ContextNode>,
+    #[serde(default)]
+    pub flow: Option<ProjectFlow>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
@@ -130,6 +159,34 @@ impl ProjectData {
                 matches!(m.role.as_str(), "user" | "assistant")
                     && m.body.len() <= 20000
                     && m.proposals.len() <= 12
+                    && m.flow.as_ref().is_none_or(|f| {
+                        f.title.len() <= 300
+                            && f.nodes.len() <= 40
+                            && f.edges.len() <= 80
+                            && f.gaps.len() <= 20
+                            && f.gaps.iter().all(|g| g.len() <= 1000)
+                            && f.nodes.iter().all(|n| {
+                                !n.id.is_empty()
+                                    && n.id.len() <= 100
+                                    && n.title.len() <= 300
+                                    && n.kind.len() <= 80
+                                    && n.detail.len() <= 2000
+                                    && n.citations.len() <= 20
+                            })
+                            && f.nodes
+                                .iter()
+                                .map(|n| &n.id)
+                                .collect::<std::collections::HashSet<_>>()
+                                .len()
+                                == f.nodes.len()
+                            && f.edges.iter().all(|e| {
+                                e.label.len() <= 300
+                                    && matches!(e.evidence.as_str(), "observed" | "inferred")
+                                    && e.citations.len() <= 20
+                                    && f.nodes.iter().any(|n| n.id == e.from)
+                                    && f.nodes.iter().any(|n| n.id == e.to)
+                            })
+                    })
             })
             && self
                 .nodes
