@@ -135,7 +135,7 @@ impl SpaceRuntime {
         user: Uuid,
         space: Uuid,
         node: Uuid,
-    ) -> Result<String, AgentError> {
+    ) -> Result<String, TaskFailure> {
         use rig::agent::MultiTurnStreamItem;
         use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
         let mut stream = agent.stream_prompt(prompt).await;
@@ -163,7 +163,10 @@ impl SpaceRuntime {
                     }
                 }
                 Ok(_) => {}
-                Err(_) => return Err(AgentError::Provider),
+                Err(error) => {
+                    tracing::warn!(%node, %error, "space task stream failed");
+                    return Err(TaskFailure::Provider(error.to_string()));
+                }
             }
         }
         Ok(raw)
@@ -204,21 +207,15 @@ impl SpaceRuntime {
             let text = self
                 .stream_task_text(agent, &prompt, user, task.space_id, task.node_id)
                 .await?;
-            serde_json::from_str::<Value>(
-                text.trim()
-                    .trim_start_matches("```json")
-                    .trim_start_matches("```")
-                    .trim_end_matches("```")
-                    .trim(),
-            )
-            .map_err(|_| AgentError::Provider)
+            parse_task_output(&text)
         };
         tokio::pin!(work);
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
-        let deadline = tokio::time::sleep(std::time::Duration::from_secs(180));
+        let limit = if task.role == "web_search" { 240 } else { 180 };
+        let deadline = tokio::time::sleep(std::time::Duration::from_secs(limit));
         tokio::pin!(deadline);
         let output = loop {
-            tokio::select! {result=&mut work=>break result,_=&mut deadline=>break Err(AgentError::Provider),_=heartbeat.tick()=>{if !tasks.heartbeat(&task).await.map_err(|_|AgentError::Provider)? {return Ok(());}}}
+            tokio::select! {result=&mut work=>break result,_=&mut deadline=>break Err(TaskFailure::TimedOut),_=heartbeat.tick()=>{if !tasks.heartbeat(&task).await.map_err(|_|AgentError::Provider)? {return Ok(());}}}
         };
         let output = output.map(|mut value| {
             if let Some(summary) = value["summary"].as_str() {
@@ -233,11 +230,25 @@ impl SpaceRuntime {
             {
                 Ok(value)
             } else {
-                Err(AgentError::Provider)
+                Err(TaskFailure::EmptySummary)
             }
         });
         let success = output.is_ok();
-        let output = output.unwrap_or(json!({"error":"Task failed or timed out"}));
+        let output = match output {
+            Ok(value) => value,
+            Err(failure) => {
+                tracing::warn!(
+                    space = %task.space_id,
+                    node = %task.node_id,
+                    role = %task.role,
+                    attempt = task.attempt,
+                    reason = %failure.code(),
+                    detail = %failure.detail(),
+                    "space task failed"
+                );
+                json!({"error": failure.message(), "reason": failure.code()})
+            }
+        };
         tasks
             .finish(&task, &output, success)
             .await
@@ -448,4 +459,69 @@ fn partial_summary(raw: &str) -> Option<String> {
         }
     }
     Some(out)
+}
+
+#[derive(Debug)]
+enum TaskFailure {
+    Provider(String),
+    InvalidJson,
+    EmptySummary,
+    TimedOut,
+}
+
+impl TaskFailure {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Provider(_) => "provider_error",
+            Self::InvalidJson => "invalid_json",
+            Self::EmptySummary => "empty_summary",
+            Self::TimedOut => "timed_out",
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Provider(_) => "The AI model or search provider returned an error.",
+            Self::InvalidJson => "The model's reply was not valid JSON.",
+            Self::EmptySummary => "The model returned no summary.",
+            Self::TimedOut => "The task ran out of time.",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            Self::Provider(detail) => detail.chars().take(300).collect(),
+            _ => String::new(),
+        }
+    }
+}
+
+fn parse_task_output(text: &str) -> Result<Value, TaskFailure> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let Ok(value) = serde_json::from_str::<Value>(cleaned)
+        && value.is_object()
+    {
+        return Ok(value);
+    }
+    for (start, _) in cleaned.match_indices('{').take(24) {
+        if let Some(Ok(value)) = serde_json::Deserializer::from_str(&cleaned[start..])
+            .into_iter::<Value>()
+            .next()
+            && value.get("summary").is_some()
+        {
+            return Ok(value);
+        }
+    }
+    if cleaned.is_empty() {
+        return Err(TaskFailure::EmptySummary);
+    }
+    if !cleaned.starts_with('{') && cleaned.chars().count() >= 40 {
+        return Ok(json!({"summary": cleaned, "evidence": [], "followups": []}));
+    }
+    Err(TaskFailure::InvalidJson)
 }

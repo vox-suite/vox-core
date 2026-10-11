@@ -219,7 +219,7 @@ impl TaskRepository {
         let token = Uuid::new_v4();
         let generation: i32 = row.get("generation");
         let attempt: i32 = row.get::<i32, _>("attempt") + 1;
-        sqlx::query("UPDATE space_tasks SET status='running',attempt=attempt+1,lease_token=$2,lease_expires_at=now()+interval '90 seconds',input_versions=(SELECT coalesce(jsonb_object_agg(n.id::text,n.version),'{}') FROM space_edges e JOIN space_nodes n ON n.id=e.from_node WHERE e.to_node=$1) || (SELECT jsonb_build_object(id::text,version) FROM space_nodes WHERE id=$1),updated_at=now() WHERE node_id=$1").bind(id).bind(token).execute(&mut *tx).await?;
+        sqlx::query("UPDATE space_tasks SET status='running',attempt=attempt+1,error=NULL,lease_token=$2,lease_expires_at=now()+interval '90 seconds',input_versions=(SELECT coalesce(jsonb_object_agg(n.id::text,n.version),'{}') FROM space_edges e JOIN space_nodes n ON n.id=e.from_node WHERE e.to_node=$1) || (SELECT jsonb_build_object(id::text,version) FROM space_nodes WHERE id=$1),updated_at=now() WHERE node_id=$1").bind(id).bind(token).execute(&mut *tx).await?;
         tx.commit().await?;
         self.sync_metadata(space).await?;
         Ok(Some(ClaimedTask {
@@ -250,7 +250,7 @@ impl TaskRepository {
             .bind(task.space_id)
             .fetch_one(&mut *tx)
             .await?;
-        let result=sqlx::query("UPDATE space_tasks t SET status=$3,output=$4,error=$5,lease_token=NULL,lease_expires_at=NULL,updated_at=now() FROM spaces s WHERE t.node_id=$1 AND t.lease_token=$2 AND t.status='running' AND s.id=t.space_id AND s.workflow_generation=t.generation AND (t.input_versions->>t.node_id::text)::int=(SELECT version FROM space_nodes WHERE id=t.node_id) AND NOT EXISTS(SELECT 1 FROM space_edges e JOIN space_nodes n ON n.id=e.from_node WHERE e.to_node=t.node_id AND (t.input_versions->>n.id::text)::int IS DISTINCT FROM n.version)").bind(task.node_id).bind(task.token).bind(if success {"done"} else if task.attempt<2 {"queued"} else {"failed"}).bind(output).bind(if success {None} else {Some(output.to_string())}).execute(&mut *tx).await?;
+        let result=sqlx::query("UPDATE space_tasks t SET status=$3,output=$4,error=$5,lease_token=NULL,lease_expires_at=NULL,updated_at=now() FROM spaces s WHERE t.node_id=$1 AND t.lease_token=$2 AND t.status='running' AND s.id=t.space_id AND s.workflow_generation=t.generation AND (t.input_versions->>t.node_id::text)::int=(SELECT version FROM space_nodes WHERE id=t.node_id) AND NOT EXISTS(SELECT 1 FROM space_edges e JOIN space_nodes n ON n.id=e.from_node WHERE e.to_node=t.node_id AND (t.input_versions->>n.id::text)::int IS DISTINCT FROM n.version)").bind(task.node_id).bind(task.token).bind(if success {"done"} else if task.attempt<2 {"queued"} else {"failed"}).bind(output).bind(if success {None} else {Some(output["error"].as_str().map(str::to_owned).unwrap_or_else(|| output.to_string()))}).execute(&mut *tx).await?;
         if result.rows_affected() == 0 {
             sqlx::query("UPDATE space_tasks SET status='cancelled',error='Inputs changed while the task was running',lease_token=NULL WHERE node_id=$1 AND lease_token=$2").bind(task.node_id).bind(task.token).execute(&mut *tx).await?;
             tx.commit().await?;
