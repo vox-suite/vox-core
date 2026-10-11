@@ -63,6 +63,7 @@ fn manual_definition_rejects_invalid_timezone_and_unknown_metric() {
         period_days: 30,
         timezone: "invalid".into(),
         chart_type: ChartType::Line,
+        compare_with: vec![],
     };
     assert!(validate_definition(&d, &[]).is_err());
 }
@@ -206,6 +207,7 @@ async fn previews_count_plays_without_numeric_fields_and_keep_currency_separate(
                     period_days: 30,
                     timezone: "Asia/Kolkata".into(),
                     chart_type: ChartType::Bar,
+                    compare_with: vec![],
                 },
                 m,
             )
@@ -348,6 +350,7 @@ async fn known_intervals_split_at_local_midnight_and_undated_entries_stay_unknow
         period_days: 7,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Line,
+        compare_with: vec![],
     };
     let results = super::execution::execute(db.pool(), id, &[(d, m)])
         .await
@@ -399,6 +402,7 @@ async fn cached_chart_changes_after_edit_and_delete_and_conflicting_save_is_reje
         period_days: 7,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
+        compare_with: vec![],
     };
     let save = SavePulseInput {
         idempotency_key: uuid::Uuid::new_v4(),
@@ -484,6 +488,7 @@ fn financial_pie_is_rejected_because_refunds_can_be_signed() {
         period_days: 30,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Pie,
+        compare_with: vec![],
     };
     assert!(validate_definition(&d, &catalog).is_err());
 }
@@ -520,6 +525,7 @@ async fn six_chart_database_budget_and_fixture_performance() {
                 period_days: period,
                 timezone: "Asia/Kolkata".into(),
                 chart_type: ChartType::Bar,
+                compare_with: vec![],
             };
             sqlx::query("INSERT INTO pulse_saved_charts(user_id,idempotency_key,title,definition,definition_hash) VALUES($1,$2,'Expense',$3,$4)").bind(id).bind(uuid::Uuid::new_v4()).bind(json!(d)).bind(super::measurements::definition_hash(&d)).execute(db.pool()).await.unwrap();
         }
@@ -613,6 +619,7 @@ async fn gameplay_totals_and_deltas_are_distinct_and_subscriptions_are_projectio
                 period_days: 30,
                 timezone: "Asia/Kolkata".into(),
                 chart_type: ChartType::Bar,
+                compare_with: vec![],
             };
             assert!(validate_definition(&d, std::slice::from_ref(&m)).is_ok());
             (d, m)
@@ -671,6 +678,7 @@ async fn lifetime_gameplay_sums_games_when_grouped_by_platform() {
         period_days: 30,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
+        compare_with: vec![],
     };
     let results = super::execution::execute(db.pool(), id, &[(d, m)])
         .await
@@ -752,6 +760,7 @@ async fn concurrent_forced_loads_share_the_same_computed_result_across_services(
         period_days: 30,
         timezone: "Asia/Kolkata".into(),
         chart_type: ChartType::Bar,
+        compare_with: vec![],
     };
     service
         .save(

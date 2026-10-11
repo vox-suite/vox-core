@@ -68,11 +68,24 @@ pub struct PulseDefinition {
     pub top_n: Option<u16>,
     pub timezone: String,
     pub chart_type: ChartType,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compare_with: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PulsePoint {
     pub label: String,
     pub value: Option<f64>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PulseSeriesResult {
+    pub measurement_id: String,
+    pub title: String,
+    pub source: String,
+    pub unit: String,
+    pub quality: String,
+    pub total: Option<f64>,
+    pub record_count: i64,
+    pub points: Vec<PulsePoint>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PulseResult {
@@ -89,6 +102,8 @@ pub struct PulseResult {
     pub computed_at: DateTime<Utc>,
     pub data_as_of: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<PulseSeriesResult>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PulseSuggestion {
@@ -97,6 +112,11 @@ pub struct PulseSuggestion {
     pub definition: PulseDefinition,
     pub measurement: Measurement,
     pub preview: PulseResult,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PulseCount {
+    pub count: i64,
+    pub revision: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SavedPulseChart {

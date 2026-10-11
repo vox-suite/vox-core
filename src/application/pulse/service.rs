@@ -93,15 +93,12 @@ impl PulseService {
             .await?;
         Ok(inventory)
     }
-    async fn results(
-        &self,
+    fn results_key(
         actor: &Actor,
         meta: &PulseMetadata,
         inputs: &[(PulseDefinition, Measurement)],
-        refresh: bool,
-        arrived: chrono::DateTime<Utc>,
-    ) -> Result<Vec<PulseResult>, PulseError> {
-        let key = Self::key(
+    ) -> String {
+        Self::key(
             actor,
             meta,
             &format!(
@@ -118,7 +115,18 @@ impl PulseService {
                     serde_json::to_vec(&inputs.iter().map(|(d, _)| d).collect::<Vec<_>>()).unwrap()
                 )
             ),
-        );
+        )
+    }
+    async fn results(
+        &self,
+        actor: &Actor,
+        meta: &PulseMetadata,
+        inputs: &[(PulseDefinition, Measurement)],
+        catalog: &[Measurement],
+        refresh: bool,
+        arrived: chrono::DateTime<Utc>,
+    ) -> Result<Vec<PulseResult>, PulseError> {
+        let key = Self::results_key(actor, meta, inputs);
         if !refresh && let Some(value) = meta.caches.get(&key) {
             return serde_json::from_value(value.clone())
                 .map_err(|_| PulseError::Invalid("Invalid cached result".into()));
@@ -136,6 +144,7 @@ impl PulseService {
                 &key,
                 refresh,
                 arrived,
+                catalog,
             ),
         )
         .await
@@ -274,7 +283,7 @@ impl PulseService {
             .map(|(c, m)| (c.definition.clone(), m.clone()))
             .collect::<Vec<_>>();
         let results = self
-            .results(actor, &meta, &inputs, input.refresh, arrived)
+            .results(actor, &meta, &inputs, &catalog, input.refresh, arrived)
             .await?;
         let mut suggestions = vec![];
         let mut sources = std::collections::HashSet::new();
@@ -323,14 +332,15 @@ impl PulseService {
     ) -> Result<PulseResult, PulseError> {
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let inventory = self.inventory(actor, &meta, false).await?;
+        let catalog = measurement_catalog(&inventory.profiles);
         let measurement =
-            validate_definition(&definition, &measurement_catalog(&inventory.profiles))
-                .map_err(PulseError::Invalid)?;
+            validate_definition(&definition, &catalog).map_err(PulseError::Invalid)?;
         Ok(self
             .results(
                 actor,
                 &meta,
                 &[(definition, measurement)],
+                &catalog,
                 false,
                 Utc::now(),
             )
@@ -363,6 +373,11 @@ impl PulseService {
                 sqlx::Error::Protocol(message) => PulseError::Conflict(message),
                 other => PulseError::Database(other),
             })
+    }
+    pub async fn count_charts(&self, actor: &Actor) -> Result<(i64, String), PulseError> {
+        let count = self.repo.count_charts(actor.user_id).await?;
+        let revision = self.repo.data_revision(actor.user_id).await?;
+        Ok((count, revision))
     }
     pub async fn list_charts(
         &self,
@@ -428,6 +443,67 @@ impl PulseService {
     pub async fn undismiss(&self, actor: &Actor, key: &str) -> Result<bool, PulseError> {
         Ok(self.repo.undismiss(actor.user_id, key).await?)
     }
+    pub async fn chart_result(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        timezone: &str,
+        refresh: bool,
+    ) -> Result<Option<PulseResult>, PulseError> {
+        let arrived = Utc::now();
+        Self::timezone(timezone)?;
+        let Some(chart) = self.repo.get_chart(actor.user_id, id).await? else {
+            return Ok(None);
+        };
+        let lock = self
+            .lock(&format!("{}:chart:{id}:{timezone}", actor.user_id))
+            .await?;
+        let _guard = lock.lock().await;
+        let mut meta = PulseMetadata {
+            revision: self.repo.data_revision(actor.user_id).await?,
+            connections: vec![],
+            charts: vec![],
+            dismissed: vec![],
+            saved_hashes: vec![],
+            caches: json!({}),
+            next_cursor: None,
+        };
+        let inventory_key = Self::key(actor, &meta, "inventory");
+        if !refresh && let Some(value) = self.repo.get_cache(actor.user_id, &inventory_key).await? {
+            meta.caches[&inventory_key] = value;
+        }
+        let inventory = self.inventory(actor, &meta, refresh).await?;
+        let catalog = measurement_catalog(&inventory.profiles);
+        let measurement = match validate_definition(&chart.definition, &catalog) {
+            Ok(m) => m,
+            Err(message) => {
+                return Ok(Some(PulseResult {
+                    coverage: json!({"state":"unavailable"}),
+                    total: None,
+                    source: "Source unavailable".into(),
+                    points: vec![],
+                    unit: String::new(),
+                    quality: "unavailable".into(),
+                    description: message.clone(),
+                    record_count: 0,
+                    undated_count: 0,
+                    computed_at: Utc::now(),
+                    data_as_of: None,
+                    error: Some(message),
+                    series: vec![],
+                }));
+            }
+        };
+        let inputs = vec![(chart.definition.clone(), measurement)];
+        let results_key = Self::results_key(actor, &meta, &inputs);
+        if !refresh && let Some(value) = self.repo.get_cache(actor.user_id, &results_key).await? {
+            meta.caches[&results_key] = value;
+        }
+        let mut results = self
+            .results(actor, &meta, &inputs, &catalog, refresh, arrived)
+            .await?;
+        Ok(results.pop())
+    }
     pub async fn canvas(
         &self,
         actor: &Actor,
@@ -472,12 +548,13 @@ impl PulseService {
                         computed_at: Utc::now(),
                         data_as_of: None,
                         error: Some(message),
+                        series: vec![],
                     })
                 }
             }
         }
         let results = self
-            .results(actor, &meta, &inputs, refresh, arrived)
+            .results(actor, &meta, &inputs, &catalog, refresh, arrived)
             .await?;
         for (index, result) in valid_indexes.into_iter().zip(results) {
             meta.charts[index].result = Some(result)

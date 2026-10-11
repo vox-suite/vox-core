@@ -10,7 +10,7 @@ pub async fn execute(
     user: Uuid,
     inputs: &[(PulseDefinition, Measurement)],
 ) -> Result<Vec<PulseResult>, sqlx::Error> {
-    execute_inner(pool, user, inputs, None).await
+    execute_inner(pool, user, inputs, None, &[]).await
 }
 
 pub async fn execute_cached(
@@ -20,8 +20,9 @@ pub async fn execute_cached(
     key: &str,
     refresh: bool,
     arrived: chrono::DateTime<Utc>,
+    catalog: &[Measurement],
 ) -> Result<Vec<PulseResult>, sqlx::Error> {
-    execute_inner(pool, user, inputs, Some((key, refresh, arrived))).await
+    execute_inner(pool, user, inputs, Some((key, refresh, arrived)), catalog).await
 }
 
 async fn execute_inner(
@@ -29,6 +30,7 @@ async fn execute_inner(
     user: Uuid,
     inputs: &[(PulseDefinition, Measurement)],
     cache: Option<(&str, bool, chrono::DateTime<Utc>)>,
+    catalog: &[Measurement],
 ) -> Result<Vec<PulseResult>, sqlx::Error> {
     if inputs.len() > 12 {
         return Err(sqlx::Error::Protocol("Too many charts".into()));
@@ -44,7 +46,11 @@ async fn execute_inner(
     }
     let mut results = Vec::with_capacity(inputs.len());
     for (definition, measurement) in inputs {
-        results.push(execute_single(pool, user, definition, measurement).await?);
+        results.push(if definition.compare_with.is_empty() {
+            execute_single(pool, user, definition, measurement).await?
+        } else {
+            execute_multi(pool, user, definition, measurement, catalog).await?
+        });
     }
     if let Some((key, _, _)) = cache {
         crate::storage::pulse::PulseRepository::new(pool.clone())
@@ -52,6 +58,72 @@ async fn execute_inner(
             .await?;
     }
     Ok(results)
+}
+
+async fn execute_multi(
+    pool: &PgPool,
+    user: Uuid,
+    definition: &PulseDefinition,
+    primary: &Measurement,
+    catalog: &[Measurement],
+) -> Result<PulseResult, sqlx::Error> {
+    let mut measurements = vec![primary.clone()];
+    for id in &definition.compare_with {
+        measurements.push(
+            catalog
+                .iter()
+                .find(|m| &m.id == id)
+                .cloned()
+                .ok_or_else(|| sqlx::Error::Protocol("Compared measurement unavailable".into()))?,
+        );
+    }
+    let mut results = Vec::with_capacity(measurements.len());
+    for measurement in &measurements {
+        let mut single = definition.clone();
+        single.measurement_id = measurement.id.clone();
+        single.compare_with = vec![];
+        results.push(execute_single(pool, user, &single, measurement).await?);
+    }
+    let labels: std::collections::BTreeSet<String> = results
+        .iter()
+        .flat_map(|r| r.points.iter().map(|p| p.label.clone()))
+        .collect();
+    let series: Vec<PulseSeriesResult> = measurements
+        .iter()
+        .zip(&results)
+        .map(|(measurement, result)| {
+            let values: std::collections::HashMap<&str, Option<f64>> = result
+                .points
+                .iter()
+                .map(|p| (p.label.as_str(), p.value))
+                .collect();
+            PulseSeriesResult {
+                measurement_id: measurement.id.clone(),
+                title: measurement.title.clone(),
+                source: result.source.clone(),
+                unit: result.unit.clone(),
+                quality: result.quality.clone(),
+                total: result.total,
+                record_count: result.record_count,
+                points: labels
+                    .iter()
+                    .map(|label| PulsePoint {
+                        label: label.clone(),
+                        value: values.get(label.as_str()).copied().flatten(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let mut combined = results.remove(0);
+    combined.points = series[0].points.clone();
+    combined.record_count = series.iter().map(|s| s.record_count).sum();
+    combined.description = format!(
+        "Compares {} measurements over the same period. Each keeps its own unit.",
+        series.len()
+    );
+    combined.series = series;
+    Ok(combined)
 }
 
 async fn execute_single(
@@ -320,5 +392,6 @@ async fn execute_single(
         computed_at: Utc::now(),
         data_as_of: m.profile.last_at.filter(|at| *at <= end_at),
         error: None,
+        series: vec![],
     })
 }

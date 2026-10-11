@@ -99,6 +99,14 @@ pub async fn save(
         Json(service.save(&actor, input).await?),
     ))
 }
+#[utoipa::path(get,path="/v1/me/pulse/charts/count",tag="pulse",responses((status=200,body=PulseCount)))]
+pub async fn count_charts(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<PulseCount>, PulseApiError> {
+    let (count, revision) = service.count_charts(&actor).await?;
+    Ok(Json(PulseCount { count, revision }))
+}
 #[utoipa::path(get,path="/v1/me/pulse/charts",tag="pulse",params(("limit"=Option<i64>,Query),("offset"=Option<i64>,Query)),responses((status=200,body=Vec<SavedPulseChart>)))]
 pub async fn list_charts(
     State(service): State<PulseService>,
@@ -110,6 +118,28 @@ pub async fn list_charts(
             .list_charts(&actor, input.limit.unwrap_or(50), input.offset.unwrap_or(0))
             .await?,
     ))
+}
+#[derive(Deserialize)]
+pub struct ChartResultQuery {
+    pub timezone: String,
+    #[serde(default)]
+    pub refresh: bool,
+}
+#[utoipa::path(get,path="/v1/me/pulse/charts/{id}/result",tag="pulse",params(("id"=Uuid,Path),("timezone"=String,Query),("refresh"=Option<bool>,Query)),responses((status=200,body=PulseResult),(status=404)))]
+pub async fn chart_result(
+    State(service): State<PulseService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Query(input): Query<ChartResultQuery>,
+) -> Result<Response, PulseApiError> {
+    if let Some(result) = service
+        .chart_result(&actor, id, &input.timezone, input.refresh)
+        .await?
+    {
+        Ok(Json(result).into_response())
+    } else {
+        Ok(StatusCode::NOT_FOUND.into_response())
+    }
 }
 #[utoipa::path(get,path="/v1/me/pulse/charts/{id}",tag="pulse",params(("id"=Uuid,Path)),responses((status=200,body=SavedPulseChart),(status=404)))]
 pub async fn get_chart(

@@ -130,6 +130,35 @@ pub fn validate_definition(
         .find(|m| m.id == d.measurement_id)
         .ok_or("Measurement is unavailable or its source access has changed")?
         .clone();
+    if !d.compare_with.is_empty() {
+        let unique: std::collections::HashSet<&String> = d.compare_with.iter().collect();
+        if d.compare_with.len() > 5
+            || unique.len() != d.compare_with.len()
+            || d.compare_with.contains(&d.measurement_id)
+            || d.dimension.is_some()
+            || d.bucket.is_none()
+            || !matches!(
+                d.chart_type,
+                crate::domain::charts::ChartType::Line
+                    | crate::domain::charts::ChartType::Area
+                    | crate::domain::charts::ChartType::Bar
+            )
+        {
+            return Err(
+                "Compare up to six measurements on a line, area or bar chart grouped by time"
+                    .into(),
+            );
+        }
+        for id in &d.compare_with {
+            let other = catalog
+                .iter()
+                .find(|c| &c.id == id)
+                .ok_or("A compared measurement is unavailable or its source access has changed")?;
+            if !d.bucket.as_ref().is_some_and(|b| other.buckets.contains(b)) {
+                return Err("A compared measurement does not support this time grouping".into());
+            }
+        }
+    }
     if d.chart_type == crate::domain::charts::ChartType::Stat && d.dimension.is_some() {
         return Err("Use a time grouping for a total statistic".into());
     }

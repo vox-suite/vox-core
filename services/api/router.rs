@@ -196,6 +196,14 @@ pub fn build_api_router(state: ApiState) -> Router {
             get(crate::routes::pulse::list_charts).post(crate::routes::pulse::save),
         )
         .route(
+            "/v1/me/pulse/charts/count",
+            get(crate::routes::pulse::count_charts),
+        )
+        .route(
+            "/v1/me/pulse/charts/{id}/result",
+            get(crate::routes::pulse::chart_result),
+        )
+        .route(
             "/v1/me/pulse/charts/{id}",
             get(crate::routes::pulse::get_chart)
                 .patch(crate::routes::pulse::update_chart)
@@ -221,6 +229,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/me/spaces",
             get(crate::routes::spaces::list_spaces).post(crate::routes::spaces::create_space),
+        )
+        .route(
+            "/v1/me/spaces/count",
+            get(crate::routes::spaces::count_spaces),
         )
         .route(
             "/v1/me/spaces/{id}",
@@ -329,6 +341,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.connections.clone());
 
     let timeline_routes = Router::new()
+        .route(
+            "/v1/timeline/events/days",
+            post(crate::routes::timeline::day_summaries),
+        )
         .route(
             "/v1/timeline/events/counts",
             post(crate::routes::timeline::day_counts),

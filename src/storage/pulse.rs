@@ -227,6 +227,13 @@ impl PulseRepository {
         })
     }
 
+    pub async fn count_charts(&self, user: Uuid) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pulse_charts WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(&self.pool)
+            .await
+    }
+
     pub async fn list_charts(
         &self,
         user: Uuid,
@@ -455,6 +462,24 @@ impl PulseRepository {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.get("suggestion_key")).collect())
+    }
+
+    pub async fn data_revision(&self, user: Uuid) -> Result<String, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT data_revision, discovery_revision FROM pulse_revisions WHERE user_id = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await?;
+        let (data, discovery) = row
+            .map(|r| {
+                (
+                    r.get::<i64, _>("data_revision"),
+                    r.get::<i64, _>("discovery_revision"),
+                )
+            })
+            .unwrap_or((0, 0));
+        Ok(format!("{data}:{discovery}"))
     }
 
     pub async fn put_cache(

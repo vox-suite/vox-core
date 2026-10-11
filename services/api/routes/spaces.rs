@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -104,21 +104,58 @@ pub async fn create_space(
     Ok((StatusCode::CREATED, Json(space)))
 }
 
+#[derive(Deserialize)]
+pub struct ListSpacesQuery {
+    #[serde(default)]
+    pub summary: bool,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct SpaceCount {
+    pub count: i64,
+    pub rev: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/me/spaces/count",
+    tag = "spaces",
+    responses((status = 200, body = SpaceCount))
+)]
+pub async fn count_spaces(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<SpaceCount>, StatusCode> {
+    let (count, rev) = state
+        .spaces
+        .count_spaces(actor.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(SpaceCount { count, rev }))
+}
+
 #[utoipa::path(
     get,
     path = "/v1/me/spaces",
     tag = "spaces",
+    params(("summary" = Option<bool>, Query, description = "Omit agent_spec payloads")),
     responses((status = 200, body = Vec<vox_core::domain::spaces::Space>))
 )]
 pub async fn list_spaces(
     State(state): State<SpaceApiState>,
     Extension(actor): Extension<Actor>,
+    Query(query): Query<ListSpacesQuery>,
 ) -> Result<Json<Vec<Space>>, StatusCode> {
-    let spaces = state
+    let mut spaces = state
         .spaces
         .list_spaces(actor.user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if query.summary {
+        for space in &mut spaces {
+            space.agent_spec = json!({});
+        }
+    }
     Ok(Json(spaces))
 }
 

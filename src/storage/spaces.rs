@@ -85,6 +85,18 @@ impl SpaceRepository {
         Ok(space)
     }
 
+    pub async fn count_spaces(&self, user_id: Uuid) -> Result<(i64, String), sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT COUNT(*)::bigint AS count, COALESCE((EXTRACT(EPOCH FROM MAX(updated_at)) * 1000000)::bigint, 0) AS stamp FROM spaces WHERE user_id = $1 AND state != 'dropped'",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let count: i64 = row.get("count");
+        let stamp: i64 = row.get("stamp");
+        Ok((count, format!("{count}-{stamp}")))
+    }
+
     pub async fn list_spaces(&self, user_id: Uuid) -> Result<Vec<Space>, sqlx::Error> {
         let query = format!(
             r#"

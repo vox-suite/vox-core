@@ -209,6 +209,7 @@ async fn postgres_grant_boundaries_rotation_revocation_and_concurrent_idempotenc
         top_n: None,
         timezone: "UTC".into(),
         chart_type: crate::domain::charts::ChartType::Bar,
+        compare_with: vec![],
     };
     let input = crate::domain::pulse::SavePulseInput {
         title: "Metric".into(),

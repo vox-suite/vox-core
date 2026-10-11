@@ -157,6 +157,23 @@ pub struct TimelineCountsQuery {
     pub group_value: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TimelineDaySummary {
+    pub day: String,
+    pub count: i64,
+    pub rev: String,
+    pub categories: Vec<TimelineCategoryCount>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TimelineCategoryCount {
+    pub category: String,
+    pub count: i64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TimelineDaysResponse {
+    pub revision: i64,
+    pub days: Vec<TimelineDaySummary>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TimelineDayCount {
     pub day: String,
     pub category: String,

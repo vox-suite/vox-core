@@ -224,6 +224,64 @@ impl TimelineRepository {
             .collect())
     }
 
+    pub async fn day_summaries(
+        &self,
+        user_id: Uuid,
+        input: crate::domain::timeline::TimelineCountsQuery,
+    ) -> Result<crate::domain::timeline::TimelineDaysResponse, TimelineStorageError> {
+        if input.timezone.parse::<chrono_tz::Tz>().is_err()
+            || input.end_at <= input.start_at
+            || (input.end_at - input.start_at).num_days() > 366
+        {
+            return Err(TimelineStorageError::ValidationFailed(
+                "invalid timezone or date range; maximum 366 days".into(),
+            ));
+        }
+        let rows = sqlx::query("SELECT day, sum(cnt)::bigint AS count, left(md5(string_agg(sig, ',' ORDER BY category)), 12) AS rev, jsonb_object_agg(category, cnt) AS categories FROM (SELECT (e.occurred_at AT TIME ZONE $4)::date::text AS day, g.value AS category, count(*)::bigint AS cnt, string_agg(e.id::text || ':' || e.revision::text, ',' ORDER BY e.id) AS sig FROM timeline_events e JOIN timeline_groups g ON g.id = e.group_id WHERE e.user_id = $1 AND e.record_state = 'active' AND e.occurred_at >= $2 AND e.occurred_at < $3 AND ($5::text IS NULL OR g.value = $5) GROUP BY 1, 2) t GROUP BY day ORDER BY day")
+            .bind(user_id)
+            .bind(input.start_at)
+            .bind(input.end_at)
+            .bind(input.timezone)
+            .bind(input.group_value)
+            .fetch_all(&self.pool)
+            .await?;
+        let revision: Option<i64> =
+            sqlx::query_scalar("SELECT revision FROM timeline_revisions WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(crate::domain::timeline::TimelineDaysResponse {
+            revision: revision.unwrap_or(0),
+            days: rows
+                .into_iter()
+                .map(|row| {
+                    let categories: serde_json::Value = row.get("categories");
+                    let mut categories: Vec<crate::domain::timeline::TimelineCategoryCount> =
+                        categories
+                            .as_object()
+                            .map(|map| {
+                                map.iter()
+                                    .map(|(category, count)| {
+                                        crate::domain::timeline::TimelineCategoryCount {
+                                            category: category.clone(),
+                                            count: count.as_i64().unwrap_or(0),
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                    categories.sort_by(|a, b| a.category.cmp(&b.category));
+                    crate::domain::timeline::TimelineDaySummary {
+                        day: row.get("day"),
+                        count: row.get("count"),
+                        rev: row.get("rev"),
+                        categories,
+                    }
+                })
+                .collect(),
+        })
+    }
+
     pub async fn query_events(
         &self,
         user_id: Uuid,
@@ -250,7 +308,7 @@ impl TimelineRepository {
             None => (None, None),
         };
 
-        let fetch_limit = query.limit.unwrap_or(50).clamp(1, 100);
+        let fetch_limit = query.limit.unwrap_or(30).clamp(1, 30);
 
         let rows = sqlx::query(
             "SELECT e.id, e.user_id, e.event_type_id, e.group_id, e.title, e.summary, \
