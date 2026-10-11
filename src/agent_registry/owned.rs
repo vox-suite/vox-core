@@ -27,7 +27,7 @@ impl AgentRegistry {
         &self,
         context: &ResolvedUserContext,
     ) -> Result<Vec<SelectedAgent>, AgentRegistryError> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         lock_context(&mut tx, context).await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_definitions WHERE owner_user_context_id=$1 AND is_default)")
             .bind(context.id.0).fetch_one(&mut *tx).await?;
@@ -59,7 +59,7 @@ impl AgentRegistry {
         mutation: AgentMutation,
     ) -> Result<(), AgentRegistryError> {
         self.owned_for_context(context).await?;
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         lock_context(&mut tx, context).await?;
         match mutation {
             AgentMutation::Create { name, instructions } => {

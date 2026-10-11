@@ -42,6 +42,22 @@ impl Db {
         Ok(Self { pool })
     }
 
+    pub async fn begin(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+        let pool = self.pool.clone();
+        let started = std::time::Instant::now();
+        let transaction = tokio::spawn(async move { pool.begin().await })
+            .await
+            .map_err(|error| {
+                sqlx::Error::Protocol(format!("transaction initialization failed: {error}"))
+            })?;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            success = transaction.is_ok(),
+            "DB_TRANSACTION_BEGIN"
+        );
+        transaction
+    }
+
     pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
         sqlx::migrate!().run(&self.pool).await
     }

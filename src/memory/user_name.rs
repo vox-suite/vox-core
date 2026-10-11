@@ -78,7 +78,7 @@ impl MemoryService {
         conversation_id: Uuid,
         statement: UserNameStatement,
     ) -> Result<UserNameUpdate, UserNameError> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         active_actor(&mut tx, owner, agent_key).await?;
         sqlx::query_scalar::<_, Uuid>(
             "SELECT id FROM conversations WHERE id=$1 AND user_id=$2 \

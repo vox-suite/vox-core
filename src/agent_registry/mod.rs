@@ -159,7 +159,7 @@ impl AgentRegistry {
         let external_key = normalize(&request.agent_external_key, 255)
             .ok_or(AgentRegistryError::InvalidDefinition)?;
         validate_model_configuration(&request.model_configuration)?;
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         let deployment_id = deployment_id_tx(&mut tx, &deployment_key).await?;
         let definition = load_definition(&mut tx, deployment_id, &external_key).await?;
         let version = sqlx::query_scalar::<_, i32>(

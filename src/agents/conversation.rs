@@ -57,6 +57,7 @@ pub struct ConversationPrompt {
 
 pub struct ConversationAgent {
     api_key: String,
+    web_search: tools::web_search::WebSearch,
     db: Option<Db>,
     memory: Option<crate::memory::MemoryService>,
     connections: Option<crate::fresh_connections::FreshConnectionsService>,
@@ -82,6 +83,12 @@ impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
         Ok(Self {
             api_key: config.gemini_api_key.clone(),
+            web_search: tools::web_search::WebSearch::new(
+                tools::dependencies::ToolDependencies::new()
+                    .map_err(|_| AgentError::Provider)?
+                    .http,
+                config.exa_api_key.clone(),
+            ),
             db: None,
             memory: None,
             connections: None,
@@ -268,11 +275,17 @@ impl ConversationAgent {
                 tools::visits::ListVisits::new(self.db.clone(), prompt.user_id),
                 prompt.correlation.clone(),
             ))
-            .default_max_turns(10)
+            .default_max_turns(10);
+        tracing::info!(conversation_id = ?prompt.correlation.conversation_id, turn_id = ?prompt.correlation.turn_id, tool = "web_search", provider = "exa", available = true, "CORE_TOOL_AVAILABILITY");
+        let agent = agent
+            .tool(tools::timing::TimedTool::new(
+                self.web_search.clone(),
+                prompt.correlation.clone(),
+            ))
             .build();
 
         let mut history = String::new();
-        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse library for enabled skills and owned specialists. Use read_connected_app for permitted Google Calendar and PlayStation reads. Explain freshness, completeness and uncertain gaming timing. Never report an external action as completed without authoritative evidence.\n", prompt.selected_agent.definition.purpose));
+        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse web_search for current weather, news and other time-sensitive public facts. Use the current UTC date in searches, check the requested location and freshness of sources, and never invent live conditions. If search is unavailable or fails, explain that limitation. Use library for enabled skills and owned specialists. Use read_connected_app for permitted Google Calendar and PlayStation reads. Explain freshness, completeness and uncertain gaming timing. Never report an external action as completed without authoritative evidence.\n", prompt.selected_agent.definition.purpose));
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
@@ -744,6 +757,10 @@ mod governed_tool_surface_tests {
     async fn every_channel_exposes_only_governed_library_and_scoped_memory() {
         let agent = ConversationAgent {
             api_key: "fixture-only".into(),
+            web_search: tools::web_search::WebSearch::new(
+                reqwest::Client::new(),
+                "fixture-only".into(),
+            ),
             db: None,
             memory: None,
             connections: None,
@@ -786,9 +803,10 @@ mod governed_tool_surface_tests {
                     "save_timeline_event",
                     "show_on_map",
                     "update_agent_memory",
-                    "update_user_name"
+                    "update_user_name",
+                    "web_search"
                 ],
-                "{channel} must expose only governed tools, the map display tools and WiZ lights"
+                "{channel} must expose governed tools, map display tools, WiZ lights and public web search"
             );
         }
     }

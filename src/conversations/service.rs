@@ -161,6 +161,9 @@ impl ConversationService {
             .load(context.owner(), &selected_agent.definition.external_key)
             .await?;
         tracing::info!(
+            external_conversation_id = %request.external_conversation_id,
+            turn_id = ?request.turn_id,
+            revision = ?request.revision,
             projection_ms = projection_started.elapsed().as_millis() as u64,
             context_bytes = user_context.len(),
             "CORE_CONTEXT_PROJECTION"
@@ -230,6 +233,9 @@ impl ConversationService {
             .await?;
         let opening_wait_ms = opening_started.elapsed().as_millis() as u64;
         tracing::info!(
+            external_conversation_id = %request.external_conversation_id,
+            turn_id = ?request.turn_id,
+            revision = ?request.revision,
             agent_select_ms,
             opening_wait_ms,
             "CORE_AGENT_AND_OPENING_PREPARATION"
@@ -270,18 +276,34 @@ impl ConversationService {
             .await?;
 
         let conversation_resolved = std::time::Instant::now();
-        let (prior_messages_res, known_name_res) = tokio::join!(
-            self.load_recent_messages(conversation_id),
-            self.memory.get_user_name(active_user_id),
+        let ((prior_messages_res, known_name_res, history_loaded), projection_res) = tokio::join!(
+            async {
+                let (messages, name) = tokio::join!(
+                    self.load_recent_messages(conversation_id),
+                    self.memory.get_user_name(active_user_id),
+                );
+                (messages, name, std::time::Instant::now())
+            },
+            async {
+                let phase = std::time::Instant::now();
+                let projection = self
+                    .memory
+                    .load(context.owner(), &selected_agent.definition.external_key)
+                    .await;
+                projection.map(|text| (text, phase.elapsed().as_millis() as u64))
+            }
         );
         let prior_messages = prior_messages_res?;
         let known_name = known_name_res?;
-        let history_loaded = std::time::Instant::now();
+        let (user_context, projection_ms) = projection_res?;
 
         let needs_onboarding = known_name
             .as_deref()
             .is_none_or(|name| name.trim().is_empty());
         tracing::info!(
+            external_conversation_id = %request.external_conversation_id,
+            turn_id = ?request.turn_id,
+            revision = ?request.revision,
             agent_select_ms,
             opening_wait_ms,
             conversation_ms = conversation_resolved
@@ -349,14 +371,12 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         let active_owner = context.owner();
-        let projection_started = std::time::Instant::now();
-        let user_context = self
-            .memory
-            .load(context.owner(), &selected_agent.definition.external_key)
-            .await?;
 
         tracing::info!(
-            projection_ms = projection_started.elapsed().as_millis() as u64,
+            external_conversation_id = %request.external_conversation_id,
+            turn_id = ?request.turn_id,
+            revision = ?request.revision,
+            projection_ms,
             context_bytes = user_context.len(),
             "CORE_CONTEXT_PROJECTION"
         );
@@ -496,17 +516,25 @@ impl ConversationService {
         let started = std::time::Instant::now();
         let owner = context.owner();
         // A channel identity is presentation data, never a cache authority key.
-        let name = self.memory.get_user_name(owner.user_id).await?;
-        let name_ms = started.elapsed().as_millis() as u64;
-        let conversation_started = std::time::Instant::now();
-        self.resolve_conversation(
-            owner,
-            &request.identity.channel,
-            &request.external_conversation_id,
-            &request.agent_external_key,
-        )
-        .await?;
-        let conversation_ms = conversation_started.elapsed().as_millis() as u64;
+        let ((name, name_ms), (_, conversation_ms)) = tokio::try_join!(
+            async {
+                let phase = std::time::Instant::now();
+                let name = self.memory.get_user_name(owner.user_id).await?;
+                Ok::<_, ConversationError>((name, phase.elapsed().as_millis() as u64))
+            },
+            async {
+                let phase = std::time::Instant::now();
+                let conversation = self
+                    .resolve_conversation(
+                        owner,
+                        &request.identity.channel,
+                        &request.external_conversation_id,
+                        &request.agent_external_key,
+                    )
+                    .await?;
+                Ok::<_, ConversationError>((conversation, phase.elapsed().as_millis() as u64))
+            }
+        )?;
         let name = name
             .as_deref()
             .map(str::trim)
@@ -517,6 +545,9 @@ impl ConversationService {
                 .to_owned(),
         };
         let channel = request.identity.channel.clone();
+        let external_conversation_id = request.external_conversation_id.clone();
+        let turn_id = request.turn_id.clone();
+        let revision = request.revision;
         let key = Self::opening_key(owner, &request.identity, &request.external_conversation_id);
         let mut openings = self.openings.lock().await;
         if !openings.contains_key(&key) {
@@ -545,6 +576,9 @@ impl ConversationService {
         drop(openings);
         tracing::info!(
             user_id = %owner.user_id.0,
+            external_conversation_id = %external_conversation_id,
+            turn_id = ?turn_id,
+            revision,
             channel = %channel,
             name_known = name.is_some(), name_ms, conversation_ms,
             total_ms = started.elapsed().as_millis(),
@@ -568,7 +602,7 @@ impl ConversationService {
                 &request.agent_external_key,
             )
             .await?;
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(conversation_id.0.to_string())
             .execute(&mut *tx)
@@ -620,7 +654,7 @@ impl ConversationService {
             None => return Ok(()),
         };
 
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         let changed = sqlx::query(
             "UPDATE conversations \
              SET state = 'completed', \
@@ -717,7 +751,7 @@ impl ConversationService {
         user_text: &str,
         assistant_text: &str,
     ) -> Result<(), ConversationError> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(conversation_id.0.to_string())
             .execute(&mut *tx)
@@ -740,7 +774,7 @@ impl ConversationService {
         role: &str,
         text: &str,
     ) -> Result<(), ConversationError> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(conversation_id.0.to_string())
             .execute(&mut *tx)

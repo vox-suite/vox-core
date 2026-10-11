@@ -18,7 +18,7 @@ struct AgentMemoryProjection {
 }
 
 pub async fn build(db: &Db, owner: ResourceOwner, agent_key: &str) -> Result<String, sqlx::Error> {
-    let mut tx = db.pool().begin().await?;
+    let mut tx = db.begin().await?;
     let actor = super::active_actor(&mut tx, owner, agent_key).await?;
     let settings=sqlx::query_as::<_,(Value,bool,chrono::DateTime<chrono::Utc>)>("SELECT facts,retention_enabled,cleared_at FROM agent_memories WHERE user_context_id=$1 AND agent_id=$2")
         .bind(owner.user_context_id.0).bind(actor).fetch_optional(&mut *tx).await?

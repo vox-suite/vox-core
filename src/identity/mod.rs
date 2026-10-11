@@ -301,7 +301,7 @@ impl IdentityService {
             return Ok(context);
         }
 
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         let new_user =
             sqlx::query_scalar::<_, Uuid>("INSERT INTO users DEFAULT VALUES RETURNING id")
                 .fetch_one(&mut *tx)

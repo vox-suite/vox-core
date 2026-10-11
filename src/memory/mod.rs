@@ -218,7 +218,7 @@ impl MemoryService {
         {
             return Err(sqlx::Error::Protocol("agent facts exceed 8 KiB".into()));
         }
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         let actor = active_actor(&mut tx, owner, agent_key).await?;
         let saved = sqlx::query_scalar("INSERT INTO agent_memories(user_context_id,agent_id,facts) VALUES($1,$2,$3) ON CONFLICT(user_context_id,agent_id) DO UPDATE SET facts=agent_memories.facts || EXCLUDED.facts,version=agent_memories.version+1,updated_at=now() WHERE agent_memories.retention_enabled RETURNING facts")
             .bind(owner.user_context_id.0).bind(actor).bind(delta).fetch_optional(&mut *tx).await?.ok_or(sqlx::Error::RowNotFound)?;
@@ -497,7 +497,7 @@ impl MemoryService {
         agent_key: &str,
         operation: MemoryOperation,
     ) -> Result<AgentMemoryView, sqlx::Error> {
-        let mut tx = self.db.pool().begin().await?;
+        let mut tx = self.db.begin().await?;
         let actor = active_actor(&mut tx, owner, agent_key).await?;
         match operation {
             MemoryOperation::Read => {}
