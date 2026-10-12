@@ -277,6 +277,14 @@ pub fn build_api_router(state: ApiState) -> Router {
                 .delete(crate::routes::projects::archive),
         )
         .route(
+            "/v1/me/projects/{id}/agent",
+            get(crate::routes::projects::agent_config),
+        )
+        .route(
+            "/v1/me/projects/{id}/agent/{action}",
+            post(crate::routes::projects::agent_model),
+        )
+        .route(
             "/v1/me/projects/{id}/chat",
             post(crate::routes::projects::chat),
         )

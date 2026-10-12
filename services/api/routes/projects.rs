@@ -283,3 +283,113 @@ pub async fn attach(
     notify(&state, actor.user_id, id);
     Ok(StatusCode::NO_CONTENT)
 }
+
+fn investigation_model(state: &ApiState) -> String {
+    std::env::var("VOX_PROJECT_AGENT_MODEL")
+        .ok()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 100
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        })
+        .unwrap_or_else(|| state.project_ai_model.clone())
+}
+#[utoipa::path(get, path="/v1/me/projects/{id}/agent", tag="projects", params(("id"=Uuid,Path)), responses((status=200)))]
+pub async fn agent_config(
+    State(state): State<ApiState>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    ProjectRepository(state.pool.clone())
+        .get(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(
+        json!({"model":investigation_model(&state),"available":!state.project_ai_key.is_empty()}),
+    ))
+}
+fn model_budget(user: Uuid) -> Result<(), StatusCode> {
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
+    static BUDGET: OnceLock<Mutex<HashMap<Uuid, (Instant, u16)>>> = OnceLock::new();
+    let mut budgets = BUDGET
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let now = Instant::now();
+    budgets.retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(600));
+    if budgets.len() >= 10000 && !budgets.contains_key(&user) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let (_, count) = budgets.entry(user).or_insert((now, 0));
+    if *count >= 180 {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    *count += 1;
+    Ok(())
+}
+#[utoipa::path(post, path="/v1/me/projects/{id}/agent/{action}", tag="projects", params(("id"=Uuid,Path),("action"=String,Path)), responses((status=200)))]
+pub async fn agent_model(
+    State(state): State<ApiState>,
+    Extension(actor): Extension<Actor>,
+    Path((id, action)): Path<(Uuid, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<axum::response::Response, StatusCode> {
+    if !matches!(
+        action.as_str(),
+        "generateContent" | "streamGenerateContent" | "countTokens"
+    ) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if serde_json::to_vec(&body)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .len()
+        > 2_000_000
+    {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    ProjectRepository(state.pool.clone())
+        .get(actor.user_id, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    model_budget(actor.user_id)?;
+    if state.project_ai_key.is_empty() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let model = investigation_model(&state);
+    let mut url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}");
+    if action == "streamGenerateContent" {
+        url.push_str("?alt=sse");
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response = client
+        .post(url)
+        .header("x-goog-api-key", &state.project_ai_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    axum::response::Response::builder()
+        .status(status.as_u16())
+        .header("content-type", content_type)
+        .body(axum::body::Body::from_stream(response.bytes_stream()))
+        .map_err(|_| StatusCode::BAD_GATEWAY)
+}

@@ -11,6 +11,8 @@ use utoipa::OpenApi;
     crate::routes::projects::update,
     crate::routes::projects::archive,
     crate::routes::projects::chat,
+    crate::routes::projects::agent_config,
+    crate::routes::projects::agent_model,
     crate::routes::projects::attach,
     crate::routes::desktop_voice::bootstrap,
     crate::routes::desktop_actions::execute,
