@@ -1371,6 +1371,7 @@
       },
       "ProjectFlow": {
         "properties": {
+          "diagram": {},
           "edges": {
             "items": {
               "$ref": "#/components/schemas/ProjectFlowEdge"

@@ -79,6 +79,8 @@ pub struct ProjectFlow {
     pub edges: Vec<ProjectFlowEdge>,
     #[serde(default)]
     pub gaps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagram: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -160,7 +162,24 @@ impl ProjectData {
                     && m.body.len() <= 20000
                     && m.proposals.len() <= 12
                     && m.flow.as_ref().is_none_or(|f| {
-                        f.title.len() <= 300
+                        f.diagram.as_ref().is_none_or(|diagram| {
+                            diagram.is_object()
+                                && diagram
+                                    .get("diagram_type")
+                                    .and_then(|v| v.as_str())
+                                    .is_some_and(|kind| {
+                                        matches!(
+                                            kind,
+                                            "architecture"
+                                                | "workflow"
+                                                | "sequence"
+                                                | "dataflow"
+                                                | "lifecycle"
+                                        )
+                                    })
+                                && serde_json::to_vec(diagram)
+                                    .is_ok_and(|data| data.len() <= 100_000)
+                        }) && f.title.len() <= 300
                             && f.nodes.len() <= 40
                             && f.edges.len() <= 80
                             && f.gaps.len() <= 20
