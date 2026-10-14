@@ -26,4 +26,4 @@ Historical connector/grant records are retained as `retired_*` relations to pres
 2. Deploy the coordinated Core/native candidate with forward migrations and protected Core configuration. Validate production health and worker scheduling separately from source checks.
 3. Authorize real Google Calendar and PlayStation accounts on desktop and Android; verify linking, resume/reconnect, token refresh, independent preferences, bounded assistant reads and live timeline updates. Fixture tests and native builds are not live-provider or device acceptance evidence.
 
-Steam, Valorant, Amazon shopper data and Zomato tracking are outside this release. Existing map, voice and visual behavior is preserved.
+Steam, Valorant and Amazon shopper data are outside this release. Existing map, voice and visual behavior is preserved.

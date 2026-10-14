@@ -48,7 +48,7 @@ production provider:
 cargo test --locked
 ```
 
-This release supports Google Calendar and PlayStation connections. Steam, Valorant, Amazon shopper data and Zomato tracking remain outside this release. The older [provider research](docs/provider-feasibility.md) is historical and does not describe shipped functionality.
+This release supports Google Calendar and PlayStation connections. Steam, Valorant and Amazon shopper data remain outside this release. The older [provider research](docs/provider-feasibility.md) is historical and does not describe shipped functionality.
 
 The canonical deployment, host-app, optional organization, and host-user
 isolation contract is documented in

@@ -60,7 +60,6 @@ fn provider(id: &str) -> (&'static str, &'static str) {
         "spotify" => ("Spotify", "#1db954"),
         "youtube" => ("YouTube", "#ff0033"),
         "swiggy" => ("Swiggy", "#fc8019"),
-        "zomato" => ("Zomato", "#cb202d"),
         "google" | "google_calendar" => ("Google Calendar", "#3c90ff"),
         _ => ("Your account", "#ff6363"),
     }
