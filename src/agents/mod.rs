@@ -5,6 +5,7 @@ pub mod chart_suggester;
 pub mod conversation;
 pub mod event_agent;
 pub mod event_planner;
+pub mod project_ideation;
 pub mod prompts;
 pub mod schema_extractor;
 pub mod space_architect;
@@ -26,4 +27,3 @@ pub enum AgentError {
     Provider,
 }
 
-pub mod project_ideation;

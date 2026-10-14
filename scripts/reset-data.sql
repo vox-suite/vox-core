@@ -62,7 +62,9 @@ TRUNCATE
     status_webhook_subscriptions,
     user_notifications,
     user_preferences,
-    verified_integration_events;
+    verified_integration_events,
+    waitlist,
+    waitlist_tasks;
 
 DELETE FROM deployment_agent_selections
 WHERE agent_definition_id IN (SELECT id FROM agent_definitions WHERE owner_user_context_id IS NOT NULL);
