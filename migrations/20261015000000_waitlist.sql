@@ -21,26 +21,26 @@ ALTER TABLE public.waitlist_tasks ENABLE ROW LEVEL SECURITY;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'waitlist' AND policyname = 'anyone can join the waitlist'
-        ) THEN
-            CREATE POLICY "anyone can join the waitlist"
-                ON public.waitlist FOR INSERT
-                TO anon
-                WITH CHECK (true);
-        END IF;
+        DROP POLICY IF EXISTS "anyone can join the waitlist" ON public.waitlist;
+        DROP POLICY IF EXISTS "waitlist_anon_all" ON public.waitlist;
 
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'waitlist_tasks' AND policyname = 'anyone can add a task'
-        ) THEN
-            CREATE POLICY "anyone can add a task"
-                ON public.waitlist_tasks FOR INSERT
-                TO anon
-                WITH CHECK (true);
-        END IF;
+        CREATE POLICY "waitlist_anon_all"
+            ON public.waitlist FOR ALL
+            TO anon, authenticated
+            USING (true)
+            WITH CHECK (true);
 
-        GRANT SELECT, INSERT ON TABLE public.waitlist TO anon;
-        GRANT SELECT, INSERT ON TABLE public.waitlist_tasks TO anon;
+        DROP POLICY IF EXISTS "anyone can add a task" ON public.waitlist_tasks;
+        DROP POLICY IF EXISTS "waitlist_tasks_anon_all" ON public.waitlist_tasks;
+
+        CREATE POLICY "waitlist_tasks_anon_all"
+            ON public.waitlist_tasks FOR ALL
+            TO anon, authenticated
+            USING (true)
+            WITH CHECK (true);
+
+        GRANT ALL ON TABLE public.waitlist TO anon, authenticated;
+        GRANT ALL ON TABLE public.waitlist_tasks TO anon, authenticated;
     END IF;
 
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
