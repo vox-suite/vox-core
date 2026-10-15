@@ -26,4 +26,3 @@ pub enum AgentError {
     #[error("agent provider request failed")]
     Provider,
 }
-
