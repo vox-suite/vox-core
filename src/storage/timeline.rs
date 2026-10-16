@@ -237,23 +237,45 @@ impl TimelineRepository {
                 "invalid timezone or date range; maximum 366 days".into(),
             ));
         }
-        let rows = sqlx::query("SELECT day, sum(cnt)::bigint AS count, left(md5(string_agg(sig, ',' ORDER BY category)), 12) AS rev, jsonb_object_agg(category, cnt) AS categories FROM (SELECT (e.occurred_at AT TIME ZONE $4)::date::text AS day, g.value AS category, count(*)::bigint AS cnt, string_agg(e.id::text || ':' || e.revision::text, ',' ORDER BY e.id) AS sig FROM timeline_events e JOIN timeline_groups g ON g.id = e.group_id WHERE e.user_id = $1 AND e.record_state = 'active' AND e.occurred_at >= $2 AND e.occurred_at < $3 AND ($5::text IS NULL OR g.value = $5) GROUP BY 1, 2) t GROUP BY day ORDER BY day")
-            .bind(user_id)
-            .bind(input.start_at)
-            .bind(input.end_at)
-            .bind(input.timezone)
-            .bind(input.group_value)
-            .fetch_all(&self.pool)
-            .await?;
-        let revision: Option<i64> =
-            sqlx::query_scalar("SELECT revision FROM timeline_revisions WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        // One statement keeps the revision and summaries on the same snapshot.
+        let rows = sqlx::query(
+            "SELECT days.*, coalesce(r.revision, 0)::bigint AS global_revision
+             FROM (SELECT $1::uuid AS user_id) owner
+             LEFT JOIN timeline_revisions r ON r.user_id = owner.user_id
+             LEFT JOIN (
+                 SELECT day, sum(cnt)::bigint AS count,
+                        left(md5(string_agg(sig, ',' ORDER BY category)), 12) AS rev,
+                        jsonb_object_agg(category, cnt) AS categories
+                 FROM (
+                     SELECT (e.occurred_at AT TIME ZONE $4)::date::text AS day,
+                            g.value AS category, count(*)::bigint AS cnt,
+                            string_agg(e.id::text || ':' || e.revision::text, ',' ORDER BY e.id) AS sig
+                     FROM timeline_events e JOIN timeline_groups g ON g.id = e.group_id
+                     WHERE e.user_id = $1 AND e.record_state = 'active'
+                       AND e.occurred_at >= $2 AND e.occurred_at < $3
+                       AND ($5::text IS NULL OR g.value = $5)
+                     GROUP BY 1, 2
+                 ) categories_per_day
+                 GROUP BY day
+             ) days ON true
+             ORDER BY days.day",
+        )
+        .bind(user_id)
+        .bind(input.start_at)
+        .bind(input.end_at)
+        .bind(input.timezone)
+        .bind(input.group_value)
+        .fetch_all(&self.pool)
+        .await?;
+        let revision: i64 = rows
+            .first()
+            .map(|row| row.get("global_revision"))
+            .unwrap_or(0);
         Ok(crate::domain::timeline::TimelineDaysResponse {
-            revision: revision.unwrap_or(0),
+            revision,
             days: rows
                 .into_iter()
+                .filter(|row| row.get::<Option<String>, _>("day").is_some())
                 .map(|row| {
                     let categories: serde_json::Value = row.get("categories");
                     let mut categories: Vec<crate::domain::timeline::TimelineCategoryCount> =

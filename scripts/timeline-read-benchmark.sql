@@ -1,5 +1,20 @@
 \set ON_ERROR_STOP on
--- Run only on the isolated synthetic database described in the audit.
+-- Synthetic fixtures only. Requires the full Core migrations and a database
+-- named timeline_perf. No production credentials or data are needed.
+DO $$ BEGIN
+    IF current_database() <> 'timeline_perf' THEN
+        RAISE EXCEPTION 'This benchmark requires the isolated timeline_perf database';
+    END IF;
+END $$;
+INSERT INTO users(id) VALUES ('11111111-1111-4111-8111-111111111111') ON CONFLICT DO NOTHING;
+INSERT INTO timeline_events(user_id,event_type_id,group_id,title,occurred_at,content)
+SELECT '11111111-1111-4111-8111-111111111111', t.id,t.group_id,'Synthetic purchase',
+       timestamptz '2026-01-01' + ((n % 180) * interval '1 day'),
+       '{"is_spending":true,"merchant":"Synthetic Cafe"}'::jsonb
+FROM generate_series(1,200000) n
+CROSS JOIN (SELECT id,group_id FROM timeline_event_types WHERE value='transaction' AND owner_user_id IS NULL LIMIT 1) t
+WHERE NOT EXISTS (SELECT 1 FROM timeline_events WHERE user_id='11111111-1111-4111-8111-111111111111');
+ANALYZE timeline_events;
 SET plan_cache_mode=force_generic_plan;
 BEGIN;
 DROP INDEX timeline_events_active_cursor_idx;

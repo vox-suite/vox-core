@@ -1,0 +1,362 @@
+Synthetic PostgreSQL 17 evidence; see timeline-performance-audit-2026-10-16.md.
+
+FINAL GENERIC PLAN RUN
+DO
+INSERT 0 0
+INSERT 0 0
+ANALYZE
+SET
+BEGIN
+DROP INDEX
+DROP INDEX
+CREATE INDEX
+PREPARE
+                                                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                                                         
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=9384
+   ->  Sort  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Sort Method: top-N heapsort  Memory: 38kB
+         Buffers: shared hit=9384
+         ->  Nested Loop  (cost=1539.61..8545.38 rows=1 width=294) (actual rows=1111 loops=1)
+               Join Filter: ((et.id = e.event_type_id) AND ((NOT COALESCE($12, false)) OR ((et.value = 'transaction'::text) AND ((e.content ->> 'is_spending'::text) = 'true'::text) AND (lower(COALESCE((e.content ->> 'status'::text), ''::text)) <> ALL ('{pending,failed,declined,authorization,authorized,attempted}'::text[])))))
+               Rows Removed by Join Filter: 5555
+               Buffers: shared hit=9384
+               ->  Gather  (cost=1539.61..8532.03 rows=1 width=291) (actual rows=1111 loops=1)
+                     Workers Planned: 2
+                     Workers Launched: 2
+                     Buffers: shared hit=6051
+                     ->  Nested Loop  (cost=539.61..7531.93 rows=1 width=291) (actual rows=370 loops=3)
+                           Buffers: shared hit=6051
+                           ->  Parallel Bitmap Heap Scan on timeline_events e  (cost=539.45..7524.63 rows=2 width=291) (actual rows=370 loops=3)
+                                 Recheck Cond: (user_id = $1)
+                                 Filter: ((($2 IS NULL) OR (group_id = $2)) AND (($4 IS NULL) OR (event_type_id = $4)) AND (($6 IS NULL) OR (occurred_at >= $6)) AND (($7 IS NULL) OR (occurred_at < $7)) AND (($8 IS NULL) OR (record_state = $8)) AND (($9 IS NULL) OR (ROW(occurred_at, id) < ROW($9, $10))) AND (($14 IS NULL) OR (lower(COALESCE((content ->> 'category'::text), ''::text)) = lower($14))) AND (($13 IS NULL) OR (strpos(lower(COALESCE((content ->> 'merchant'::text), ''::text)), lower($13)) > 0)))
+                                 Rows Removed by Filter: 66296
+                                 Heap Blocks: exact=1837
+                                 Buffers: shared hit=6043
+                                 ->  Bitmap Index Scan on timeline_events_user_state_idx  (cost=0.00..539.44 rows=50020 width=0) (actual rows=200000 loops=1)
+                                       Index Cond: (user_id = $1)
+                                       Buffers: shared hit=160
+                           ->  Memoize  (cost=0.16..4.85 rows=1 width=16) (actual rows=1 loops=1111)
+                                 Cache Key: e.group_id
+                                 Cache Mode: logical
+                                 Hits: 361  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Buffers: shared hit=8
+                                 Worker 0:  Hits: 366  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Worker 1:  Hits: 381  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 ->  Index Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..4.84 rows=1 width=16) (actual rows=1 loops=3)
+                                       Index Cond: (id = e.group_id)
+                                       Filter: (($3 IS NULL) OR (value = $3))
+                                       Buffers: shared hit=8
+               ->  Seq Scan on timeline_event_types et  (cost=0.00..13.25 rows=3 width=48) (actual rows=6 loops=1111)
+                     Filter: (($5 IS NULL) OR (value = $5))
+                     Buffers: shared hit=3333
+ Planning:
+   Buffers: shared hit=184 read=1
+ Planning Time: 0.806 ms
+ Execution Time: 26.152 ms
+(43 rows)
+
+                                                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                                                         
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=9384
+   ->  Sort  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Sort Method: top-N heapsort  Memory: 38kB
+         Buffers: shared hit=9384
+         ->  Nested Loop  (cost=1539.61..8545.38 rows=1 width=294) (actual rows=1111 loops=1)
+               Join Filter: ((et.id = e.event_type_id) AND ((NOT COALESCE($12, false)) OR ((et.value = 'transaction'::text) AND ((e.content ->> 'is_spending'::text) = 'true'::text) AND (lower(COALESCE((e.content ->> 'status'::text), ''::text)) <> ALL ('{pending,failed,declined,authorization,authorized,attempted}'::text[])))))
+               Rows Removed by Join Filter: 5555
+               Buffers: shared hit=9384
+               ->  Gather  (cost=1539.61..8532.03 rows=1 width=291) (actual rows=1111 loops=1)
+                     Workers Planned: 2
+                     Workers Launched: 2
+                     Buffers: shared hit=6051
+                     ->  Nested Loop  (cost=539.61..7531.93 rows=1 width=291) (actual rows=370 loops=3)
+                           Buffers: shared hit=6051
+                           ->  Parallel Bitmap Heap Scan on timeline_events e  (cost=539.45..7524.63 rows=2 width=291) (actual rows=370 loops=3)
+                                 Recheck Cond: (user_id = $1)
+                                 Filter: ((($2 IS NULL) OR (group_id = $2)) AND (($4 IS NULL) OR (event_type_id = $4)) AND (($6 IS NULL) OR (occurred_at >= $6)) AND (($7 IS NULL) OR (occurred_at < $7)) AND (($8 IS NULL) OR (record_state = $8)) AND (($9 IS NULL) OR (ROW(occurred_at, id) < ROW($9, $10))) AND (($14 IS NULL) OR (lower(COALESCE((content ->> 'category'::text), ''::text)) = lower($14))) AND (($13 IS NULL) OR (strpos(lower(COALESCE((content ->> 'merchant'::text), ''::text)), lower($13)) > 0)))
+                                 Rows Removed by Filter: 66296
+                                 Heap Blocks: exact=3890
+                                 Buffers: shared hit=6043
+                                 ->  Bitmap Index Scan on timeline_events_user_state_idx  (cost=0.00..539.44 rows=50020 width=0) (actual rows=200000 loops=1)
+                                       Index Cond: (user_id = $1)
+                                       Buffers: shared hit=160
+                           ->  Memoize  (cost=0.16..4.85 rows=1 width=16) (actual rows=1 loops=1111)
+                                 Cache Key: e.group_id
+                                 Cache Mode: logical
+                                 Hits: 773  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Buffers: shared hit=8
+                                 Worker 0:  Hits: 223  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Worker 1:  Hits: 112  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 ->  Index Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..4.84 rows=1 width=16) (actual rows=1 loops=3)
+                                       Index Cond: (id = e.group_id)
+                                       Filter: (($3 IS NULL) OR (value = $3))
+                                       Buffers: shared hit=8
+               ->  Seq Scan on timeline_event_types et  (cost=0.00..13.25 rows=3 width=48) (actual rows=6 loops=1111)
+                     Filter: (($5 IS NULL) OR (value = $5))
+                     Buffers: shared hit=3333
+ Planning Time: 0.035 ms
+ Execution Time: 39.360 ms
+(41 rows)
+
+                                                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                                                         
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=9384
+   ->  Sort  (cost=8545.39..8545.40 rows=1 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Sort Method: top-N heapsort  Memory: 38kB
+         Buffers: shared hit=9384
+         ->  Nested Loop  (cost=1539.61..8545.38 rows=1 width=294) (actual rows=1111 loops=1)
+               Join Filter: ((et.id = e.event_type_id) AND ((NOT COALESCE($12, false)) OR ((et.value = 'transaction'::text) AND ((e.content ->> 'is_spending'::text) = 'true'::text) AND (lower(COALESCE((e.content ->> 'status'::text), ''::text)) <> ALL ('{pending,failed,declined,authorization,authorized,attempted}'::text[])))))
+               Rows Removed by Join Filter: 5555
+               Buffers: shared hit=9384
+               ->  Gather  (cost=1539.61..8532.03 rows=1 width=291) (actual rows=1111 loops=1)
+                     Workers Planned: 2
+                     Workers Launched: 2
+                     Buffers: shared hit=6051
+                     ->  Nested Loop  (cost=539.61..7531.93 rows=1 width=291) (actual rows=370 loops=3)
+                           Buffers: shared hit=6051
+                           ->  Parallel Bitmap Heap Scan on timeline_events e  (cost=539.45..7524.63 rows=2 width=291) (actual rows=370 loops=3)
+                                 Recheck Cond: (user_id = $1)
+                                 Filter: ((($2 IS NULL) OR (group_id = $2)) AND (($4 IS NULL) OR (event_type_id = $4)) AND (($6 IS NULL) OR (occurred_at >= $6)) AND (($7 IS NULL) OR (occurred_at < $7)) AND (($8 IS NULL) OR (record_state = $8)) AND (($9 IS NULL) OR (ROW(occurred_at, id) < ROW($9, $10))) AND (($14 IS NULL) OR (lower(COALESCE((content ->> 'category'::text), ''::text)) = lower($14))) AND (($13 IS NULL) OR (strpos(lower(COALESCE((content ->> 'merchant'::text), ''::text)), lower($13)) > 0)))
+                                 Rows Removed by Filter: 66296
+                                 Heap Blocks: exact=2415
+                                 Buffers: shared hit=6043
+                                 ->  Bitmap Index Scan on timeline_events_user_state_idx  (cost=0.00..539.44 rows=50020 width=0) (actual rows=200000 loops=1)
+                                       Index Cond: (user_id = $1)
+                                       Buffers: shared hit=160
+                           ->  Memoize  (cost=0.16..4.85 rows=1 width=16) (actual rows=1 loops=1111)
+                                 Cache Key: e.group_id
+                                 Cache Mode: logical
+                                 Hits: 465  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Buffers: shared hit=8
+                                 Worker 0:  Hits: 360  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 Worker 1:  Hits: 283  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                                 ->  Index Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..4.84 rows=1 width=16) (actual rows=1 loops=3)
+                                       Index Cond: (id = e.group_id)
+                                       Filter: (($3 IS NULL) OR (value = $3))
+                                       Buffers: shared hit=8
+               ->  Seq Scan on timeline_event_types et  (cost=0.00..13.25 rows=3 width=48) (actual rows=6 loops=1111)
+                     Filter: (($5 IS NULL) OR (value = $5))
+                     Buffers: shared hit=3333
+ Planning Time: 0.036 ms
+ Execution Time: 35.476 ms
+(41 rows)
+
+ROLLBACK
+PREPARE
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..45.56 rows=25 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..451.78 rows=250 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = $1) AND (occurred_at >= $2) AND (occurred_at < $3))
+         Buffers: shared hit=34
+ Planning:
+   Buffers: shared hit=56
+ Planning Time: 0.489 ms
+ Execution Time: 0.108 ms
+(9 rows)
+
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..45.56 rows=25 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..451.78 rows=250 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = $1) AND (occurred_at >= $2) AND (occurred_at < $3))
+         Buffers: shared hit=34
+ Planning Time: 0.032 ms
+ Execution Time: 0.099 ms
+(7 rows)
+
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..45.56 rows=25 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..451.78 rows=250 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = $1) AND (occurred_at >= $2) AND (occurred_at < $3))
+         Buffers: shared hit=34
+ Planning Time: 0.031 ms
+ Execution Time: 0.133 ms
+(7 rows)
+
+
+CUSTOM PLAN RUN
+SET
+BEGIN
+DROP INDEX
+DROP INDEX
+CREATE INDEX
+PREPARE
+                                                                                                                   QUERY PLAN                                                                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=10.20..64.25 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=1121
+   ->  Incremental Sort  (cost=10.20..1741.61 rows=993 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Presorted Key: e.occurred_at
+         Full-sort Groups: 1  Sort Method: top-N heapsort  Average Memory: 38kB  Peak Memory: 38kB
+         Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 36kB  Peak Memory: 36kB
+         Buffers: shared hit=1121
+         ->  Nested Loop  (cost=0.61..1713.36 rows=993 width=294) (actual rows=1111 loops=1)
+               Buffers: shared hit=1118
+               ->  Nested Loop  (cost=0.45..1685.69 rows=993 width=291) (actual rows=1111 loops=1)
+                     Buffers: shared hit=1116
+                     ->  Index Scan using timeline_events_user_occurred_idx on timeline_events e  (cost=0.29..1660.47 rows=993 width=291) (actual rows=1111 loops=1)
+                           Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+                           Filter: (record_state = 'active'::text)
+                           Buffers: shared hit=1114
+                     ->  Memoize  (cost=0.16..0.23 rows=1 width=16) (actual rows=1 loops=1111)
+                           Cache Key: e.group_id
+                           Cache Mode: logical
+                           Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                           Buffers: shared hit=2
+                           ->  Index Only Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..0.22 rows=1 width=16) (actual rows=1 loops=1)
+                                 Index Cond: (id = e.group_id)
+                                 Heap Fetches: 1
+                                 Buffers: shared hit=2
+               ->  Memoize  (cost=0.16..0.22 rows=1 width=16) (actual rows=1 loops=1111)
+                     Cache Key: e.event_type_id
+                     Cache Mode: logical
+                     Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                     Buffers: shared hit=2
+                     ->  Index Only Scan using timeline_event_types_id_group_uniq on timeline_event_types et  (cost=0.15..0.21 rows=1 width=16) (actual rows=1 loops=1)
+                           Index Cond: (id = e.event_type_id)
+                           Heap Fetches: 1
+                           Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=418 read=1
+ Planning Time: 0.631 ms
+ Execution Time: 1.493 ms
+(38 rows)
+
+                                                                                                                   QUERY PLAN                                                                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=10.20..64.25 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=1118
+   ->  Incremental Sort  (cost=10.20..1741.61 rows=993 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Presorted Key: e.occurred_at
+         Full-sort Groups: 1  Sort Method: top-N heapsort  Average Memory: 38kB  Peak Memory: 38kB
+         Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 36kB  Peak Memory: 36kB
+         Buffers: shared hit=1118
+         ->  Nested Loop  (cost=0.61..1713.36 rows=993 width=294) (actual rows=1111 loops=1)
+               Buffers: shared hit=1118
+               ->  Nested Loop  (cost=0.45..1685.69 rows=993 width=291) (actual rows=1111 loops=1)
+                     Buffers: shared hit=1116
+                     ->  Index Scan using timeline_events_user_occurred_idx on timeline_events e  (cost=0.29..1660.47 rows=993 width=291) (actual rows=1111 loops=1)
+                           Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+                           Filter: (record_state = 'active'::text)
+                           Buffers: shared hit=1114
+                     ->  Memoize  (cost=0.16..0.23 rows=1 width=16) (actual rows=1 loops=1111)
+                           Cache Key: e.group_id
+                           Cache Mode: logical
+                           Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                           Buffers: shared hit=2
+                           ->  Index Only Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..0.22 rows=1 width=16) (actual rows=1 loops=1)
+                                 Index Cond: (id = e.group_id)
+                                 Heap Fetches: 1
+                                 Buffers: shared hit=2
+               ->  Memoize  (cost=0.16..0.22 rows=1 width=16) (actual rows=1 loops=1111)
+                     Cache Key: e.event_type_id
+                     Cache Mode: logical
+                     Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                     Buffers: shared hit=2
+                     ->  Index Only Scan using timeline_event_types_id_group_uniq on timeline_event_types et  (cost=0.15..0.21 rows=1 width=16) (actual rows=1 loops=1)
+                           Index Cond: (id = e.event_type_id)
+                           Heap Fetches: 1
+                           Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.170 ms
+ Execution Time: 0.847 ms
+(38 rows)
+
+                                                                                                                   QUERY PLAN                                                                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=10.20..64.25 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=1118
+   ->  Incremental Sort  (cost=10.20..1741.61 rows=993 width=294) (actual rows=31 loops=1)
+         Sort Key: e.occurred_at DESC, e.id DESC
+         Presorted Key: e.occurred_at
+         Full-sort Groups: 1  Sort Method: top-N heapsort  Average Memory: 38kB  Peak Memory: 38kB
+         Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 36kB  Peak Memory: 36kB
+         Buffers: shared hit=1118
+         ->  Nested Loop  (cost=0.61..1713.36 rows=993 width=294) (actual rows=1111 loops=1)
+               Buffers: shared hit=1118
+               ->  Nested Loop  (cost=0.45..1685.69 rows=993 width=291) (actual rows=1111 loops=1)
+                     Buffers: shared hit=1116
+                     ->  Index Scan using timeline_events_user_occurred_idx on timeline_events e  (cost=0.29..1660.47 rows=993 width=291) (actual rows=1111 loops=1)
+                           Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+                           Filter: (record_state = 'active'::text)
+                           Buffers: shared hit=1114
+                     ->  Memoize  (cost=0.16..0.23 rows=1 width=16) (actual rows=1 loops=1111)
+                           Cache Key: e.group_id
+                           Cache Mode: logical
+                           Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                           Buffers: shared hit=2
+                           ->  Index Only Scan using timeline_groups_pkey on timeline_groups g  (cost=0.15..0.22 rows=1 width=16) (actual rows=1 loops=1)
+                                 Index Cond: (id = e.group_id)
+                                 Heap Fetches: 1
+                                 Buffers: shared hit=2
+               ->  Memoize  (cost=0.16..0.22 rows=1 width=16) (actual rows=1 loops=1111)
+                     Cache Key: e.event_type_id
+                     Cache Mode: logical
+                     Hits: 1110  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                     Buffers: shared hit=2
+                     ->  Index Only Scan using timeline_event_types_id_group_uniq on timeline_event_types et  (cost=0.15..0.21 rows=1 width=16) (actual rows=1 loops=1)
+                           Index Cond: (id = e.event_type_id)
+                           Heap Fetches: 1
+                           Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.324 ms
+ Execution Time: 1.011 ms
+(38 rows)
+
+ROLLBACK
+PREPARE
+                                                                                                          QUERY PLAN                                                                                                           
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..53.12 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..1688.60 rows=993 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+         Buffers: shared hit=34
+ Planning:
+   Buffers: shared hit=53
+ Planning Time: 0.158 ms
+ Execution Time: 0.050 ms
+(9 rows)
+
+                                                                                                          QUERY PLAN                                                                                                           
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..53.12 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..1688.60 rows=993 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+         Buffers: shared hit=34
+ Planning:
+   Buffers: shared hit=2
+ Planning Time: 0.066 ms
+ Execution Time: 0.024 ms
+(9 rows)
+
+                                                                                                          QUERY PLAN                                                                                                           
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..53.12 rows=31 width=294) (actual rows=31 loops=1)
+   Buffers: shared hit=34
+   ->  Index Scan using timeline_events_active_cursor_idx on timeline_events e  (cost=0.42..1688.60 rows=993 width=294) (actual rows=31 loops=1)
+         Index Cond: ((user_id = '11111111-1111-4111-8111-111111111111'::uuid) AND (occurred_at >= '2026-02-01 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-02-02 00:00:00+00'::timestamp with time zone))
+         Buffers: shared hit=34
+ Planning:
+   Buffers: shared hit=2
+ Planning Time: 0.059 ms
+ Execution Time: 0.020 ms
+(9 rows)
+
