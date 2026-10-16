@@ -149,9 +149,7 @@ impl PulseService {
         )
         .await
         .map_err(|_| PulseError::Busy)??;
-        self.repo
-            .put_cache(actor.user_id, &key, json!(results), 60)
-            .await?;
+        // execute_cached owns result-cache writes, including concurrent cache hits.
         Ok(results)
     }
     pub async fn measurements(

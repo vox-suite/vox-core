@@ -87,7 +87,9 @@ pub async fn list(
         .list(actor.user_id, q.before)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let next_cursor = if items.len() == 50 {
+    let has_more = items.len() > 50;
+    items.truncate(50);
+    let next_cursor = if has_more {
         items.last().map(|p| p.id)
     } else {
         None
@@ -273,11 +275,13 @@ pub async fn attach(
     Extension(actor): Extension<Actor>,
     Path((id, plan)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, StatusCode> {
-    let _p = ProjectRepository(state.pool.clone())
-        .get(actor.user_id, id)
+    if !ProjectRepository(state.pool.clone())
+        .exists(actor.user_id, id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let rows=sqlx::query("UPDATE spaces SET project_id=$1,updated_at=now() WHERE id=$2 AND user_id=$3 AND state!='dropped' AND run_state!='running'").bind(id).bind(plan).bind(actor.user_id).execute(&state.pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.rows_affected();
     if rows == 0 {
         return Err(StatusCode::CONFLICT);
@@ -303,11 +307,13 @@ pub async fn agent_config(
     Extension(actor): Extension<Actor>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    ProjectRepository(state.pool.clone())
-        .get(actor.user_id, id)
+    if !ProjectRepository(state.pool.clone())
+        .exists(actor.user_id, id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     Ok(Json(
         json!({"model":investigation_model(&state),"available":!state.project_ai_key.is_empty()}),
     ))
@@ -355,11 +361,13 @@ pub async fn agent_model(
     {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    ProjectRepository(state.pool.clone())
-        .get(actor.user_id, id)
+    if !ProjectRepository(state.pool.clone())
+        .exists(actor.user_id, id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     model_budget(actor.user_id)?;
     if state.project_ai_key.is_empty() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
@@ -370,10 +378,16 @@ pub async fn agent_model(
     if action == "streamGenerateContent" {
         url.push_str("?alt=sse");
     }
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, reqwest::Error>> =
+        std::sync::OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+        })
+        .as_ref()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let response = client
         .post(url)

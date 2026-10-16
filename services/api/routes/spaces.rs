@@ -186,7 +186,7 @@ pub async fn list_spaces(
     Extension(actor): Extension<Actor>,
     Query(query): Query<ListSpacesQuery>,
 ) -> Result<Json<Vec<Space>>, StatusCode> {
-    let mut spaces = state
+    let spaces = state
         .spaces
         .list_spaces(
             actor.user_id,
@@ -198,14 +198,10 @@ pub async fn list_spaces(
                 .as_deref()
                 .filter(|s| matches!(*s, "active" | "committed")),
             query.sort.as_deref(),
+            query.summary,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if query.summary {
-        for space in &mut spaces {
-            space.agent_spec = json!({});
-        }
-    }
     Ok(Json(spaces))
 }
 

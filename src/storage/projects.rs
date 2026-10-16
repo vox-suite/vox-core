@@ -19,6 +19,16 @@ fn map(row: PgRow) -> Result<Project, sqlx::Error> {
 }
 
 impl ProjectRepository {
+    pub async fn exists(&self, user: Uuid, id: Uuid) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND NOT archived)",
+        )
+        .bind(user)
+        .bind(id)
+        .fetch_one(&self.0)
+        .await
+    }
+
     pub async fn get(&self, user: Uuid, id: Uuid) -> Result<Option<Project>, sqlx::Error> {
         sqlx::query("SELECT * FROM projects WHERE user_id=$1 AND id=$2 AND NOT archived")
             .bind(user)
@@ -28,12 +38,28 @@ impl ProjectRepository {
             .map(map)
             .transpose()
     }
+    /// Returns up to 51 summaries; the API returns 50 and uses the last as lookahead.
     pub async fn list(
         &self,
         user: Uuid,
         before: Option<Uuid>,
     ) -> Result<Vec<Project>, sqlx::Error> {
-        sqlx::query("SELECT id,user_id,name,(data - 'nodes' - 'messages' - 'activity') AS data,revision,created_at,updated_at FROM projects WHERE user_id=$1 AND NOT archived AND ($2::uuid IS NULL OR (updated_at,id)<(SELECT updated_at,id FROM projects WHERE id=$2 AND user_id=$1)) ORDER BY updated_at DESC,id DESC LIMIT 50").bind(user).bind(before).fetch_all(&self.0).await?.into_iter().map(map).collect()
+        // Keep cursor bounds visible to generic plans; strip heavy JSON fields once.
+        let sql = if before.is_some() {
+            "SELECT id,user_id,name,(data - ARRAY['nodes','messages','activity']) AS data,revision,created_at,updated_at FROM projects WHERE user_id=$1 AND NOT archived AND (updated_at,id)<(SELECT updated_at,id FROM projects WHERE id=$2 AND user_id=$1) ORDER BY updated_at DESC,id DESC LIMIT 51"
+        } else {
+            "SELECT id,user_id,name,(data - ARRAY['nodes','messages','activity']) AS data,revision,created_at,updated_at FROM projects WHERE user_id=$1 AND NOT archived ORDER BY updated_at DESC,id DESC LIMIT 51"
+        };
+        let mut query = sqlx::query(sql).bind(user);
+        if let Some(before) = before {
+            query = query.bind(before);
+        }
+        query
+            .fetch_all(&self.0)
+            .await?
+            .into_iter()
+            .map(map)
+            .collect()
     }
     pub async fn create(
         &self,

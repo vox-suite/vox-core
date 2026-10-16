@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::domain::spaces::{
@@ -97,6 +97,7 @@ impl SpaceRepository {
         Ok((count, format!("{count}-{stamp}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_spaces(
         &self,
         user_id: Uuid,
@@ -105,33 +106,43 @@ impl SpaceRepository {
         search: Option<&str>,
         state: Option<&str>,
         sort: Option<&str>,
+        summary: bool,
     ) -> Result<Vec<Space>, sqlx::Error> {
         let order = match sort {
             Some("updated") => "updated_at DESC, id DESC",
             Some("title") => "lower(title) ASC, id ASC",
             _ => "created_at DESC, id DESC",
         };
-        let query = format!(
-            r#"
-            SELECT {SPACE_COLUMNS}
-            FROM spaces
-            WHERE user_id = $1 AND state != 'dropped'
-              AND ($4::text IS NULL OR strpos(lower(title || ' ' || intent), lower($4)) > 0)
-              AND ($5::text IS NULL
-                   OR ($5 = 'committed' AND state = 'committed')
-                   OR ($5 = 'active' AND state != 'committed'))
-            ORDER BY {order}
-            LIMIT $2 OFFSET $3
-            "#
-        );
-        let rows = sqlx::query(&query)
-            .bind(user_id)
-            .bind(limit)
-            .bind(offset)
-            .bind(search)
-            .bind(state)
-            .fetch_all(&self.pool)
-            .await?;
+        let columns = if summary {
+            SPACE_COLUMNS.replace("agent_spec", "'{}'::jsonb AS agent_spec")
+        } else {
+            SPACE_COLUMNS.to_owned()
+        };
+        let mut sql =
+            QueryBuilder::<Postgres>::new(format!("SELECT {columns} FROM spaces WHERE user_id = "));
+        sql.push_bind(user_id).push(" AND state != 'dropped'");
+        if let Some(search) = search {
+            sql.push(" AND strpos(lower(title || ' ' || intent), lower(")
+                .push_bind(search)
+                .push(")) > 0");
+        }
+        match state {
+            Some("committed") => {
+                sql.push(" AND state = 'committed'");
+            }
+            Some("active") => {
+                sql.push(" AND state != 'committed'");
+            }
+            Some(_) => {
+                sql.push(" AND false");
+            }
+            None => {}
+        }
+        sql.push(format!(" ORDER BY {order} LIMIT "))
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
+        let rows = sql.build().fetch_all(&self.pool).await?;
 
         Ok(rows.into_iter().map(map_space_row).collect())
     }

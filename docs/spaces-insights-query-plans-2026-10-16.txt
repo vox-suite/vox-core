@@ -1,0 +1,218 @@
+Synthetic PostgreSQL 17 evidence; see spaces-insights-performance-audit-2026-10-16.md.
+
+GENERIC PLANS
+DO
+INSERT 0 1
+INSERT 0 10000
+ANALYZE
+ spaces | expanded_spec_bytes
+--------+---------------------
+  10000 |                8207
+(1 row)
+
+SET
+BEGIN
+DROP INDEX
+DROP INDEX
+PREPARE
+OLD_UPDATED_LIST
+                                                                                                                                                QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=622.74..622.75 rows=3 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=622.74..622.81 rows=30 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..622.00 rows=30 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = $1) AND (($5 IS NULL) OR (($5 = 'committed'::text) AND (state = 'committed'::text)) OR (($5 = 'active'::text) AND (state <> 'committed'::text))) AND (($4 IS NULL) OR (strpos(lower(((title || ' '::text) || intent)), lower($4)) > 0)))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning:
+   Buffers: shared hit=57
+ Planning Time: 0.120 ms
+ Execution Time: 1.739 ms
+(14 rows)
+
+                                                                                                                                                QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=622.74..622.75 rows=3 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=622.74..622.81 rows=30 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..622.00 rows=30 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = $1) AND (($5 IS NULL) OR (($5 = 'committed'::text) AND (state = 'committed'::text)) OR (($5 = 'active'::text) AND (state <> 'committed'::text))) AND (($4 IS NULL) OR (strpos(lower(((title || ' '::text) || intent)), lower($4)) > 0)))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning Time: 0.004 ms
+ Execution Time: 1.704 ms
+(12 rows)
+
+                                                                                                                                                QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=622.74..622.75 rows=3 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=622.74..622.81 rows=30 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..622.00 rows=30 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = $1) AND (($5 IS NULL) OR (($5 = 'committed'::text) AND (state = 'committed'::text)) OR (($5 = 'active'::text) AND (state <> 'committed'::text))) AND (($4 IS NULL) OR (strpos(lower(((title || ' '::text) || intent)), lower($4)) > 0)))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning Time: 0.006 ms
+ Execution Time: 1.982 ms
+(12 rows)
+
+ROLLBACK
+PREPARE
+NEW_UPDATED_SUMMARIES
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=93.10..185.92 rows=900 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = $1)
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=46
+ Planning Time: 0.113 ms
+ Execution Time: 0.015 ms
+(9 rows)
+
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=93.10..185.92 rows=900 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = $1)
+         Buffers: shared hit=3
+ Planning Time: 0.004 ms
+ Execution Time: 0.012 ms
+(7 rows)
+
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=93.10..185.92 rows=900 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = $1)
+         Buffers: shared hit=3
+ Planning Time: 0.005 ms
+ Execution Time: 0.012 ms
+(7 rows)
+
+
+CUSTOM PLANS
+DO
+INSERT 0 0
+INSERT 0 0
+ANALYZE
+ spaces | expanded_spec_bytes
+--------+---------------------
+  10000 |                8207
+(1 row)
+
+SET
+BEGIN
+DROP INDEX
+DROP INDEX
+PREPARE
+OLD_UPDATED_LIST
+                                                   QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------
+ Limit  (cost=625.97..626.04 rows=25 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=625.97..648.47 rows=9000 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..372.00 rows=9000 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = '33333333-3333-4333-8333-333333333333'::uuid))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning:
+   Buffers: shared hit=63
+ Planning Time: 0.134 ms
+ Execution Time: 1.655 ms
+(14 rows)
+
+                                                   QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------
+ Limit  (cost=625.97..626.04 rows=25 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=625.97..648.47 rows=9000 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..372.00 rows=9000 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = '33333333-3333-4333-8333-333333333333'::uuid))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.060 ms
+ Execution Time: 1.769 ms
+(14 rows)
+
+                                                   QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------
+ Limit  (cost=625.97..626.04 rows=25 width=189) (actual rows=25 loops=1)
+   Buffers: shared hit=222
+   ->  Sort  (cost=625.97..648.47 rows=9000 width=189) (actual rows=25 loops=1)
+         Sort Key: updated_at DESC, id DESC
+         Sort Method: top-N heapsort  Memory: 31kB
+         Buffers: shared hit=222
+         ->  Seq Scan on spaces  (cost=0.00..372.00 rows=9000 width=189) (actual rows=9000 loops=1)
+               Filter: ((state <> 'dropped'::text) AND (user_id = '33333333-3333-4333-8333-333333333333'::uuid))
+               Rows Removed by Filter: 1000
+               Buffers: shared hit=222
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.044 ms
+ Execution Time: 1.579 ms
+(14 rows)
+
+ROLLBACK
+PREPARE
+NEW_UPDATED_SUMMARIES
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.29..2.86 rows=25 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = '33333333-3333-4333-8333-333333333333'::uuid)
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=46
+ Planning Time: 0.141 ms
+ Execution Time: 0.017 ms
+(9 rows)
+
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.29..2.86 rows=25 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = '33333333-3333-4333-8333-333333333333'::uuid)
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.049 ms
+ Execution Time: 0.012 ms
+(9 rows)
+
+                                                             QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.29..2.86 rows=25 width=203) (actual rows=25 loops=1)
+   Buffers: shared hit=3
+   ->  Index Scan using spaces_active_updated_cursor_idx on spaces  (cost=0.29..928.47 rows=9000 width=203) (actual rows=25 loops=1)
+         Index Cond: (user_id = '33333333-3333-4333-8333-333333333333'::uuid)
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.042 ms
+ Execution Time: 0.012 ms
+(9 rows)

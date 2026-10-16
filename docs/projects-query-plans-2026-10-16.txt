@@ -1,0 +1,424 @@
+Synthetic PostgreSQL 17 evidence; see projects-performance-audit-2026-10-16.md.
+
+GENERIC PLAN RUN
+DO
+INSERT 0 0
+INSERT 0 0
+ANALYZE
+ projects | stored_json_bytes | expanded_json_bytes
+----------+-------------------+---------------------
+     2000 |             42348 |               41776
+(1 row)
+
+SET
+PREPARE
+PREPARE
+OLD_DEEP_PAGE
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..43.69 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=462
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..161.78 rows=230 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = $1)
+         Filter: (($2 IS NULL) OR (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Rows Removed by Filter: 1901
+         Buffers: shared hit=462
+ Planning:
+   Buffers: shared hit=44
+ Planning Time: 0.293 ms
+ Execution Time: 0.700 ms
+(16 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..43.69 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=462
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..161.78 rows=230 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = $1)
+         Filter: (($2 IS NULL) OR (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Rows Removed by Filter: 1901
+         Buffers: shared hit=462
+ Planning Time: 0.030 ms
+ Execution Time: 0.691 ms
+(14 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..43.69 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=462
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..161.78 rows=230 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = $1)
+         Filter: (($2 IS NULL) OR (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Rows Removed by Filter: 1901
+         Buffers: shared hit=462
+ Planning Time: 0.009 ms
+ Execution Time: 0.603 ms
+(14 rows)
+
+NEW_DEEP_PAGE
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..35.84 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..122.14 rows=228 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = $1) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.063 ms
+ Execution Time: 0.197 ms
+(12 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..35.84 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..122.14 rows=228 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = $1) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.007 ms
+ Execution Time: 0.204 ms
+(12 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..35.84 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..122.14 rows=228 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = $1) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.006 ms
+ Execution Time: 0.192 ms
+(12 rows)
+
+FULL_PROJECT_FOR_AUTHORIZATION
+                                               QUERY PLAN
+--------------------------------------------------------------------------------------------------------
+ Index Scan using projects_pkey on projects  (cost=0.28..8.30 rows=1 width=101) (actual rows=1 loops=1)
+   Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+   Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+   Buffers: shared hit=3
+ Planning Time: 0.030 ms
+ Execution Time: 0.007 ms
+(6 rows)
+
+OWNERSHIP_EXISTS
+                                                  QUERY PLAN
+--------------------------------------------------------------------------------------------------------------
+ Result  (cost=8.30..8.31 rows=1 width=1) (actual rows=1 loops=1)
+   Buffers: shared hit=3
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects  (cost=0.28..8.30 rows=1 width=0) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+           Buffers: shared hit=3
+ Planning Time: 0.024 ms
+ Execution Time: 0.006 ms
+(9 rows)
+
+FIRST_PAGE_PROJECTION_COMPARISON
+PREPARE
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..43.69 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=404
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (never executed)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..161.78 rows=230 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = $1)
+         Filter: (($2 IS NULL) OR (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=404
+ Planning Time: 0.005 ms
+ Execution Time: 0.597 ms
+(12 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..43.69 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=404
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (never executed)
+           Index Cond: (id = $2)
+           Filter: (user_id = $1)
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..161.78 rows=230 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = $1)
+         Filter: (($2 IS NULL) OR (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=404
+ Planning Time: 0.003 ms
+ Execution Time: 0.470 ms
+(12 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..12.07 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=412
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..158.34 rows=684 width=110) (actual rows=51 loops=1)
+         Index Cond: (user_id = $1)
+         Buffers: shared hit=412
+ Planning Time: 0.037 ms
+ Execution Time: 0.202 ms
+(7 rows)
+
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..12.07 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=412
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..158.34 rows=684 width=110) (actual rows=51 loops=1)
+         Index Cond: (user_id = $1)
+         Buffers: shared hit=412
+ Planning Time: 0.002 ms
+ Execution Time: 0.193 ms
+(7 rows)
+
+COUNT_AND_REVISION
+                                             QUERY PLAN
+-----------------------------------------------------------------------------------------------------
+ Aggregate  (cost=221.32..221.34 rows=1 width=40) (actual rows=1 loops=1)
+   Buffers: shared hit=41
+   ->  Sort  (cost=176.32..181.32 rows=2000 width=24) (actual rows=2000 loops=1)
+         Sort Key: id
+         Sort Method: quicksort  Memory: 127kB
+         Buffers: shared hit=41
+         ->  Seq Scan on projects  (cost=0.00..66.66 rows=2000 width=24) (actual rows=2000 loops=1)
+               Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+               Rows Removed by Filter: 53
+               Buffers: shared hit=41
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.028 ms
+ Execution Time: 0.561 ms
+(14 rows)
+
+
+CUSTOM PLAN RUN
+DO
+INSERT 0 0
+INSERT 0 0
+ANALYZE
+ projects | stored_json_bytes | expanded_json_bytes
+----------+-------------------+---------------------
+     2000 |             42348 |               41776
+(1 row)
+
+SET
+PREPARE
+PREPARE
+OLD_DEEP_PAGE
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.78 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=407
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..163.01 rows=667 width=110) (actual rows=50 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=407
+ Planning:
+   Buffers: shared hit=44
+ Planning Time: 0.270 ms
+ Execution Time: 0.581 ms
+(14 rows)
+
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.78 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=407
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..163.01 rows=667 width=110) (actual rows=50 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=407
+ Planning Time: 0.077 ms
+ Execution Time: 0.545 ms
+(12 rows)
+
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.78 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=407
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..163.01 rows=667 width=110) (actual rows=50 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=407
+ Planning Time: 0.053 ms
+ Execution Time: 0.462 ms
+(12 rows)
+
+NEW_DEEP_PAGE
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.77 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..159.67 rows=667 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.036 ms
+ Execution Time: 0.204 ms
+(12 rows)
+
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.77 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..159.67 rows=667 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.033 ms
+ Execution Time: 0.191 ms
+(12 rows)
+
+                                                                      QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8.58..20.77 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=415
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects projects_1  (cost=0.28..8.30 rows=1 width=24) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+           Buffers: shared hit=3
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..159.67 rows=667 width=110) (actual rows=51 loops=1)
+         Index Cond: ((user_id = '22222222-2222-4222-8222-222222222222'::uuid) AND (ROW(updated_at, id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Buffers: shared hit=415
+ Planning Time: 0.056 ms
+ Execution Time: 0.201 ms
+(12 rows)
+
+FULL_PROJECT_FOR_AUTHORIZATION
+                                               QUERY PLAN
+--------------------------------------------------------------------------------------------------------
+ Index Scan using projects_pkey on projects  (cost=0.28..8.30 rows=1 width=101) (actual rows=1 loops=1)
+   Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+   Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+   Buffers: shared hit=3
+ Planning Time: 0.015 ms
+ Execution Time: 0.004 ms
+(6 rows)
+
+OWNERSHIP_EXISTS
+                                                  QUERY PLAN
+--------------------------------------------------------------------------------------------------------------
+ Result  (cost=8.30..8.31 rows=1 width=1) (actual rows=1 loops=1)
+   Buffers: shared hit=3
+   InitPlan 1
+     ->  Index Scan using projects_pkey on projects  (cost=0.28..8.30 rows=1 width=0) (actual rows=1 loops=1)
+           Index Cond: (id = '9e01705a-0f09-7804-46f6-3a3e5d82c5ce'::uuid)
+           Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+           Buffers: shared hit=3
+ Planning Time: 0.018 ms
+ Execution Time: 0.005 ms
+(9 rows)
+
+FIRST_PAGE_PROJECTION_COMPARISON
+PREPARE
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..7.20 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=404
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..277.21 rows=2000 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+         Buffers: shared hit=404
+ Planning Time: 0.021 ms
+ Execution Time: 0.537 ms
+(7 rows)
+
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..7.20 rows=50 width=110) (actual rows=50 loops=1)
+   Buffers: shared hit=404
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..277.21 rows=2000 width=110) (actual rows=50 loops=1)
+         Index Cond: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+         Buffers: shared hit=404
+ Planning Time: 0.015 ms
+ Execution Time: 0.443 ms
+(7 rows)
+
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..7.09 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=412
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..267.21 rows=2000 width=110) (actual rows=51 loops=1)
+         Index Cond: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+         Buffers: shared hit=412
+ Planning Time: 0.013 ms
+ Execution Time: 0.203 ms
+(7 rows)
+
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.28..7.09 rows=51 width=110) (actual rows=51 loops=1)
+   Buffers: shared hit=412
+   ->  Index Scan using projects_user_updated_idx on projects  (cost=0.28..267.21 rows=2000 width=110) (actual rows=51 loops=1)
+         Index Cond: (user_id = '22222222-2222-4222-8222-222222222222'::uuid)
+         Buffers: shared hit=412
+ Planning Time: 0.013 ms
+ Execution Time: 0.184 ms
+(7 rows)
+
+COUNT_AND_REVISION
+                                             QUERY PLAN
+-----------------------------------------------------------------------------------------------------
+ Aggregate  (cost=221.32..221.34 rows=1 width=40) (actual rows=1 loops=1)
+   Buffers: shared hit=41
+   ->  Sort  (cost=176.32..181.32 rows=2000 width=24) (actual rows=2000 loops=1)
+         Sort Key: id
+         Sort Method: quicksort  Memory: 127kB
+         Buffers: shared hit=41
+         ->  Seq Scan on projects  (cost=0.00..66.66 rows=2000 width=24) (actual rows=2000 loops=1)
+               Filter: ((NOT archived) AND (user_id = '22222222-2222-4222-8222-222222222222'::uuid))
+               Rows Removed by Filter: 53
+               Buffers: shared hit=41
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.038 ms
+ Execution Time: 0.554 ms
+(14 rows)

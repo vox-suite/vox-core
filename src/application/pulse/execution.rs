@@ -294,13 +294,20 @@ async fn execute_single(
                 .bind(&metric_key)
                 .execute(&mut *tx)
                 .await?;
-                for row in &rows {
-                    sqlx::query("INSERT INTO pulse_daily_aggregates (user_id, group_id, event_type_id, day, metric_key, aggregate_value, count_events, metadata, timezone, currency, dimension_value, data_revision) SELECT $1, group_id, id, $3, $4, $5, $6, $7, $8, $9, $10, $11 FROM timeline_event_types WHERE id=$2")
-                        .bind(user).bind(type_id).bind(row.get::<chrono::NaiveDate,_>("day")).bind(&metric_key)
-                        .bind(row.get::<Option<f64>,_>("sum_value").unwrap_or(0.0)).bind(row.get::<i64,_>("cnt"))
-                        .bind(json!({"valid_count": row.get::<i64,_>("valid_count")})).bind(&d.timezone).bind(&m.profile.currency)
-                        .bind(row.get::<String,_>("dimension")).bind(revision).execute(&mut *tx).await?;
-                }
+                let days: Vec<chrono::NaiveDate> = rows.iter().map(|r| r.get("day")).collect();
+                let values: Vec<f64> = rows
+                    .iter()
+                    .map(|r| r.get::<Option<f64>, _>("sum_value").unwrap_or(0.0))
+                    .collect();
+                let counts: Vec<i64> = rows.iter().map(|r| r.get("cnt")).collect();
+                let valid_counts: Vec<i64> = rows.iter().map(|r| r.get("valid_count")).collect();
+                let dimensions: Vec<String> = rows.iter().map(|r| r.get("dimension")).collect();
+                // Persist the whole rollup in one round trip, including dimension buckets.
+                sqlx::query("INSERT INTO pulse_daily_aggregates (user_id, group_id, event_type_id, day, metric_key, aggregate_value, count_events, metadata, timezone, currency, dimension_value, data_revision) SELECT $1, et.group_id, et.id, v.day, $3, v.value, v.count, jsonb_build_object('valid_count',v.valid_count), $4, $5, v.dimension, $6 FROM timeline_event_types et CROSS JOIN unnest($7::date[],$8::float8[],$9::bigint[],$10::bigint[],$11::text[]) AS v(day,value,count,valid_count,dimension) WHERE et.id=$2")
+                    .bind(user).bind(type_id).bind(&metric_key).bind(&d.timezone)
+                    .bind(&m.profile.currency).bind(revision).bind(&days).bind(&values)
+                    .bind(&counts).bind(&valid_counts).bind(&dimensions)
+                    .execute(&mut *tx).await?;
                 tx.commit().await?;
             }
         }
