@@ -286,7 +286,7 @@ impl ConversationAgent {
             .build();
 
         let mut history = String::new();
-        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse web_search for current weather, news and other time-sensitive public facts. Use the current UTC date in searches, check the requested location and freshness of sources, and never invent live conditions. If search is unavailable or fails, explain that limitation. Use library for enabled skills and owned specialists. Use read_connected_app for permitted Google Calendar and PlayStation reads. Explain freshness, completeness and uncertain gaming timing. Never report an external action as completed without authoritative evidence.\n", prompt.selected_agent.definition.purpose));
+        history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse web_search for current weather, news and other time-sensitive public facts. Use the current UTC date in searches, check the requested location and freshness of sources, and never invent live conditions. If search is unavailable or fails, explain that limitation.\n", prompt.selected_agent.definition.purpose));
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }

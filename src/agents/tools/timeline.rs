@@ -25,7 +25,7 @@ impl Tool for CreateTimelineEventType {
     type Output = Value;
     type Error = TimelineToolError;
     fn description(&self) -> String {
-        "Publish a new versioned event type for this user when existing timeline types cannot represent a factual event. Use a fixed timeline group UUID returned by list_timeline_types. Provide a bounded JSON Schema with local references only. Numeric analytics metrics declare field, aggregation, unit and title; never create a separate financial table.".into()
+        "Publish a new versioned event type for this user when existing timeline types cannot represent a factual event. Use a fixed timeline group UUID returned by list_timeline_types. Provide a bounded JSON Schema with local references only. Numeric analytics metrics declare field, aggregation, unit and title. Never create a new event type for money: transactions, refunds, transfers, bills, statements and repayments must use the built-in finance types.".into()
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","additionalProperties":false,"required":["value","label","group_id","content_schema"],"properties":{"value":{"type":"string"},"label":{"type":"string"},"group_id":{"type":"string","format":"uuid"},"description":{"type":"string"},"content_schema":{"type":"object"},"analytics_definition":{"type":"object"},"ui_hint":{"type":"object"}}})
@@ -54,7 +54,7 @@ impl Tool for ListTimelineTypes {
     type Output = Value;
     type Error = TimelineToolError;
     fn description(&self) -> String {
-        "List fixed timeline groups and published event types visible to this user, including content schemas and analytics definitions.".into()
+        "List fixed timeline groups and published event types visible to this user, including content schemas and analytics definitions. Call this first, before save_timeline_event or create_timeline_event_type, so you use real group UUIDs, event types and schemas.".into()
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","additionalProperties":false,"properties":{}})
@@ -82,7 +82,7 @@ impl Tool for SaveTimelineEvent {
     type Output = Value;
     type Error = TimelineToolError;
     fn description(&self) -> String {
-        "Save a factual canonical timeline event for the current user. Use a published event type and validate content against its schema. Supply actual occurred_at and precision; a booking is not a visit, and a cumulative observation is not a session. Never invent dates, durations, currency, or financial facts. Attach source evidence and a stable dedupe_key.".into()
+        "Save a factual canonical timeline event for the current user. Use a published event type from list_timeline_types and validate content against its schema. Supply actual occurred_at and precision; a booking is not a visit, and a cumulative observation is not a session. Never invent dates, durations, currency, or financial facts. Attach source evidence and a stable dedupe_key.".into()
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","additionalProperties":false,"required":["title","occurred_at","content"],"properties":{"event_type_id":{"type":["string","null"]},"event_type_value":{"type":["string","null"]},"group_id":{"type":["string","null"]},"group_value":{"type":["string","null"]},"title":{"type":"string"},"summary":{"type":["string","null"]},"occurred_at":{"type":"string","format":"date-time"},"ended_at":{"type":["string","null"]},"time_precision":{"type":"string"},"source_timezone":{"type":["string","null"]},"content":{"type":"object"},"confidence":{"type":"number","minimum":0,"maximum":1},"dedupe_key":{"type":["string","null"]},"evidence":{"type":"array","items":{"type":"object"}}}})

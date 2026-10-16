@@ -286,30 +286,47 @@ impl EventHandler {
             }
         };
 
-        if let Err(err) = validate_data_against_schema(&result.json_schema, &result.data) {
+        let existing = match self
+            .find_schema(user_id, &result.namespace, &result.name)
+            .await
+        {
+            Ok(existing) => existing,
+            Err(err) => {
+                return self
+                    .fail_transient(event_id, format!("schema_lookup_failed: {err}"))
+                    .await;
+            }
+        };
+        let schema = existing
+            .as_ref()
+            .map_or(&result.json_schema, |(_, stored)| stored);
+        if let Err(err) = validate_data_against_schema(schema, &result.data) {
             return self
                 .fail_transient(event_id, format!("system_two_validation_failed: {err}"))
                 .await;
         }
 
-        let schema_id = match self
-            .upsert_schema(
-                user_id,
-                &result.namespace,
-                &result.name,
-                &result.description,
-                &result.json_schema,
-                result.color_token,
-                result.icon_token,
-            )
-            .await
-        {
-            Ok(id) => id,
-            Err(err) => {
-                return self
-                    .fail_transient(event_id, format!("schema_upsert_failed: {err}"))
-                    .await;
-            }
+        let schema_id = match existing {
+            Some((id, _)) => id,
+            None => match self
+                .upsert_schema(
+                    user_id,
+                    &result.namespace,
+                    &result.name,
+                    &result.description,
+                    &result.json_schema,
+                    result.color_token,
+                    result.icon_token,
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(err) => {
+                    return self
+                        .fail_transient(event_id, format!("schema_upsert_failed: {err}"))
+                        .await;
+                }
+            },
         };
 
         self.write_span(
@@ -321,6 +338,23 @@ impl EventHandler {
             occurred_at,
             span_source,
         )
+        .await
+    }
+
+    async fn find_schema(
+        &self,
+        user_id: Uuid,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Option<(Uuid, Value)>, sqlx::Error> {
+        sqlx::query_as::<_, (Uuid, Value)>(
+            "SELECT id, json_schema FROM data_schemas WHERE user_id = $1 AND namespace = $2 AND name = $3 \
+             ORDER BY version DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(namespace)
+        .bind(name)
+        .fetch_optional(self.db.pool())
         .await
     }
 

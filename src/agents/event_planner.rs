@@ -53,7 +53,7 @@ impl EventPlanning for GeminiEventPlanner {
             .agent(&self.model)
             .name("event-planner-agent")
             .record_content_telemetry(crate::telemetry::record_content())
-            .preamble("You plan actions for Vox. Assess the event using current tools when needed. Return only JSON with version 1 and an actions array. The only allowed action kind is outbound_call with reason and opening_instruction. Return an empty actions array when no action is useful.")
+            .preamble("You plan actions for Vox. Assess the event using current tools when needed. Return ONLY one JSON object with exactly these keys, no markdown and no text outside it:\n{\"version\": 1, \"actions\": [{\"kind\": \"outbound_call\", \"reason\": \"why this call is needed now\", \"opening_instruction\": \"what the voice agent should tell the user when they answer\"}]}\nversion is the number 1. outbound_call is the only allowed kind, and each action has only kind, reason and opening_instruction. Return {\"version\": 1, \"actions\": []} when no action is useful.")
             .tool(super::tools::web_search::WebSearch::new(self.http.clone(), self.exa_api_key.clone()))
             .tool(super::tools::google_maps::SearchPlaces::new(self.http.clone(), self.google_maps_api_key.clone()))
             .tool(super::tools::google_maps::GetRoute::new(self.http.clone(), self.google_maps_api_key.clone()))
