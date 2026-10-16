@@ -163,7 +163,8 @@ impl ConversationAgent {
             .agent(&prompt.selected_agent.model_configuration.model)
             .name(name)
             .preamble(&format!(
-                "{preamble}\n{}",
+                "{preamble}{}\n{}",
+                super::prompts::map_instructions(&prompt.channel),
                 super::prompts::GOVERNED_CAPABILITIES
             ))
             .record_content_telemetry(crate::telemetry::record_content())

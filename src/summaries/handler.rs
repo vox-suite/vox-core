@@ -88,7 +88,7 @@ impl SummaryHandler {
 
             if let Ok(prob) = jev.noul(
                 serde_json::json!({ "transcript": transcript }),
-                "Does this interaction contain new user biographical facts, commitments, tasks, or decisions worth persisting?",
+                "Does this interaction contain substantive questions, answers, troubleshooting, new user biographical facts, preferences, commitments, tasks, or decisions worth summarizing for future context, rather than a brief hangup, test call, or empty greeting?",
             ).await
                 && prob < 0.20 {
                     tracing::info!(
