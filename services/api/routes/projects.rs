@@ -258,6 +258,11 @@ pub async fn chat(
     if p.data.messages.len() > 100 {
         p.data.messages.drain(..p.data.messages.len() - 100);
     }
+    while p.data.messages.len() > 2
+        && serde_json::to_vec(&p.data).is_ok_and(|d| d.len() > 1_500_000)
+    {
+        p.data.messages.remove(0);
+    }
     if !valid(&p.name, &p.data) {
         return Err(StatusCode::BAD_GATEWAY);
     }
