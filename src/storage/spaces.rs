@@ -97,17 +97,39 @@ impl SpaceRepository {
         Ok((count, format!("{count}-{stamp}")))
     }
 
-    pub async fn list_spaces(&self, user_id: Uuid) -> Result<Vec<Space>, sqlx::Error> {
+    pub async fn list_spaces(
+        &self,
+        user_id: Uuid,
+        limit: i64,
+        offset: i64,
+        search: Option<&str>,
+        state: Option<&str>,
+        sort: Option<&str>,
+    ) -> Result<Vec<Space>, sqlx::Error> {
+        let order = match sort {
+            Some("updated") => "updated_at DESC, id DESC",
+            Some("title") => "lower(title) ASC, id ASC",
+            _ => "created_at DESC, id DESC",
+        };
         let query = format!(
             r#"
             SELECT {SPACE_COLUMNS}
             FROM spaces
             WHERE user_id = $1 AND state != 'dropped'
-            ORDER BY created_at DESC
+              AND ($4::text IS NULL OR strpos(lower(title || ' ' || intent), lower($4)) > 0)
+              AND ($5::text IS NULL
+                   OR ($5 = 'committed' AND state = 'committed')
+                   OR ($5 = 'active' AND state != 'committed'))
+            ORDER BY {order}
+            LIMIT $2 OFFSET $3
             "#
         );
         let rows = sqlx::query(&query)
             .bind(user_id)
+            .bind(limit)
+            .bind(offset)
+            .bind(search)
+            .bind(state)
             .fetch_all(&self.pool)
             .await?;
 
@@ -267,6 +289,24 @@ impl SpaceRepository {
             "#,
         )
         .bind(collection_id)
+        .bind(user_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn rename_space(
+        &self,
+        user_id: Uuid,
+        space_id: Uuid,
+        title: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE spaces SET title = $1, updated_at = now() WHERE user_id = $2 AND id = $3 AND state != 'dropped'",
+        )
+        .bind(title)
         .bind(user_id)
         .bind(space_id)
         .execute(&self.pool)

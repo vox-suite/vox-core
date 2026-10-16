@@ -5,7 +5,7 @@ use crate::{
         identity::Actor,
         timeline::{
             IngestTimelineEventInput, NewEventType, TimelineEventType, TimelineEventWithEvidence,
-            TimelineGroup, TimelinePage, TimelineQuery,
+            TimelineGroup, TimelinePage, TimelineQuery, UpdateTimelineEventInput,
         },
     },
     storage::timeline::{TimelineRepository, TimelineStorageError},
@@ -92,6 +92,47 @@ impl TimelineService {
             .ingest_event(actor.user_id, input)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn update_event(
+        &self,
+        actor: &Actor,
+        event_id: Uuid,
+        mut input: UpdateTimelineEventInput,
+    ) -> Result<(), TimelineServiceError> {
+        if let Some(title) = &input.title {
+            let title = title.trim();
+            if title.is_empty() || title.chars().count() > 500 {
+                return Err(TimelineServiceError::Invalid("title".into()));
+            }
+            input.title = Some(title.to_string());
+        }
+        if let (Some(start), Some(end)) = (input.occurred_at, input.ended_at)
+            && end < start
+        {
+            return Err(TimelineServiceError::Invalid("ended_at".into()));
+        }
+        if self
+            .repo
+            .update_event(actor.user_id, event_id, input)
+            .await?
+        {
+            Ok(())
+        } else {
+            Err(TimelineServiceError::NotFound("timeline event"))
+        }
+    }
+
+    pub async fn delete_event(
+        &self,
+        actor: &Actor,
+        event_id: Uuid,
+    ) -> Result<(), TimelineServiceError> {
+        if self.repo.delete_event(actor.user_id, event_id).await? {
+            Ok(())
+        } else {
+            Err(TimelineServiceError::NotFound("timeline event"))
+        }
     }
 
     pub async fn ingest_event_for_user(

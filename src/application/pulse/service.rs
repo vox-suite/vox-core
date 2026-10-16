@@ -193,7 +193,19 @@ impl PulseService {
         let meta = self.repo.metadata(actor.user_id, None).await?;
         let mut stable = meta.clone();
         stable.revision = meta.revision.clone();
-        let key = Self::key(actor, &stable, &format!("discovery:{}", input.timezone));
+        let focus = input
+            .prompt
+            .as_deref()
+            .map(|p| p.trim().chars().take(200).collect::<String>())
+            .filter(|p| !p.is_empty());
+        let key = Self::key(
+            actor,
+            &stable,
+            &match &focus {
+                Some(f) => format!("discovery:{}:{:x}", input.timezone, Sha256::digest(f)),
+                None => format!("discovery:{}", input.timezone),
+            },
+        );
         if let Some(value) = meta.caches.get(&key)
             && (!input.refresh
                 || serde_json::from_value::<chrono::DateTime<Utc>>(value["computed_at"].clone())
@@ -226,6 +238,7 @@ impl PulseService {
                 suggester.suggest_pulse(
                     catalog.iter().take(40).cloned().collect(),
                     input.timezone.clone(),
+                    focus.clone(),
                 ),
             )
             .await;

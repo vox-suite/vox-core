@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -310,45 +310,78 @@ impl TimelineRepository {
 
         let fetch_limit = query.limit.unwrap_or(30).clamp(1, 30);
 
-        let rows = sqlx::query(
+        // Bind only supplied filters so generic plans can use range and cursor indexes.
+        let mut sql = QueryBuilder::<Postgres>::new(
             "SELECT e.id, e.user_id, e.event_type_id, e.group_id, e.title, e.summary, \
                     e.occurred_at, e.ended_at, e.time_precision, e.source_timezone, \
                     e.content, e.record_state, e.confidence::float8 AS confidence, \
                     e.dedupe_key, e.revision, e.created_at, e.updated_at \
-             FROM timeline_events e \
-             JOIN timeline_groups g ON g.id = e.group_id \
-             JOIN timeline_event_types et ON et.id = e.event_type_id \
-             WHERE e.user_id = $1 \
-               AND ($2::uuid IS NULL OR e.group_id = $2) \
-               AND ($3::text IS NULL OR g.value = $3) \
-               AND ($4::uuid IS NULL OR e.event_type_id = $4) \
-               AND ($5::text IS NULL OR et.value = $5) \
-               AND ($6::timestamptz IS NULL OR e.occurred_at >= $6) \
-               AND ($7::timestamptz IS NULL OR e.occurred_at < $7) \
-               AND ($8::text IS NULL OR e.record_state = $8) \
-               AND ($9::timestamptz IS NULL OR (e.occurred_at, e.id) < ($9, $10)) \
-               AND (NOT coalesce($12::boolean,false) OR (et.value='transaction' AND e.content->>'is_spending'='true' AND lower(coalesce(e.content->>'status','')) NOT IN ('pending','failed','declined','authorization','authorized','attempted'))) \
-               AND ($13::text IS NULL OR strpos(lower(coalesce(e.content->>'merchant','')),lower($13))>0) \
-               AND ($14::text IS NULL OR lower(coalesce(e.content->>'category',''))=lower($14)) \
-             ORDER BY e.occurred_at DESC, e.id DESC \
-             LIMIT $11",
-        )
-        .bind(user_id)
-        .bind(query.group_id)
-        .bind(query.group_value.as_deref())
-        .bind(query.event_type_id)
-        .bind(query.event_type_value.as_deref())
-        .bind(query.start_at)
-        .bind(query.end_at)
-        .bind(query.record_state.as_deref().unwrap_or("active"))
-        .bind(cursor_time)
-        .bind(cursor_id)
-        .bind(fetch_limit + 1)
-        .bind(query.spending_only)
-        .bind(query.merchant.as_deref())
-        .bind(query.category.as_deref())
-        .fetch_all(&self.pool)
-        .await?;
+             FROM timeline_events e",
+        );
+        if query.group_value.is_some() {
+            sql.push(" JOIN timeline_groups g ON g.id = e.group_id");
+        }
+        if query.event_type_value.is_some() || query.spending_only == Some(true) {
+            sql.push(" JOIN timeline_event_types et ON et.id = e.event_type_id");
+        }
+        sql.push(" WHERE e.user_id = ").push_bind(user_id);
+        if query.record_state.as_deref().unwrap_or("active") == "active" {
+            // Keep the partial-index predicate visible even in a generic plan.
+            sql.push(" AND e.record_state = 'active'");
+        } else {
+            sql.push(" AND e.record_state = ")
+                .push_bind(query.record_state.as_deref().unwrap());
+        }
+        if let Some(value) = query.group_id {
+            sql.push(" AND e.group_id = ").push_bind(value);
+        }
+        if let Some(value) = query.group_value.as_deref() {
+            sql.push(" AND g.value = ").push_bind(value);
+        }
+        if let Some(value) = query.event_type_id {
+            sql.push(" AND e.event_type_id = ").push_bind(value);
+        }
+        if let Some(value) = query.event_type_value.as_deref() {
+            sql.push(" AND et.value = ").push_bind(value);
+        }
+        if let Some(value) = query.start_at {
+            sql.push(" AND e.occurred_at >= ").push_bind(value);
+        }
+        if let Some(value) = query.end_at {
+            sql.push(" AND e.occurred_at < ").push_bind(value);
+        }
+        if let (Some(time), Some(id)) = (cursor_time, cursor_id) {
+            sql.push(" AND (e.occurred_at, e.id) < (")
+                .push_bind(time)
+                .push(", ")
+                .push_bind(id)
+                .push(")");
+        }
+        if query.spending_only == Some(true) {
+            sql.push(" AND et.value='transaction' AND e.content->>'is_spending'='true' AND lower(coalesce(e.content->>'status','')) NOT IN ('pending','failed','declined','authorization','authorized','attempted')");
+        }
+        if let Some(value) = query.merchant.as_deref() {
+            sql.push(" AND strpos(lower(coalesce(e.content->>'merchant','')),lower(")
+                .push_bind(value)
+                .push("))>0");
+        }
+        if let Some(value) = query.category.as_deref() {
+            sql.push(" AND lower(coalesce(e.content->>'category',''))=lower(")
+                .push_bind(value)
+                .push(")");
+        }
+        if let Some(value) = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
+            sql.push(" AND strpos(lower(e.title || ' ' || coalesce(e.summary,'') || ' ' || coalesce(e.content->>'merchant','')),lower(")
+                .push_bind(value).push("))>0");
+        }
+        sql.push(" ORDER BY e.occurred_at DESC, e.id DESC LIMIT ")
+            .push_bind(fetch_limit + 1);
+        let rows = sql.build().fetch_all(&self.pool).await?;
 
         let has_more = rows.len() > fetch_limit as usize;
         let result_rows = if has_more {
@@ -440,6 +473,55 @@ impl TimelineRepository {
             events: items,
             next_cursor,
         })
+    }
+
+    pub async fn update_event(
+        &self,
+        user_id: Uuid,
+        event_id: Uuid,
+        input: crate::domain::timeline::UpdateTimelineEventInput,
+    ) -> Result<bool, TimelineStorageError> {
+        let mut tx = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE timeline_events SET title = coalesce($3, title), summary = coalesce($4, summary), \
+                    occurred_at = coalesce($5, occurred_at), ended_at = coalesce($6, ended_at), \
+                    revision = revision + 1, updated_at = now() \
+             WHERE id = $1 AND user_id = $2 AND record_state = 'active'",
+        )
+        .bind(event_id)
+        .bind(user_id)
+        .bind(input.title)
+        .bind(input.summary)
+        .bind(input.occurred_at)
+        .bind(input.ended_at)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            > 0;
+        notify_updated(&mut tx, user_id).await?;
+        tx.commit().await?;
+        Ok(updated)
+    }
+
+    pub async fn delete_event(
+        &self,
+        user_id: Uuid,
+        event_id: Uuid,
+    ) -> Result<bool, TimelineStorageError> {
+        let mut tx = self.pool.begin().await?;
+        let deleted = sqlx::query(
+            "UPDATE timeline_events SET record_state = 'deleted', deleted_at = now(), revision = revision + 1, updated_at = now() \
+             WHERE id = $1 AND user_id = $2 AND record_state <> 'deleted'",
+        )
+        .bind(event_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            > 0;
+        notify_updated(&mut tx, user_id).await?;
+        tx.commit().await?;
+        Ok(deleted)
     }
 
     pub async fn ingest_event(
@@ -759,6 +841,17 @@ fn validate_schema_document(value: &serde_json::Value) -> Result<(), TimelineSto
             "only local references and depth <= 32 are supported".into(),
         ));
     }
+    Ok(())
+}
+
+async fn notify_updated(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_notify('vox_timeline_updated', $1)")
+        .bind(serde_json::json!({"type":"timeline_updated","user_id":user_id}).to_string())
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 

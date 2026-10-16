@@ -93,6 +93,7 @@ impl PulseRepository {
             if let Ok(def) = serde_json::from_value::<PulseDefinition>(def_val) {
                 charts.push(SavedPulseChart {
                     id: r.get("id"),
+                    is_pinned: r.get("is_pinned"),
                     title: r.get("title"),
                     definition: def,
                     created_at: r.get("created_at"),
@@ -242,7 +243,7 @@ impl PulseRepository {
     ) -> Result<Vec<SavedPulseChart>, sqlx::Error> {
         let safe_limit = limit.clamp(1, 50);
         let rows = sqlx::query(
-            "SELECT id, title, chart_type, definition, created_at \
+            "SELECT id, title, chart_type, definition, created_at, is_pinned \
              FROM pulse_charts WHERE user_id = $1 \
              ORDER BY is_pinned DESC, sort_order ASC, created_at DESC \
              LIMIT $2 OFFSET $3",
@@ -259,6 +260,7 @@ impl PulseRepository {
             if let Ok(def) = serde_json::from_value::<PulseDefinition>(def_val) {
                 charts.push(SavedPulseChart {
                     id: r.get("id"),
+                    is_pinned: r.get("is_pinned"),
                     title: r.get("title"),
                     definition: def,
                     created_at: r.get("created_at"),
@@ -288,6 +290,7 @@ impl PulseRepository {
             if let Ok(def) = serde_json::from_value::<PulseDefinition>(def_val) {
                 return Ok(Some(SavedPulseChart {
                     id: r.get("id"),
+                    is_pinned: false,
                     title: r.get("title"),
                     definition: def,
                     created_at: r.get("created_at"),
@@ -314,6 +317,7 @@ impl PulseRepository {
             .bind(user).bind(input.idempotency_key).fetch_optional(&mut *tx).await? {
             return Ok(SavedPulseChart {
                 id: existing.get("id"), title: existing.get("title"),
+                is_pinned: false,
                 definition: serde_json::from_value(existing.get("definition")).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
                 created_at: existing.get("created_at"), result: None,
             });
@@ -336,7 +340,7 @@ impl PulseRepository {
         let row = sqlx::query(
             "INSERT INTO pulse_charts (user_id, title, chart_type, definition, idempotency_key) \
              VALUES ($1, $2, $3, $4, $5) \
-             RETURNING id, title, chart_type, definition, created_at",
+             RETURNING id, title, chart_type, definition, created_at, is_pinned",
         )
         .bind(user)
         .bind(input.title.trim())
@@ -348,6 +352,7 @@ impl PulseRepository {
 
         let chart = SavedPulseChart {
             id: row.get("id"),
+            is_pinned: false,
             title: row.get("title"),
             definition: serde_json::from_value(row.get("definition"))
                 .map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
@@ -396,7 +401,7 @@ impl PulseRepository {
             "UPDATE pulse_charts SET \
              title = $1, chart_type = $2, definition = $3, sort_order = $4, is_pinned = $5, updated_at = now() \
              WHERE user_id = $6 AND id = $7 \
-             RETURNING id, title, chart_type, definition, created_at",
+             RETURNING id, title, chart_type, definition, created_at, is_pinned",
         )
         .bind(new_title)
         .bind(new_type)
@@ -415,6 +420,7 @@ impl PulseRepository {
 
         Ok(Some(SavedPulseChart {
             id: updated.get("id"),
+            is_pinned: new_pin,
             title: updated.get("title"),
             definition: def,
             created_at: updated.get("created_at"),

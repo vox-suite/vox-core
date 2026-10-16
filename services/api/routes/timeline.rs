@@ -1,6 +1,6 @@
 use axum::{
     Extension, Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -12,7 +12,7 @@ use vox_core::{
         identity::Actor,
         timeline::{
             IngestTimelineEventInput, NewEventType, TimelineEventType, TimelineEventWithEvidence,
-            TimelineGroup, TimelinePage, TimelineQuery,
+            TimelineGroup, TimelinePage, TimelineQuery, UpdateTimelineEventInput,
         },
     },
     storage::timeline::TimelineStorageError,
@@ -133,6 +133,43 @@ pub async fn ingest_event(
         .await
         .map_err(status_for)?;
     Ok((StatusCode::CREATED, Json(item)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/timeline/events/{id}",
+    tag = "timeline",
+    params(("id" = Uuid, Path)),
+    request_body = UpdateTimelineEventInput,
+    responses((status = 204), (status = 404))
+)]
+pub async fn update_event(
+    State(service): State<TimelineService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateTimelineEventInput>,
+) -> Result<StatusCode, StatusCode> {
+    service
+        .update_event(&actor, id, input)
+        .await
+        .map_err(status_for)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/timeline/events/{id}",
+    tag = "timeline",
+    params(("id" = Uuid, Path)),
+    responses((status = 204), (status = 404))
+)]
+pub async fn delete_event(
+    State(service): State<TimelineService>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    service.delete_event(&actor, id).await.map_err(status_for)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(post, path="/v1/timeline/events/days", tag="timeline",

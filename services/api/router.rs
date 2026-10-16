@@ -236,7 +236,9 @@ pub fn build_api_router(state: ApiState) -> Router {
         )
         .route(
             "/v1/me/spaces/{id}",
-            get(crate::routes::spaces::get_space).delete(crate::routes::spaces::drop_space),
+            get(crate::routes::spaces::get_space)
+                .patch(crate::routes::spaces::update_space)
+                .delete(crate::routes::spaces::drop_space),
         )
         .route(
             "/v1/me/spaces/{id}/chat",
@@ -395,6 +397,11 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route(
             "/v1/timeline/events",
             post(crate::routes::timeline::ingest_event),
+        )
+        .route(
+            "/v1/timeline/events/{id}",
+            patch(crate::routes::timeline::update_event)
+                .delete(crate::routes::timeline::delete_event),
         )
         .with_state(state.timeline.clone());
 

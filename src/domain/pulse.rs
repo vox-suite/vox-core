@@ -124,6 +124,8 @@ pub struct SavedPulseChart {
     pub title: String,
     pub definition: PulseDefinition,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub is_pinned: bool,
     pub result: Option<PulseResult>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -154,6 +156,8 @@ pub struct DiscoveryInput {
     pub timezone: String,
     #[serde(default)]
     pub refresh: bool,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]

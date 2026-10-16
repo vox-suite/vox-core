@@ -96,8 +96,18 @@ pub struct TimelineQuery {
     pub start_at: Option<DateTime<Utc>>,
     pub end_at: Option<DateTime<Utc>>,
     pub record_state: Option<String>,
+    pub search: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateTimelineEventInput {
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub occurred_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

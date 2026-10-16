@@ -266,6 +266,7 @@ async fn discovery_save_cache_and_revocation_are_scoped() {
     let input = DiscoveryInput {
         timezone: "Asia/Kolkata".into(),
         refresh: false,
+        prompt: None,
     };
     let first = service.discover(&actor, input.clone()).await.unwrap();
     assert!(!first.suggestions.is_empty());
@@ -721,6 +722,7 @@ async fn old_high_count_sources_do_not_hide_recent_suggestions() {
             DiscoveryInput {
                 timezone: "Asia/Kolkata".into(),
                 refresh: false,
+                prompt: None,
             },
         )
         .await

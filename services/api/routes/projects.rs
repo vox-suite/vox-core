@@ -242,6 +242,7 @@ pub async fn chat(
         at: at.clone(),
         proposals: vec![],
         flow: None,
+        diagram_id: None,
     });
     p.data.messages.push(ProjectMessage {
         id: Uuid::new_v4(),
@@ -250,6 +251,7 @@ pub async fn chat(
         at,
         proposals: reply.proposals,
         flow: reply.flow,
+        diagram_id: None,
     });
     if p.data.messages.len() > 100 {
         p.data.messages.drain(..p.data.messages.len() - 100);

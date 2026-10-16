@@ -54,6 +54,11 @@ pub struct UpdateSpaceNodeInput {
     pub position: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct UpdateSpaceInput {
+    pub title: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CommitSpaceResult {
     pub collection_id: Uuid,
@@ -131,6 +136,11 @@ pub async fn create_space(
 pub struct ListSpacesQuery {
     #[serde(default)]
     pub summary: bool,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub q: Option<String>,
+    pub state: Option<String>,
+    pub sort: Option<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -161,7 +171,14 @@ pub async fn count_spaces(
     get,
     path = "/v1/me/spaces",
     tag = "spaces",
-    params(("summary" = Option<bool>, Query, description = "Omit agent_spec payloads")),
+    params(
+        ("summary" = Option<bool>, Query, description = "Omit agent_spec payloads"),
+        ("limit" = Option<i64>, Query),
+        ("offset" = Option<i64>, Query),
+        ("q" = Option<String>, Query, description = "Match title or intent"),
+        ("state" = Option<String>, Query, description = "active or committed"),
+        ("sort" = Option<String>, Query, description = "created, updated or title")
+    ),
     responses((status = 200, body = Vec<vox_core::domain::spaces::Space>))
 )]
 pub async fn list_spaces(
@@ -171,7 +188,17 @@ pub async fn list_spaces(
 ) -> Result<Json<Vec<Space>>, StatusCode> {
     let mut spaces = state
         .spaces
-        .list_spaces(actor.user_id)
+        .list_spaces(
+            actor.user_id,
+            query.limit.unwrap_or(i64::MAX).clamp(1, i64::MAX),
+            query.offset.unwrap_or(0).max(0),
+            query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()),
+            query
+                .state
+                .as_deref()
+                .filter(|s| matches!(*s, "active" | "committed")),
+            query.sort.as_deref(),
+        )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if query.summary {
@@ -204,6 +231,39 @@ pub async fn get_space(
         Some(g) => Ok(Json(g)),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/me/spaces/{id}",
+    tag = "spaces",
+    params(("id" = uuid::Uuid, Path)),
+    request_body = UpdateSpaceInput,
+    responses((status = 204), (status = 404), (status = 422))
+)]
+pub async fn update_space(
+    State(state): State<SpaceApiState>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateSpaceInput>,
+) -> Result<StatusCode, StatusCode> {
+    let title: String = input.title.trim().chars().take(200).collect();
+    if title.is_empty() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let renamed = state
+        .spaces
+        .rename_space(actor.user_id, id, &title)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !renamed {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state.user_events.notify(
+        actor.user_id,
+        json!({ "type": "space_updated", "space_id": id }),
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(

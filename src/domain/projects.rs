@@ -93,6 +93,8 @@ pub struct ProjectMessage {
     pub proposals: Vec<ContextNode>,
     #[serde(default)]
     pub flow: Option<ProjectFlow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagram_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
