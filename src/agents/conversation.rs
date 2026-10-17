@@ -157,6 +157,11 @@ impl ConversationAgent {
 
         // Tool exposure is independent of inferred intent and channel. The library
         // rechecks owned-agent access on every operation; loading is not authority.
+        let projects = tools::projects::ProjectAccess::new(
+            self.db.clone(),
+            prompt.user_id,
+            self.user_events.clone(),
+        );
         let name = &prompt.selected_agent.definition.external_key;
         tracing::Span::current().record("gen_ai.agent.name", name.as_str());
         let agent = client
@@ -274,6 +279,22 @@ impl ConversationAgent {
             ))
             .tool(tools::timing::TimedTool::new(
                 tools::visits::ListVisits::new(self.db.clone(), prompt.user_id),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::projects::ListProjects(projects.clone()),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::projects::ReadProject(projects.clone()),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::projects::CreateProject(projects.clone()),
+                prompt.correlation.clone(),
+            ))
+            .tool(tools::timing::TimedTool::new(
+                tools::projects::AddToProject(projects),
                 prompt.correlation.clone(),
             ))
             .default_max_turns(10);
@@ -789,18 +810,22 @@ mod governed_tool_surface_tests {
             assert_eq!(
                 names,
                 [
+                    "add_to_project",
                     "clear_map",
                     "control_desktop_app",
                     "control_wiz_lights",
+                    "create_project",
                     "create_timeline_event_type",
                     "find_schemas",
                     "get_agent_memory",
                     "library",
+                    "list_projects",
                     "list_timeline_types",
                     "list_visits",
                     "query_timeline_events",
                     "query_user_data",
                     "read_connected_app",
+                    "read_project",
                     "save_timeline_event",
                     "show_on_map",
                     "update_agent_memory",

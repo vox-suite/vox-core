@@ -10,6 +10,7 @@ pub mod export;
 pub mod google_maps;
 pub mod library;
 pub mod map_scene;
+pub mod projects;
 pub mod records;
 pub mod space_graph;
 pub mod spans;
