@@ -68,7 +68,7 @@ impl EventHandler {
 
     pub async fn handle(&self, event_id: EventId) -> Result<(), EventHandlerError> {
         let Some(row) = sqlx::query(
-            "SELECT user_id, source_kind, event_type, occurred_at, payload FROM inbound_events WHERE id = $1",
+            "SELECT user_id, source_kind, event_type, occurred_at, payload FROM inbound_events WHERE id = $1 AND processed_at IS NULL",
         )
         .bind(event_id.0)
         .fetch_optional(self.db.pool())
@@ -131,7 +131,7 @@ impl EventHandler {
 
         if triage.action == EventTriageAction::Ignore && triage.confidence >= 0.80 {
             tracing::info!(event_id = %event_id.0, "Jev System 1: ignored routine event");
-            self.delete_inbound_event(event_id).await?;
+            self.complete_inbound_event(event_id).await?;
             return Ok(());
         }
 
@@ -150,7 +150,7 @@ impl EventHandler {
                 Ok(outcome) => {
                     self.record_decision(user_id.0, &source_kind, &event_type, &outcome)
                         .await?;
-                    self.delete_inbound_event(event_id).await
+                    self.complete_inbound_event(event_id).await
                 }
                 Err(error) => {
                     self.fail_transient(event_id, format!("event_agent_failed: {error}"))
@@ -484,7 +484,7 @@ impl EventHandler {
             .await?;
         }
 
-        self.delete_inbound_event(event_id).await
+        self.complete_inbound_event(event_id).await
     }
 
     async fn record_decision(
@@ -507,8 +507,8 @@ impl EventHandler {
         Ok(())
     }
 
-    async fn delete_inbound_event(&self, event_id: EventId) -> Result<(), EventHandlerError> {
-        sqlx::query("DELETE FROM inbound_events WHERE id = $1")
+    async fn complete_inbound_event(&self, event_id: EventId) -> Result<(), EventHandlerError> {
+        sqlx::query("UPDATE inbound_events SET processed_at=now(), payload='{}'::jsonb, processing_error=NULL, retryable=false WHERE id = $1")
             .bind(event_id.0)
             .execute(self.db.pool())
             .await?;
@@ -548,7 +548,7 @@ impl EventHandler {
     pub async fn handle_batch(&self, batch_id: Uuid) -> Result<(), EventHandlerError> {
         let ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM inbound_events \
-             WHERE batch_id = $1 AND (processing_error IS NULL OR retryable) \
+             WHERE batch_id = $1 AND processed_at IS NULL AND (processing_error IS NULL OR retryable) \
              ORDER BY occurred_at",
         )
         .bind(batch_id)
@@ -571,7 +571,7 @@ impl EventHandler {
                  UPDATE inbound_events e SET requeue_count = requeue_count + 1, failed_at = now() \
                  WHERE e.id IN ( \
                      SELECT id FROM inbound_events \
-                     WHERE processing_error IS NOT NULL AND retryable \
+                     WHERE processed_at IS NULL AND processing_error IS NOT NULL AND retryable \
                        AND requeue_count < 3 AND failed_at < now() - interval '10 minutes' \
                      LIMIT 200) \
                    AND NOT EXISTS ( \
@@ -587,5 +587,78 @@ impl EventHandler {
         .execute(self.db.pool())
         .await?;
         Ok(result.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+    async fn completed_event_keeps_idempotency_identity_and_scrubs_payload() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let service = crate::events::service::EventService::new(db.clone());
+        let source = Uuid::new_v4().to_string();
+        let first = service
+            .ingest_for_user(
+                user,
+                "test",
+                &source,
+                "stable",
+                "activity",
+                Utc::now(),
+                &serde_json::json!({"private":"value"}),
+            )
+            .await
+            .unwrap();
+        EventHandler::new(db.clone())
+            .complete_inbound_event(first)
+            .await
+            .unwrap();
+        let second = service
+            .ingest_for_user(
+                user,
+                "test",
+                &source,
+                "stable",
+                "activity",
+                Utc::now(),
+                &serde_json::json!({"private":"value"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first, second);
+        let (payload, processed): (Value, bool) = sqlx::query_as(
+            "SELECT payload,processed_at IS NOT NULL FROM inbound_events WHERE id=$1",
+        )
+        .bind(first.0)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(payload, serde_json::json!({}));
+        assert!(processed);
+        let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE source_event_id=$1")
+            .bind(first.0)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(jobs, 1);
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
     }
 }

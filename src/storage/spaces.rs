@@ -295,7 +295,7 @@ impl SpaceRepository {
         let result = sqlx::query(
             r#"
             UPDATE spaces
-            SET state = 'committed', committed_collection_id = $1, updated_at = now()
+            SET state = 'committed', committed_collection_id = $1, run_state = 'idle', run_error = NULL, workflow_generation = workflow_generation + 1, updated_at = now()
             WHERE user_id = $2 AND id = $3
             "#,
         )
@@ -327,19 +327,26 @@ impl SpaceRepository {
     }
 
     pub async fn drop_space(&self, user_id: Uuid, space_id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            r#"
-            UPDATE spaces
-            SET state = 'dropped', updated_at = now()
-            WHERE user_id = $1 AND id = $2
-            "#,
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query(
+            "UPDATE spaces SET state='dropped',run_state='idle',run_error=NULL,workflow_generation=workflow_generation+1,updated_at=now() WHERE user_id=$1 AND id=$2",
+        ).bind(user_id).bind(space_id).execute(&mut *tx).await?.rows_affected() > 0;
+        if !changed {
+            return Ok(false);
+        }
+        sqlx::query("UPDATE space_tasks SET status='cancelled',lease_token=NULL,lease_expires_at=NULL WHERE space_id=$1 AND status IN ('queued','running','blocked')")
+            .bind(space_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE space_workflow_requests SET processed=true WHERE space_id=$1 AND NOT processed",
         )
-        .bind(user_id)
         .bind(space_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-
-        Ok(result.rows_affected() > 0)
+        tx.commit().await?;
+        super::space_tasks::TaskRepository::new(self.pool.clone())
+            .sync_metadata(space_id)
+            .await?;
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]

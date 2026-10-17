@@ -532,7 +532,7 @@ pub async fn commit_space(
     }
 
     sqlx::query(
-        "UPDATE spaces SET state = 'committed', committed_collection_id = $1, updated_at = now() WHERE id = $2",
+        "UPDATE spaces SET state = 'committed', committed_collection_id = $1, run_state = 'idle', run_error = NULL, workflow_generation = workflow_generation + 1, updated_at = now() WHERE id = $2",
     )
     .bind(collection_id)
     .bind(id)
@@ -652,22 +652,24 @@ pub async fn update_space_node(
         let mut node_id = node_id;
         if input.title.is_some() || input.body.is_some() {
             let new_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO space_nodes(id,space_id,kind,title,body,data,state,position,derived_from,provenance,version,replaces,is_final) SELECT $3,space_id,kind,coalesce($4,title),coalesce($5,body),data,coalesce($6,state),position,derived_from,provenance,version+1,id,is_final FROM space_nodes WHERE space_id=$1 AND id=$2")
+                .bind(id).bind(node_id).bind(new_id).bind(&input.title).bind(&input.body)
+                .bind(parsed_state.map(NodeState::as_str)).execute(&mut *tx).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query("UPDATE space_nodes SET is_current=false,is_final=false WHERE space_id=$1 AND id=$2")
+                .bind(id).bind(node_id).execute(&mut *tx).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             for sql in [
-                "INSERT INTO space_nodes(id,space_id,kind,title,body,data,state,position,derived_from,provenance,version,replaces,is_final) SELECT $3,space_id,kind,coalesce($4,title),coalesce($5,body),data,coalesce($6,state),position,derived_from,provenance,version+1,id,is_final FROM space_nodes WHERE space_id=$1 AND id=$2",
-                "UPDATE space_nodes SET is_current=false,is_final=false WHERE space_id=$1 AND id=$2",
                 "INSERT INTO space_edges(space_id,from_node,to_node) SELECT space_id,from_node,$3 FROM space_edges WHERE space_id=$1 AND to_node=$2",
                 "UPDATE space_edges SET from_node=$3 WHERE space_id=$1 AND from_node=$2",
                 "UPDATE space_nodes SET derived_from=array_replace(derived_from,$2,$3) WHERE space_id=$1 AND $2=ANY(derived_from)",
                 "UPDATE space_tasks SET node_id=$3,input_versions=(input_versions-($2::text))||jsonb_build_object($3::text,coalesce((input_versions->>($2::text))::int,0)+1) WHERE space_id=$1 AND node_id=$2",
             ] {
-                let mut q = sqlx::query(sql).bind(id).bind(node_id).bind(new_id);
-                if sql.starts_with("INSERT INTO space_nodes") {
-                    q = q
-                        .bind(&input.title)
-                        .bind(&input.body)
-                        .bind(parsed_state.map(NodeState::as_str));
-                }
-                q.execute(&mut *tx)
+                sqlx::query(sql)
+                    .bind(id)
+                    .bind(node_id)
+                    .bind(new_id)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             }
@@ -725,18 +727,6 @@ pub async fn update_space_node(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    if space.agent_spec["workflow_version"] == 2
-        && (input.title.is_some()
-            || input.body.is_some()
-            || parsed_state == Some(NodeState::Rejected))
-    {
-        sqlx::query("WITH RECURSIVE descendants(id) AS (SELECT e.to_node FROM space_edges e WHERE e.space_id=$1 AND e.from_node=$2 UNION SELECT e.to_node FROM space_edges e JOIN descendants d ON e.from_node=d.id WHERE e.space_id=$1) UPDATE space_tasks SET status='cancelled',error='Prerequisite changed; retry this branch',lease_token=NULL,expanded=false WHERE space_id=$1 AND node_id IN(SELECT id FROM descendants)").bind(id).bind(node_id).execute(&state.pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
-        sqlx::query("UPDATE space_tasks SET status=$3,lease_token=NULL,expanded=true WHERE space_id=$1 AND node_id=$2").bind(id).bind(node_id).bind(if parsed_state==Some(NodeState::Rejected){"cancelled"}else{"done"}).execute(&state.pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
-        vox_core::storage::space_tasks::TaskRepository::new(state.pool.clone())
-            .sync_metadata(id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
     if parsed_state == Some(NodeState::Rejected) || input.title.is_some() || input.body.is_some() {
         let stale = state
             .spaces
@@ -822,4 +812,137 @@ pub async fn retry_space_node(
         let _ = runtime.run_space(id, None).await;
     });
     Ok(Json(json!({"status":"queued"})))
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires isolated VOX_SPACE_TEST_DATABASE_URL"]
+    async fn workflow_node_edit_versions_content_and_preserves_graph() {
+        let url = std::env::var("VOX_SPACE_TEST_DATABASE_URL").unwrap();
+        let db = vox_core::db::Db::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let pool = db.pool().clone();
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let spaces = SpaceRepository::new(pool.clone());
+        let space = spaces
+            .create_workflow_space(user, "Fixture", "Plan a fixture")
+            .await
+            .unwrap();
+        let root = spaces
+            .get_graph(user, space.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .nodes[0]
+            .id;
+        use vox_core::storage::space_tasks::{TaskProposal, TaskRepository};
+        let tasks = TaskRepository::new(pool.clone());
+        let middle = tasks
+            .spawn(
+                space.id,
+                &TaskProposal {
+                    role: "synthesis".into(),
+                    title: "Synthesis".into(),
+                    brief: "Combine evidence".into(),
+                    dependencies: vec![root],
+                },
+                60,
+                8,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let child = tasks
+            .spawn(
+                space.id,
+                &TaskProposal {
+                    role: "plan".into(),
+                    title: "Plan".into(),
+                    brief: "Write a plan".into(),
+                    dependencies: vec![middle],
+                },
+                60,
+                8,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let config = vox_core::config::Config::from_values(|key| match key {
+            "DATABASE_URL" => Some(url.clone()),
+            "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => Some("fixture".into()),
+            _ => None,
+        })
+        .unwrap();
+        let state = SpaceApiState {
+            pool: pool.clone(),
+            spaces: spaces.clone(),
+            runtime: Arc::new(SpaceRuntime::new(db, &config, None)),
+            user_events: UserEventHub::new(),
+        };
+        let response = update_space_node(
+            State(state),
+            Extension(Actor::user(user)),
+            Path((space.id, middle)),
+            Json(UpdateSpaceNodeInput {
+                title: Some("Edited goal".into()),
+                body: Some("Updated intent".into()),
+                state: None,
+                position: None,
+            }),
+        )
+        .await;
+        assert!(
+            response.is_ok(),
+            "editing workflow content must succeed: {:?}",
+            response.err()
+        );
+        let graph = spaces.get_graph(user, space.id).await.unwrap().unwrap();
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.is_current && n.replaces == Some(middle))
+            .unwrap();
+        assert_ne!(middle, node.id);
+        assert_eq!(node.title, "Edited goal");
+        assert_eq!(node.body, "Updated intent");
+        assert_eq!(node.replaces, Some(middle));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.from_node == root && e.to_node == node.id)
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.from_node == node.id && e.to_node == child)
+        );
+        let status: String = sqlx::query_scalar("SELECT status FROM space_tasks WHERE node_id=$1")
+            .bind(node.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "queued");
+        let child_status: String =
+            sqlx::query_scalar("SELECT status FROM space_tasks WHERE node_id=$1")
+                .bind(child)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(child_status, "cancelled");
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

@@ -28,6 +28,28 @@ pub struct Worker {
     worker_id: String,
 }
 
+// A cancelled worker future must not leave an independent task renewing its lease.
+struct LeaseHeartbeat {
+    task: tokio::task::JoinHandle<()>,
+}
+impl LeaseHeartbeat {
+    async fn run<T>(
+        mut self,
+        handler: impl std::future::Future<Output = T>,
+    ) -> Result<T, crate::db::jobs::JobError> {
+        tokio::select! {
+            biased;
+            _ = &mut self.task => Err(crate::db::jobs::JobError::LeaseLost),
+            result = handler => Ok(result),
+        }
+    }
+}
+impl Drop for LeaseHeartbeat {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 impl Worker {
     pub fn new(jobs: JobRepository, events: EventHandler, worker_id: String) -> Self {
         Self {
@@ -97,76 +119,95 @@ impl Worker {
                 .fail(
                     job.id,
                     &self.worker_id,
+                    job.lease_generation,
                     Utc::now(),
                     "missing_payload_reference_id",
                 )
                 .await?;
             return Ok(());
         };
-        let heartbeat = {
-            let jobs = self.jobs.clone();
-            let worker_id = self.worker_id.clone();
-            let job_id = job.id;
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    let until = Utc::now() + Duration::seconds(30);
-                    if jobs.extend_lease(job_id, &worker_id, until).await.is_err() {
-                        break;
-                    }
-                }
-            })
-        };
-        let result = match job.kind {
-            JobKind::ProcessEvent => self
-                .events
-                .handle(EventId(reference_id))
-                .await
-                .map_err(|_| "event_processing"),
-            JobKind::ProcessEventBatch => self
-                .events
-                .handle_batch(reference_id)
-                .await
-                .map_err(|_| "event_batch_processing"),
-            JobKind::RunSchedule => match &self.schedules {
-                Some(schedules) => match job.occurrence_at {
-                    Some(occurrence_at) => schedules
-                        .handle(ScheduleId(reference_id), occurrence_at)
+        let heartbeat = LeaseHeartbeat {
+            task: {
+                let jobs = self.jobs.clone();
+                let worker_id = self.worker_id.clone();
+                let job_id = job.id;
+                let generation = job.lease_generation;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        let until = Utc::now() + Duration::seconds(30);
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(8),
+                            jobs.extend_lease(job_id, &worker_id, generation, until),
+                        )
                         .await
-                        .map_err(|_| "schedule_processing"),
-                    None => Err("schedule_occurrence_missing"),
-                },
-                None => Err("schedule_handler_unavailable"),
-            },
-            JobKind::SummarizeConversation => match &self.summaries {
-                Some(summaries) => summaries
-                    .handle(ConversationId(reference_id))
-                    .await
-                    .map_err(|_| "summary_processing"),
-                None => Err("summary_handler_unavailable"),
-            },
-            JobKind::EvaluateSpan | JobKind::ExecuteSpan => Err("assigned_run_binding_required"),
-            JobKind::RunSpace => match &self.space_runtime {
-                Some(runner) => runner
-                    .run_space(reference_id, None)
-                    .await
-                    .map_err(|_| "space_execution"),
-                None => Err("space_runtime_unavailable"),
+                        {
+                            Ok(Ok(())) => {}
+                            _ => return,
+                        }
+                    }
+                })
             },
         };
-
-        heartbeat.abort();
+        let handler = async {
+            match job.kind {
+                JobKind::ProcessEvent => self
+                    .events
+                    .handle(EventId(reference_id))
+                    .await
+                    .map_err(|_| "event_processing"),
+                JobKind::ProcessEventBatch => self
+                    .events
+                    .handle_batch(reference_id)
+                    .await
+                    .map_err(|_| "event_batch_processing"),
+                JobKind::RunSchedule => match &self.schedules {
+                    Some(schedules) => match job.occurrence_at {
+                        Some(occurrence_at) => schedules
+                            .handle(ScheduleId(reference_id), occurrence_at)
+                            .await
+                            .map_err(|_| "schedule_processing"),
+                        None => Err("schedule_occurrence_missing"),
+                    },
+                    None => Err("schedule_handler_unavailable"),
+                },
+                JobKind::SummarizeConversation => match &self.summaries {
+                    Some(summaries) => summaries
+                        .handle(ConversationId(reference_id))
+                        .await
+                        .map_err(|_| "summary_processing"),
+                    None => Err("summary_handler_unavailable"),
+                },
+                JobKind::EvaluateSpan | JobKind::ExecuteSpan => {
+                    Err("assigned_run_binding_required")
+                }
+                JobKind::RunSpace => match &self.space_runtime {
+                    Some(runner) => runner
+                        .run_space(reference_id, None)
+                        .await
+                        .map_err(|_| "space_execution"),
+                    None => Err("space_runtime_unavailable"),
+                },
+            }
+        };
+        let result = heartbeat.run(handler).await?;
         match result {
             Ok(()) => {
                 tracing::info!(job_id = %job.id, kind = job.kind.as_str(), "job completed");
                 self.jobs
-                    .complete(job.id, &self.worker_id, Utc::now())
+                    .complete(job.id, &self.worker_id, job.lease_generation, Utc::now())
                     .await?
             }
             Err(code) if job.attempt_count >= job.max_attempts => {
                 tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code, "job failed permanently");
                 self.jobs
-                    .fail(job.id, &self.worker_id, Utc::now(), code)
+                    .fail(
+                        job.id,
+                        &self.worker_id,
+                        job.lease_generation,
+                        Utc::now(),
+                        code,
+                    )
                     .await?
             }
             Err(code) => {
@@ -176,6 +217,7 @@ impl Worker {
                     .retry(
                         job.id,
                         &self.worker_id,
+                        job.lease_generation,
                         Utc::now() + Duration::seconds(seconds),
                         code,
                     )
@@ -246,5 +288,56 @@ impl Worker {
                 Err(error) => tracing::warn!(%error, "event requeue sweeper failed"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lease_cancellation_tests {
+    use super::*;
+    struct Dropped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    #[tokio::test]
+    async fn lost_heartbeat_cancels_pending_handler() {
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let heartbeat = LeaseHeartbeat {
+            task: tokio::spawn(async {}),
+        };
+        let handler = async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        };
+        assert!(matches!(
+            heartbeat.run(handler).await,
+            Err(crate::db::jobs::JobError::LeaseLost)
+        ));
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn dropping_heartbeat_guard_aborts_renewal_task() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        let finished = task.abort_handle();
+        let heartbeat = LeaseHeartbeat { task };
+        started_rx.await.unwrap();
+        drop(heartbeat);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(finished.is_finished());
     }
 }

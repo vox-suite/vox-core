@@ -119,9 +119,17 @@ impl ScheduleHandler {
                     occurred_at: occurrence_at,
                     payload: serde_json::json!({ "instruction": instruction }),
                 })
-                .await
-                .unwrap_or_default()
+                .await?
         };
+
+        // A valid empty action list is an explicit no-op. Provider errors above
+        // stay errors, so neither outcome can become an unsolicited phone call.
+        if call_span.is_none() && planned.is_empty() {
+            return Ok(());
+        }
+        if self.outbound.is_none() {
+            return Err(OutboundError::Unavailable.into());
+        }
 
         if self.outbound.is_some() {
             let claimed = sqlx::query(
@@ -169,16 +177,6 @@ impl ScheduleHandler {
                         }
                     }
                     sent
-                } else if let Some(outbound) = &self.outbound {
-                    let reason = format!("Scheduled reminder: {}", instruction);
-                    let opening = format!(
-                        "Remind the user of their scheduled reminder: {}",
-                        instruction
-                    );
-                    outbound
-                        .initiate_call_for_user(owner, &reason, &opening, Some(schedule_id.0), None)
-                        .await?;
-                    true
                 } else {
                     false
                 },
@@ -228,11 +226,97 @@ impl ScheduleHandler {
 
 fn outbound_not_placed(error: &OutboundError) -> bool {
     match error {
-        OutboundError::Database(_)
+        OutboundError::Unavailable
+        | OutboundError::Database(_)
         | OutboundError::NoPhoneNumber
         | OutboundError::InvalidInput(_) => true,
         OutboundError::Bridge(crate::bridge_client::BridgeError::Status { .. }) => true,
         OutboundError::Bridge(crate::bridge_client::BridgeError::Http(error)) => error.is_connect(),
         OutboundError::Bridge(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        agents::{
+            AgentError,
+            event_planner::{EventPlanningPrompt, PlannedAction},
+        },
+        bridge_client::{BridgeError, OutboundBridge, OutboundCallRequest, OutboundCallResponse},
+    };
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Planner(bool);
+    #[async_trait]
+    impl EventPlanning for Planner {
+        async fn plan(&self, _: EventPlanningPrompt) -> Result<Vec<PlannedAction>, AgentError> {
+            if self.0 {
+                Err(AgentError::Provider)
+            } else {
+                Ok(vec![])
+            }
+        }
+    }
+    struct Bridge(AtomicUsize);
+    #[async_trait]
+    impl OutboundBridge for Bridge {
+        async fn initiate_outbound_call(
+            &self,
+            _: OutboundCallRequest,
+        ) -> Result<OutboundCallResponse, BridgeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(OutboundCallResponse {
+                provider_call_id: "fixture-call".into(),
+            })
+        }
+        async fn send_verification_code(&self, _: &str, _: &str) -> Result<(), BridgeError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated TEST_DATABASE_URL"]
+    async fn failed_or_noop_planner_never_dispatches_a_call() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        crate::identity::IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO channel_identities(user_id,channel,normalized_external_id) VALUES($1,'phone',$2)").bind(user).bind(format!("1555{:07}", user.as_u128() % 10_000_000)).execute(db.pool()).await.unwrap();
+        let schedule: uuid::Uuid = sqlx::query_scalar("INSERT INTO schedules(user_id,instruction,kind) VALUES($1,'Check whether anything is needed','once') RETURNING id").bind(user).fetch_one(db.pool()).await.unwrap();
+        let bridge = Arc::new(Bridge(AtomicUsize::new(0)));
+        for failed in [true, false] {
+            let handler =
+                ScheduleHandler::new(db.clone(), Arc::new(Planner(failed))).with_outbound(
+                    Arc::new(OutboundCallService::new(db.clone(), Some(bridge.clone()))),
+                );
+            let result = handler.handle(ScheduleId(schedule), Utc::now()).await;
+            if failed {
+                assert!(matches!(
+                    result,
+                    Err(ScheduleHandlerError::Agent(AgentError::Provider))
+                ));
+            } else {
+                assert!(result.is_ok());
+            }
+            assert_eq!(bridge.0.load(Ordering::SeqCst), 0);
+        }
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
     }
 }

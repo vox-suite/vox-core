@@ -74,6 +74,37 @@ pub async fn process_gmail_delta(
     incoming_history_id: u64,
     last_synced_at: Option<DateTime<Utc>>,
 ) -> bool {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        process_gmail_delta_inner(
+            pool,
+            user_id,
+            connection_id,
+            email_address,
+            last_history_id,
+            incoming_history_id,
+            last_synced_at,
+        ),
+    )
+    .await
+    {
+        Ok(completed) => completed,
+        Err(_) => {
+            tracing::warn!(%connection_id, "Gmail sync exceeded its connection time budget; cursor retained");
+            false
+        }
+    }
+}
+
+async fn process_gmail_delta_inner(
+    pool: &PgPool,
+    user_id: Uuid,
+    connection_id: Uuid,
+    email_address: &str,
+    last_history_id: u64,
+    incoming_history_id: u64,
+    last_synced_at: Option<DateTime<Utc>>,
+) -> bool {
     let Ok(mut lease) = pool.begin().await else {
         return false;
     };
@@ -85,11 +116,14 @@ pub async fn process_gmail_delta(
     if !matches!(locked, Ok(true)) {
         return false;
     }
-    let enabled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vox_connections WHERE id=$1 AND user_id=$2 AND authorization_state='authorized' AND sync_timeline=true)")
-        .bind(connection_id).bind(user_id).fetch_one(pool).await.unwrap_or(false);
-    if !enabled {
+    let generation: Option<(Uuid,Uuid)> = match sqlx::query_as("SELECT credential_generation,generation FROM vox_connections WHERE id=$1 AND user_id=$2 AND authorization_state='authorized' AND sync_timeline=true AND (account_id=$3 OR account_display_id=$3)")
+        .bind(connection_id).bind(user_id).bind(email_address).fetch_optional(pool).await {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+    let Some((credential_generation, authorization_generation)) = generation else {
         return true;
-    }
+    };
     let sync_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO connector_sync_runs (user_id, connector_id, connection_id, run_type, status, cursor_state, started_at) \
          VALUES ($1, 'gmail', $2, 'live', 'running', $3, now()) RETURNING id",
@@ -226,8 +260,8 @@ pub async fn process_gmail_delta(
         });
         let finalized: Result<(), sqlx::Error> = async {
             let mut tx = pool.begin().await?;
-            sqlx::query("UPDATE vox_connections SET metadata=metadata || $1,last_synced_at=now(),updated_at=now() WHERE id=$2 AND user_id=$3 AND COALESCE((metadata->>'last_history_id')::numeric,0) <= $4::numeric")
-                .bind(meta_update).bind(connection_id).bind(user_id).bind(new_cursor.to_string()).execute(&mut *tx).await?;
+            finalize_cursor(&mut tx, user_id, connection_id, email_address,
+                credential_generation, authorization_generation, new_cursor, meta_update).await?;
             sqlx::query("UPDATE connector_sync_runs SET status='completed',records_extracted=$1,records_ingested=$2,cursor_state=$3,completed_at=now() WHERE id=$4")
                 .bind(records_extracted).bind(records_ingested).bind(json!({"history_id":new_cursor})).bind(sync_run_id).execute(&mut *tx).await?;
             sqlx::query("UPDATE connector_coverage SET coverage_end=now(),is_healthy=true,last_checked_at=now(),updated_at=now() WHERE user_id=$1 AND connector_id='gmail'")
@@ -251,6 +285,29 @@ pub async fn process_gmail_delta(
         return false;
     }
     true
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finalize_cursor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    connection_id: Uuid,
+    email_address: &str,
+    credential_generation: Uuid,
+    authorization_generation: Uuid,
+    new_cursor: u64,
+    meta_update: Value,
+) -> Result<(), sqlx::Error> {
+    let finalized = sqlx::query("UPDATE vox_connections SET metadata=metadata || $1,last_synced_at=now(),updated_at=now() WHERE id=$2 AND user_id=$3 AND COALESCE((metadata->>'last_history_id')::numeric,0) <= $4::numeric AND credential_generation=$5 AND generation=$6 AND authorization_state='authorized' AND sync_timeline=true AND (account_id=$7 OR account_display_id=$7)")
+                .bind(meta_update).bind(connection_id).bind(user_id).bind(new_cursor.to_string())
+                .bind(credential_generation).bind(authorization_generation).bind(email_address)
+                .execute(&mut **tx).await?;
+    if finalized.rows_affected() != 1 {
+        return Err(sqlx::Error::Protocol(
+            "Gmail connection changed before cursor finalization".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn reconcile_all_gmail_connections(pool: &PgPool) {
@@ -338,7 +395,18 @@ pub async fn ingest_message(
         .bind(user_id).bind(email).fetch_optional(pool).await?;
     let generation = generation
         .ok_or_else(|| std::io::Error::other("Gmail timeline sync is paused or disconnected"))?;
-    let msg = gmail.get_message(token, message_id).await?;
+    let msg = match gmail.get_message(token, message_id).await {
+        Ok(message) => message,
+        Err(vox_connections::providers::gmail::GmailError::NotFound) => {
+            // A message can be deleted after it entered history. Keep its identity so
+            // history retries do not repeatedly fetch a permanently missing message.
+            sqlx::query("INSERT INTO source_records(user_id,connector_id,source_account_id,source_record_id,record_hash,disposition,metadata) SELECT $1,'gmail',$2,$3,$4,'retained','{\"excluded\":true,\"reason\":\"provider_deleted\"}'::jsonb FROM vox_connections WHERE user_id=$1 AND connector_id='gmail' AND credential_generation=$5 AND generation=$6 AND authorization_state='authorized' AND sync_timeline=true AND (account_id=$2 OR account_display_id=$2) ON CONFLICT(user_id,connector_id,source_record_id) DO NOTHING")
+                .bind(user_id).bind(email).bind(message_id).bind(format!("{:x}",Sha256::digest(message_id.as_bytes())))
+                .bind(generation.0).bind(generation.1).execute(pool).await?;
+            return Ok(false);
+        }
+        Err(error) => return Err(error.into()),
+    };
     let extraction = crate::document_extraction::extract(&extraction_source(&msg)).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
@@ -486,5 +554,58 @@ pub async fn process_pending_gmail(pool: &PgPool) {
                 tracing::warn!("Cannot update Gmail retry backoff");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cursor_regression_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires disposable TEST_DATABASE_URL with pgvector"]
+    async fn stale_gmail_generation_cannot_finalize_cursor() {
+        let pool = PgPool::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let (connection, credential, generation): (Uuid,Uuid,Uuid) = sqlx::query_as("INSERT INTO vox_connections(user_id,connector_id,account_id,authorization_state,sync_timeline,metadata) VALUES($1,'gmail','new@example.test','authorized',true,'{\"last_history_id\":7}') RETURNING id,credential_generation,generation").bind(user).fetch_one(&mut *tx).await.unwrap();
+        assert!(
+            finalize_cursor(
+                &mut tx,
+                user,
+                connection,
+                "new@example.test",
+                credential,
+                Uuid::new_v4(),
+                999,
+                json!({"last_history_id":999})
+            )
+            .await
+            .is_err()
+        );
+        let cursor: Value = sqlx::query_scalar(
+            "SELECT metadata->'last_history_id' FROM vox_connections WHERE id=$1",
+        )
+        .bind(connection)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(cursor, json!(7));
+        finalize_cursor(
+            &mut tx,
+            user,
+            connection,
+            "new@example.test",
+            credential,
+            generation,
+            8,
+            json!({"last_history_id":8}),
+        )
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
     }
 }

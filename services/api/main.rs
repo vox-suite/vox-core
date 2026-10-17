@@ -1,6 +1,5 @@
 mod auth;
 mod cache_refresh;
-mod config;
 mod cors;
 mod identity_token;
 mod openapi;
@@ -122,11 +121,15 @@ async fn main() {
         &config,
         Some(user_events.clone()),
     ));
-    let bridge = config.bridge_url.as_ref().and_then(|url| {
-        vox_core::bridge_client::BridgeClient::new(url.clone(), config.service_token.clone())
-            .ok()
-            .map(|client| Arc::new(client) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
-    });
+    let bridge = config
+        .bridge_url
+        .as_ref()
+        .map(|url| {
+            vox_core::bridge_client::BridgeClient::new(url.clone(), config.service_token.clone())
+                .map(|client| Arc::new(client) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
+        })
+        .transpose()
+        .expect("Vox Bridge configuration is invalid");
     let mut api_state = ApiState::new(
         app_state,
         db,

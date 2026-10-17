@@ -53,6 +53,8 @@ pub struct Config {
 pub enum ConfigError {
     #[error("{0} is missing")]
     Missing(&'static str),
+    #[error("{0} is invalid")]
+    Invalid(&'static str),
 }
 
 impl Config {
@@ -71,19 +73,18 @@ impl Config {
             .unwrap_or_else(|| DEFAULT_JEV_BASE_URL.to_string());
 
         Ok(Self {
-            bind_address: format!(
-                "0.0.0.0:{}",
-                get("PORT")
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| DEFAULT_PORT.to_string())
-            ),
+            bind_address: format!("0.0.0.0:{}", positive_number::<u16, _>(&get, "PORT", 3001)?),
             database_url: non_empty(&get, "DATABASE_URL")?,
-            db_max_connections: get("DB_MAX_CONNECTIONS")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(DEFAULT_DB_MAX_CONNECTIONS),
-            db_acquire_timeout_secs: get("DB_ACQUIRE_TIMEOUT_SECS")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(DEFAULT_DB_ACQUIRE_TIMEOUT_SECS),
+            db_max_connections: positive_number(
+                &get,
+                "DB_MAX_CONNECTIONS",
+                DEFAULT_DB_MAX_CONNECTIONS,
+            )?,
+            db_acquire_timeout_secs: positive_number(
+                &get,
+                "DB_ACQUIRE_TIMEOUT_SECS",
+                DEFAULT_DB_ACQUIRE_TIMEOUT_SECS,
+            )?,
             redis_url: get("REDIS_URL")
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_REDIS_URL.to_string()),
@@ -95,10 +96,14 @@ impl Config {
                 .filter(|value| !value.trim().is_empty()),
             bridge_url: get("VOX_BRIDGE_URL").filter(|value| !value.trim().is_empty()),
             smtp_url: get("VOX_SMTP_URL").filter(|value| !value.trim().is_empty()),
-            event_agent_enabled: !matches!(
-                get("VOX_EVENT_AGENT_ENABLED").as_deref().map(str::trim),
-                Some("false" | "0")
-            ),
+            event_agent_enabled: match get("VOX_EVENT_AGENT_ENABLED") {
+                None => true,
+                Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" => true,
+                    "false" | "0" => false,
+                    _ => return Err(ConfigError::Invalid("VOX_EVENT_AGENT_ENABLED")),
+                },
+            },
             email_from: get("VOX_EMAIL_FROM").filter(|value| !value.trim().is_empty()),
             core_api_url: get("VOX_CORE_API_URL").filter(|value| !value.trim().is_empty()),
             jev_api_key,
@@ -123,6 +128,22 @@ impl Config {
     }
 }
 
+fn positive_number<T, F>(get: &F, name: &'static str, default: T) -> Result<T, ConfigError>
+where
+    T: std::str::FromStr + Default + PartialOrd,
+    F: Fn(&str) -> Option<String>,
+{
+    match get(name) {
+        None => Ok(default),
+        Some(value) => value
+            .trim()
+            .parse::<T>()
+            .ok()
+            .filter(|value| *value > T::default())
+            .ok_or(ConfigError::Invalid(name)),
+    }
+}
+
 fn non_empty<F>(get: &F, name: &'static str) -> Result<String, ConfigError>
 where
     F: Fn(&str) -> Option<String>,
@@ -130,4 +151,45 @@ where
     get(name)
         .filter(|value| !value.trim().is_empty())
         .ok_or(ConfigError::Missing(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configured(name: &str, value: &str) -> Result<Config, ConfigError> {
+        Config::from_values(|key| match key {
+            key if key == name => Some(value.into()),
+            "DATABASE_URL" | "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => {
+                Some("fixture".into())
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn explicit_false_does_not_enable_autonomous_processing() {
+        for value in ["false", "FALSE", " False ", "0"] {
+            assert!(
+                !configured("VOX_EVENT_AGENT_ENABLED", value)
+                    .unwrap()
+                    .event_agent_enabled
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_flags_and_pool_limits_are_rejected() {
+        for (name, value) in [
+            ("VOX_EVENT_AGENT_ENABLED", "disabled"),
+            ("DB_MAX_CONNECTIONS", "oops"),
+            ("DB_MAX_CONNECTIONS", "0"),
+            ("DB_ACQUIRE_TIMEOUT_SECS", "0"),
+            ("DB_ACQUIRE_TIMEOUT_SECS", ""),
+            ("PORT", "0"),
+            ("PORT", "not-a-port"),
+        ] {
+            assert!(configured(name, value).is_err(), "accepted invalid {name}");
+        }
+    }
 }

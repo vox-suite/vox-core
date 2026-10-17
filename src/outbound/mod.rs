@@ -29,6 +29,8 @@ pub struct OutboundCallRecord {
 
 #[derive(Debug, thiserror::Error)]
 pub enum OutboundError {
+    #[error("outbound dispatch unavailable")]
+    Unavailable,
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
     #[error("bridge error: {0}")]
@@ -68,6 +70,7 @@ impl OutboundCallService {
         schedule_id: Option<Uuid>,
         span_id: Option<Uuid>,
     ) -> Result<OutboundCallRecord, OutboundError> {
+        let bridge = self.bridge.as_ref().ok_or(OutboundError::Unavailable)?;
         let phone_clean = phone_number.trim();
         if !crate::phone::is_dialable_digits(phone_clean) {
             return Err(OutboundError::InvalidInput(
@@ -126,7 +129,7 @@ impl OutboundCallService {
         .fetch_one(self.db.pool())
         .await?;
 
-        let provider_call_id = if let Some(bridge) = &self.bridge {
+        let provider_call_id = {
             tracing::info!(
                 call_id = %call_id,
                 phone = %phone_clean,
@@ -167,12 +170,6 @@ impl OutboundCallService {
             }
 
             Some(response.provider_call_id)
-        } else {
-            tracing::warn!(
-                call_id = %call_id,
-                "Bridge client not configured; registered outbound call without external telephony dispatch"
-            );
-            None
         };
 
         let state = if provider_call_id.is_some() {
@@ -224,5 +221,63 @@ impl OutboundCallService {
             span_id,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires isolated TEST_DATABASE_URL"]
+    async fn absent_bridge_rejects_dispatch_before_any_database_write() {
+        let db = Db::connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        crate::identity::IdentityService::new(db.clone())
+            .resolve_for_user(user)
+            .await
+            .unwrap();
+        let context: Uuid = sqlx::query_scalar("SELECT id FROM user_contexts WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let service = OutboundCallService::new(db.clone(), None);
+        let result = service
+            .initiate_call_to_phone(
+                ResourceOwner {
+                    user_context_id: UserContextId(context),
+                    user_id: UserId(user),
+                },
+                "15555550123",
+                "Fixture reason",
+                "Fixture instruction",
+                None,
+                None,
+            )
+            .await;
+        assert!(matches!(result, Err(OutboundError::Unavailable)));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM conversations WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "unconfigured dispatch must not create phantom conversations"
+        );
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
     }
 }

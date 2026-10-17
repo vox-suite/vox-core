@@ -50,4 +50,5 @@ pub struct ClaimedJob {
     pub occurrence_at: Option<DateTime<Utc>>,
     pub attempt_count: i32,
     pub max_attempts: i32,
+    pub lease_generation: i64,
 }

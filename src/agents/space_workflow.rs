@@ -12,6 +12,12 @@ impl SpaceRuntime {
     ) -> Result<(), AgentError> {
         let repo = SpaceRepository::new(self.db.pool().clone());
         let tasks = TaskRepository::new(self.db.pool().clone());
+        // Atomically reject terminal spaces and capture the generation this run owns.
+        let generation: Option<i32> = sqlx::query_scalar("UPDATE spaces SET run_state='running',run_error=NULL,updated_at=now() WHERE id=$1 AND state NOT IN ('committed','dropped') RETURNING workflow_generation")
+            .bind(space.id).fetch_optional(self.db.pool()).await.map_err(|_| AgentError::Provider)?;
+        let Some(generation) = generation else {
+            return Ok(());
+        };
         let graph = repo
             .get_graph(space.user_id, space.id)
             .await
@@ -23,15 +29,6 @@ impl SpaceRuntime {
             .find(|n| n.kind == "goal")
             .ok_or(AgentError::Provider)?
             .id;
-        repo.set_run_state(space.id, RunState::Running, None)
-            .await
-            .map_err(|_| AgentError::Provider)?;
-        let generation: i32 =
-            sqlx::query_scalar("SELECT workflow_generation FROM spaces WHERE id=$1")
-                .bind(space.id)
-                .fetch_one(self.db.pool())
-                .await
-                .map_err(|_| AgentError::Provider)?;
         if generation == 1 {
             let web = tasks
                 .spawn_generation(
@@ -96,29 +93,33 @@ impl SpaceRuntime {
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+        let Some(mut tx) = self
+            .workflow_write_transaction(space.id, generation)
+            .await?
+        else {
+            return Ok(());
+        };
         let failed: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM space_tasks WHERE space_id=$1 AND status IN ('failed','blocked')",
         )
         .bind(space.id)
-        .fetch_one(self.db.pool())
+        .fetch_one(&mut *tx)
         .await
         .map_err(|_| AgentError::Provider)?;
-        repo.set_run_state(
-            space.id,
-            if failed > 0 {
-                RunState::Failed
-            } else {
-                RunState::Idle
-            },
-            if failed > 0 {
+        sqlx::query("UPDATE spaces SET run_state=$2,run_error=$3,updated_at=now() WHERE id=$1")
+            .bind(space.id)
+            .bind(if failed > 0 { "failed" } else { "idle" })
+            .bind(if failed > 0 {
                 Some("A workflow task needs attention")
             } else {
                 None
-            },
-        )
-        .await
-        .map_err(|_| AgentError::Provider)?;
-        let planned = sqlx::query("UPDATE spaces SET state='planned' WHERE id=$1 AND state='ideating' AND NOT EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND status!='done') AND EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND role='plan' AND status='done')").bind(space.id).execute(self.db.pool()).await.map_err(|_|AgentError::Provider)?.rows_affected() > 0;
+            })
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| AgentError::Provider)?;
+        let planned = sqlx::query("UPDATE spaces SET state='planned' WHERE id=$1 AND state='ideating' AND NOT EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND status!='done') AND EXISTS(SELECT 1 FROM space_tasks WHERE space_id=$1 AND role='plan' AND status='done')").bind(space.id).execute(&mut *tx).await.map_err(|_|AgentError::Provider)?.rows_affected() > 0;
+        sqlx::query("UPDATE space_nodes SET is_final=(space_nodes.id=latest.id) FROM (SELECT n.id FROM space_nodes n JOIN space_tasks t ON t.node_id=n.id WHERE n.space_id=$1 AND n.is_current AND t.role='plan' AND t.status='done' ORDER BY t.updated_at DESC LIMIT 1) latest WHERE space_nodes.space_id=$1 AND (space_nodes.is_final OR space_nodes.id=latest.id)").bind(space.id).execute(&mut *tx).await.map_err(|_| AgentError::Provider)?;
+        tx.commit().await.map_err(|_| AgentError::Provider)?;
         if planned && let Some(hub) = &self.user_events {
             let row = sqlx::query("SELECT s.title, (SELECT n.body FROM space_nodes n JOIN space_tasks t ON t.node_id=n.id WHERE t.space_id=s.id AND t.role='plan' AND t.status='done' ORDER BY t.updated_at DESC LIMIT 1) AS summary FROM spaces s WHERE s.id=$1").bind(space.id).fetch_optional(self.db.pool()).await.map_err(|_|AgentError::Provider)?;
             let title: String = row.as_ref().map(|r| r.get("title")).unwrap_or_default();
@@ -133,7 +134,7 @@ impl SpaceRuntime {
                 json!({"type":"space_plan_ready","space_id":space.id,"title":title,"summary":summary}),
             );
         }
-        sqlx::query("UPDATE space_nodes SET is_final=(space_nodes.id=latest.id) FROM (SELECT n.id FROM space_nodes n JOIN space_tasks t ON t.node_id=n.id WHERE n.space_id=$1 AND n.is_current AND t.role='plan' AND t.status='done' ORDER BY t.updated_at DESC LIMIT 1) latest WHERE space_nodes.space_id=$1 AND (space_nodes.is_final OR space_nodes.id=latest.id)").bind(space.id).execute(self.db.pool()).await.map_err(|_| AgentError::Provider)?;
+
         self.workflow_notify(space.user_id, space.id);
         Ok(())
     }
@@ -330,8 +331,15 @@ impl SpaceRuntime {
                         "new_root" => None,
                         _ => target.or(latest_plan).or(Some(root)),
                     };
-                    self.seed_vision(space, tasks, parent, &decision.title, &brief, generation)
-                        .await?;
+                    self.seed_vision(
+                        space,
+                        tasks,
+                        parent,
+                        &decision.title,
+                        &brief,
+                        RequestVersion { id, generation },
+                    )
+                    .await?;
                 }
                 "combine" => {
                     let mut parents: Vec<Uuid> = decision
@@ -371,14 +379,27 @@ impl SpaceRuntime {
                         .map_err(|_| AgentError::Provider)?;
                 }
                 "finalize" => {
-                    if let Some(plan) = valid(decision.target).or(latest_plan) {
-                        sqlx::query("UPDATE space_nodes SET is_final=(id=$2) WHERE space_id=$1 AND (is_final OR id=$2)").bind(space.id).bind(plan).execute(self.db.pool()).await.map_err(|_| AgentError::Provider)?;
+                    let Some(mut tx) = self
+                        .request_write_transaction(space.id, id, generation)
+                        .await?
+                    else {
+                        continue;
+                    };
+                    if let Some(plan) = valid(decision.target).or(latest_plan).filter(|id| {
+                        nodes.iter().any(|n| {
+                            n.id == *id
+                                && n.kind == "plan"
+                                && n.state == crate::domain::spaces::NodeState::Done
+                        })
+                    }) {
+                        sqlx::query("UPDATE space_nodes SET is_final=(id=$2) WHERE space_id=$1 AND (is_final OR id=$2)").bind(space.id).bind(plan).execute(&mut *tx).await.map_err(|_| AgentError::Provider)?;
                         sqlx::query("UPDATE space_tasks SET updated_at=now() WHERE node_id=$1")
                             .bind(plan)
-                            .execute(self.db.pool())
+                            .execute(&mut *tx)
                             .await
                             .map_err(|_| AgentError::Provider)?;
                     }
+                    tx.commit().await.map_err(|_| AgentError::Provider)?;
                 }
                 _ => {
                     let role: String = match target {
@@ -405,30 +426,82 @@ impl SpaceRuntime {
                     }
                 }
             }
+            let Some(mut tx) = self
+                .request_write_transaction(space.id, id, generation)
+                .await?
+            else {
+                continue;
+            };
             if !reply.is_empty() {
                 sqlx::query(
                     "INSERT INTO space_messages(space_id,role,text) VALUES($1,'assistant',$2)",
                 )
                 .bind(space.id)
                 .bind(&reply)
-                .execute(self.db.pool())
+                .execute(&mut *tx)
                 .await
                 .map_err(|_| AgentError::Provider)?;
-                if let Some(hub) = &self.user_events {
-                    hub.notify(
-                        space.user_id,
-                        json!({"type":"space_message_created","space_id":space.id}),
-                    );
-                }
             }
             sqlx::query("UPDATE space_workflow_requests SET processed=true WHERE id=$1")
                 .bind(id)
-                .execute(self.db.pool())
+                .execute(&mut *tx)
                 .await
                 .map_err(|_| AgentError::Provider)?;
+            tx.commit().await.map_err(|_| AgentError::Provider)?;
+            if !reply.is_empty()
+                && let Some(hub) = &self.user_events
+            {
+                hub.notify(
+                    space.user_id,
+                    json!({"type":"space_message_created","space_id":space.id}),
+                );
+            }
             self.workflow_notify(space.user_id, space.id);
         }
         Ok(())
+    }
+    async fn workflow_write_transaction(
+        &self,
+        space: Uuid,
+        generation: i32,
+    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, AgentError> {
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|_| AgentError::Provider)?;
+        let current =
+            sqlx::query("SELECT workflow_generation,state FROM spaces WHERE id=$1 FOR UPDATE")
+                .bind(space)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|_| AgentError::Provider)?;
+        let Some(current) = current else {
+            return Ok(None);
+        };
+        if current.get::<i32, _>("workflow_generation") != generation
+            || matches!(
+                current.get::<String, _>("state").as_str(),
+                "committed" | "dropped"
+            )
+        {
+            return Ok(None);
+        }
+        Ok(Some(tx))
+    }
+    async fn request_write_transaction(
+        &self,
+        space: Uuid,
+        request: Uuid,
+        generation: i32,
+    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, AgentError> {
+        let Some(mut tx) = self.workflow_write_transaction(space, generation).await? else {
+            return Ok(None);
+        };
+        let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM space_workflow_requests WHERE id=$1 AND space_id=$2 AND generation=$3 AND NOT processed)")
+            .bind(request).bind(space).bind(generation).fetch_one(&mut *tx).await.map_err(|_| AgentError::Provider)?;
+        Ok(if pending { Some(tx) } else { None })
     }
     async fn seed_vision(
         &self,
@@ -437,8 +510,18 @@ impl SpaceRuntime {
         parent: Option<Uuid>,
         title: &str,
         brief: &str,
-        generation: i32,
+        request: RequestVersion,
     ) -> Result<(), AgentError> {
+        let RequestVersion {
+            id: request,
+            generation,
+        } = request;
+        let Some(mut tx) = self
+            .request_write_transaction(space.id, request, generation)
+            .await?
+        else {
+            return Ok(());
+        };
         let title = if title.trim().is_empty() {
             "New direction"
         } else {
@@ -449,7 +532,7 @@ impl SpaceRuntime {
             .bind(title)
             .bind(brief)
             .bind(parent.map(|p| vec![p]).unwrap_or_default())
-            .fetch_one(self.db.pool())
+            .fetch_one(&mut *tx)
             .await
             .map_err(|_| AgentError::Provider)?;
         if let Some(parent) = parent {
@@ -457,10 +540,11 @@ impl SpaceRuntime {
                 .bind(space.id)
                 .bind(parent)
                 .bind(vision)
-                .execute(self.db.pool())
+                .execute(&mut *tx)
                 .await
                 .map_err(|_| AgentError::Provider)?;
         }
+        tx.commit().await.map_err(|_| AgentError::Provider)?;
         let (steps, children) = (
             crate::config::DEFAULT_SPACE_MAX_STEPS as i64,
             crate::config::DEFAULT_SPACE_MAX_CHILDREN as i64,
@@ -506,12 +590,8 @@ impl SpaceRuntime {
         text: &str,
     ) -> RequestDecision {
         let fallback = RequestDecision {
-            action: if selected.is_some() {
-                "refine"
-            } else {
-                "extend"
-            }
-            .into(),
+            action: "answer".into(),
+            reply: "I couldn't understand that request just now. Please try again.".into(),
             ..Default::default()
         };
         let summary: Vec<Value> = nodes
@@ -544,36 +624,9 @@ impl SpaceRuntime {
         else {
             return fallback;
         };
-        let cleaned = raw
-            .trim()
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim();
-        let Some(value) = cleaned
-            .find('{')
-            .and_then(|i| {
-                serde_json::Deserializer::from_str(&cleaned[i..])
-                    .into_iter::<Value>()
-                    .next()
-            })
-            .and_then(Result::ok)
-        else {
-            return fallback;
-        };
-        let uuid = |v: &Value| v.as_str().and_then(|s| Uuid::parse_str(s).ok());
-        RequestDecision {
-            action: value["action"].as_str().unwrap_or("extend").to_string(),
-            target: uuid(&value["target"]),
-            parents: value["parents"]
-                .as_array()
-                .map(|a| a.iter().filter_map(uuid).collect())
-                .unwrap_or_default(),
-            title: value["title"].as_str().unwrap_or_default().to_string(),
-            brief: value["brief"].as_str().unwrap_or_default().to_string(),
-            reply: value["reply"].as_str().unwrap_or_default().to_string(),
-        }
+        parse_request_decision(&raw).unwrap_or(fallback)
     }
+
     async fn expand_workflow_outputs(
         &self,
         space: Uuid,
@@ -790,6 +843,50 @@ fn parse_task_output(text: &str) -> Result<Value, TaskFailure> {
     Err(TaskFailure::InvalidJson)
 }
 
+fn parse_request_decision(raw: &str) -> Option<RequestDecision> {
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let value = cleaned
+        .find('{')
+        .and_then(|i| {
+            serde_json::Deserializer::from_str(&cleaned[i..])
+                .into_iter::<Value>()
+                .next()
+        })
+        .and_then(Result::ok)?;
+    let action = value["action"].as_str().filter(|action| {
+        matches!(
+            *action,
+            "refine" | "extend" | "branch" | "new_root" | "combine" | "finalize" | "answer"
+        )
+    })?;
+    let uuid = |v: &Value| v.as_str().and_then(|s| Uuid::parse_str(s).ok());
+    let reply = value["reply"].as_str().unwrap_or_default().to_string();
+    if action == "answer" && reply.trim().is_empty() {
+        return None;
+    }
+    Some(RequestDecision {
+        action: action.to_string(),
+        target: uuid(&value["target"]),
+        parents: value["parents"]
+            .as_array()
+            .map(|a| a.iter().filter_map(uuid).collect())
+            .unwrap_or_default(),
+        title: value["title"].as_str().unwrap_or_default().to_string(),
+        brief: value["brief"].as_str().unwrap_or_default().to_string(),
+        reply,
+    })
+}
+
+struct RequestVersion {
+    id: Uuid,
+    generation: i32,
+}
+
 #[derive(Default)]
 struct RequestDecision {
     action: String,
@@ -798,4 +895,302 @@ struct RequestDecision {
     title: String,
     brief: String,
     reply: String,
+}
+
+#[cfg(test)]
+mod request_regression_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_router_responses_do_not_select_an_implicit_mutation() {
+        for raw in [
+            "not JSON",
+            "{}",
+            r#"{"action":"unknown"}"#,
+            r#"{"action":"answer"}"#,
+        ] {
+            assert!(
+                parse_request_decision(raw).is_none(),
+                "unexpected route for {raw}"
+            );
+        }
+        let decision =
+            parse_request_decision(r#"{"action":"answer","reply":"Here is the explanation."}"#)
+                .unwrap();
+        assert_eq!(decision.action, "answer");
+        assert_eq!(decision.reply, "Here is the explanation.");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated VOX_SPACE_TEST_DATABASE_URL"]
+    async fn unavailable_router_does_not_choose_a_graph_mutation() {
+        let url = std::env::var("VOX_SPACE_TEST_DATABASE_URL").unwrap();
+        let db = crate::db::Db::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let config = Config::from_values(|key| match key {
+            "DATABASE_URL" => Some(url.clone()),
+            "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => Some("fixture".into()),
+            _ => None,
+        })
+        .unwrap();
+        let mut runtime = SpaceRuntime::new(db.clone(), &config, None);
+        runtime.gemini = None;
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let space = SpaceRepository::new(db.pool().clone())
+            .create_workflow_space(user, "Fixture", "Plan a fixture")
+            .await
+            .unwrap();
+        let decision = runtime
+            .decide_request(&space, &[], None, "Can you explain this?")
+            .await;
+        assert_eq!(
+            decision.action, "answer",
+            "router failure must never start research"
+        );
+        assert!(
+            !decision.reply.is_empty(),
+            "the user needs a retryable explanation"
+        );
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated VOX_SPACE_TEST_DATABASE_URL"]
+    async fn stopped_or_processed_request_cannot_publish_a_new_direction() {
+        let url = std::env::var("VOX_SPACE_TEST_DATABASE_URL").unwrap();
+        let db = crate::db::Db::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let config = Config::from_values(|key| match key {
+            "DATABASE_URL" => Some(url.clone()),
+            "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => Some("fixture".into()),
+            _ => None,
+        })
+        .unwrap();
+        let runtime = SpaceRuntime::new(db.clone(), &config, None);
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let spaces = SpaceRepository::new(db.pool().clone());
+        let tasks = TaskRepository::new(db.pool().clone());
+        let space = spaces
+            .create_workflow_space(user, "Fixture", "Plan a fixture")
+            .await
+            .unwrap();
+        let request: Uuid = sqlx::query_scalar("INSERT INTO space_workflow_requests(space_id,message,generation) VALUES($1,'Explore another option',1) RETURNING id")
+            .bind(space.id).fetch_one(db.pool()).await.unwrap();
+        let allowed = runtime
+            .request_write_transaction(space.id, request, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        allowed.rollback().await.unwrap();
+        sqlx::query("UPDATE space_workflow_requests SET processed=true WHERE id=$1")
+            .bind(request)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            runtime
+                .request_write_transaction(space.id, request, 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        sqlx::query("UPDATE space_workflow_requests SET processed=false WHERE id=$1")
+            .bind(request)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        tasks.stop(space.id).await.unwrap();
+        assert!(
+            runtime
+                .request_write_transaction(space.id, request, 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            runtime
+                .workflow_write_transaction(space.id, 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        runtime
+            .seed_vision(
+                &space,
+                &tasks,
+                None,
+                "Must not appear",
+                "Stale model response",
+                RequestVersion {
+                    id: request,
+                    generation: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let graph = spaces.get_graph(user, space.id).await.unwrap().unwrap();
+        assert_eq!(
+            graph.nodes.len(),
+            1,
+            "stale routing must not insert even an orphan goal"
+        );
+        let current = runtime
+            .workflow_write_transaction(space.id, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        current.rollback().await.unwrap();
+        sqlx::query("UPDATE spaces SET state='dropped' WHERE id=$1")
+            .bind(space.id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            runtime
+                .workflow_write_transaction(space.id, 2)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+    async fn terminal_fixture() -> (crate::db::Db, SpaceRuntime, crate::domain::spaces::Space) {
+        let url = std::env::var("VOX_SPACE_TEST_DATABASE_URL").unwrap();
+        let db = crate::db::Db::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let config = Config::from_values(|key| match key {
+            "DATABASE_URL" => Some(url.clone()),
+            "VOX_AUTH_TOKEN" | "GEMINI_API_KEY" | "EXA_API_KEY" => Some("fixture".into()),
+            _ => None,
+        })
+        .unwrap();
+        let runtime = SpaceRuntime::new(db.clone(), &config, None);
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id) VALUES($1)")
+            .bind(user)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let space = SpaceRepository::new(db.pool().clone())
+            .create_workflow_space(user, "Fixture", "Plan a fixture")
+            .await
+            .unwrap();
+        (db, runtime, space)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated VOX_SPACE_TEST_DATABASE_URL"]
+    async fn dropping_a_running_plan_atomically_stops_and_invalidates_its_work() {
+        let (db, runtime, space) = terminal_fixture().await;
+        let spaces = SpaceRepository::new(db.pool().clone());
+        let tasks = TaskRepository::new(db.pool().clone());
+        let root = spaces
+            .get_graph(space.user_id, space.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .nodes[0]
+            .id;
+        tasks
+            .spawn(
+                space.id,
+                &TaskProposal {
+                    role: "plan".into(),
+                    title: "Plan".into(),
+                    brief: "Draft a plan".into(),
+                    dependencies: vec![root],
+                },
+                60,
+                8,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let running = tasks.claim(space.id).await.unwrap().unwrap();
+        spaces
+            .set_run_state(space.id, RunState::Running, None)
+            .await
+            .unwrap();
+        assert!(spaces.drop_space(space.user_id, space.id).await.unwrap());
+        let dropped = spaces
+            .get_space(space.user_id, space.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(dropped.run_state, RunState::Idle);
+        assert!(
+            runtime
+                .workflow_write_transaction(space.id, 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !tasks
+                .finish(
+                    &running,
+                    &json!({"summary":"Late output","evidence":[]}),
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM space_tasks WHERE node_id=$1")
+            .bind(running.node_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(state, "cancelled");
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(space.user_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated VOX_SPACE_TEST_DATABASE_URL"]
+    async fn late_workflow_start_cannot_mark_terminal_plans_running() {
+        let (db, runtime, space) = terminal_fixture().await;
+        for terminal in ["dropped", "committed"] {
+            sqlx::query("UPDATE spaces SET state=$2,run_state='idle' WHERE id=$1")
+                .bind(space.id)
+                .bind(terminal)
+                .execute(db.pool())
+                .await
+                .unwrap();
+            runtime.run_workflow(space.clone(), None).await.unwrap();
+            let state: String = sqlx::query_scalar("SELECT run_state FROM spaces WHERE id=$1")
+                .bind(space.id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                state, "idle",
+                "a late run must not restart a {terminal} plan"
+            );
+        }
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(space.user_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
 }

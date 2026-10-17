@@ -52,10 +52,17 @@ pub struct BridgeClient {
 
 impl BridgeClient {
     pub fn new(base_url: String, service_token: String) -> Result<Self, BridgeError> {
+        let endpoint = reqwest::Url::parse(base_url.trim())
+            .map_err(|_| BridgeError::InvalidUrl("expected an absolute HTTP endpoint".into()))?;
+        if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
+            return Err(BridgeError::InvalidUrl(
+                "expected an absolute HTTP endpoint".into(),
+            ));
+        }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
-        let trimmed_url = base_url.trim_end_matches('/').to_string();
+        let trimmed_url = endpoint.as_str().trim_end_matches('/').to_string();
         Ok(Self {
             http,
             base_url: trimmed_url,
@@ -117,5 +124,17 @@ impl OutboundBridge for BridgeClient {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configured_bridge_must_be_an_http_endpoint() {
+        for endpoint in ["not a URL", "file:///private/tmp", "http://"] {
+            assert!(BridgeClient::new(endpoint.into(), "fixture".into()).is_err());
+        }
     }
 }

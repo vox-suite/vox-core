@@ -204,24 +204,35 @@ pub async fn run_worker(
         (None, None, None, None)
     };
 
-    let bridge_client = config.bridge_url.as_ref().and_then(|url| {
-        BridgeClient::new(url.clone(), config.service_token.clone())
-            .ok()
-            .map(|c| Arc::new(c) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
-    });
+    let bridge_client = config
+        .bridge_url
+        .as_ref()
+        .map(|url| {
+            BridgeClient::new(url.clone(), config.service_token.clone())
+                .map(|c| Arc::new(c) as Arc<dyn vox_core::bridge_client::OutboundBridge>)
+        })
+        .transpose()?;
+    tracing::info!(
+        outbound_enabled = bridge_client.is_some(),
+        "Outbound call capability configured"
+    );
     let outbound = Arc::new(OutboundCallService::new(db.clone(), bridge_client));
 
     let notifier = match (&config.smtp_url, &config.email_from) {
-        (Some(url), Some(from)) => vox_core::user_notifications::SmtpEmailSender::new(url, from)
-            .ok()
-            .map(|sender| {
-                Arc::new(vox_core::user_notifications::UserNotifier::new(
-                    db.pool().clone(),
-                    Arc::new(sender),
-                ))
-            }),
-        _ => None,
+        (Some(url), Some(from)) => Some(Arc::new(vox_core::user_notifications::UserNotifier::new(
+            db.pool().clone(),
+            Arc::new(vox_core::user_notifications::SmtpEmailSender::new(
+                url, from,
+            )?),
+        ))),
+        (None, None) => None,
+        _ => return Err("VOX_SMTP_URL and VOX_EMAIL_FROM must be configured together".into()),
     };
+    tracing::info!(
+        email_enabled = notifier.is_some(),
+        event_agent_enabled = config.event_agent_enabled,
+        "Event processing capabilities configured"
+    );
     let mut events =
         EventHandler::with_jev(db.clone(), triager, schema_classifier, schema_extractor);
     if config.event_agent_enabled {
