@@ -124,9 +124,11 @@ impl ConversationService {
 
         let needs_onboarding = known_name
             .as_deref()
-            .is_none_or(|name| name.trim().is_empty());
+            .is_none_or(|name| name.trim().is_empty())
+            && !prior_messages.iter().any(|message| message.role == "user");
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
+            && !request.outbound
             && (request.text.trim() == "The call just connected. Greet the user."
                 || (prior_messages.is_empty()
                     && request.initiation_context.as_deref()
@@ -134,12 +136,13 @@ impl ConversationService {
 
         if is_inbound_connect {
             let known_name = self.memory.get_user_name(active_user_id).await?;
-            let greeting = if let Some(ref name) = known_name {
-                format!("Hello {}! How can I help you today?", name.trim())
-            } else {
-                "Hi there! It seems you're calling for the first time. How can I help you?"
-                    .to_string()
-            };
+            let greeting = self
+                .opening_greeting(
+                    active_user_id,
+                    known_name.as_deref(),
+                    &request.external_conversation_id,
+                )
+                .await?;
 
             self.append_message(conversation_id, "assistant", &greeting)
                 .await?;
@@ -193,6 +196,7 @@ impl ConversationService {
                 tts_provider: request.tts_provider.clone(),
                 filler: request.filler.clone(),
                 conversation_id: Some(conversation_id.0),
+                outbound: request.outbound,
             })
             .await?;
         if !self.is_current(owner, &saved_request).await {
@@ -255,6 +259,7 @@ impl ConversationService {
             return Err(ConversationError::Invalid);
         }
         if crate::agents::conversation::is_voice_channel(&request.identity.channel)
+            && !request.outbound
             && request.text.trim() == "The call just connected. Greet the user."
         {
             return self.cached_opening(context, request).await;
@@ -299,7 +304,8 @@ impl ConversationService {
 
         let needs_onboarding = known_name
             .as_deref()
-            .is_none_or(|name| name.trim().is_empty());
+            .is_none_or(|name| name.trim().is_empty())
+            && !prior_messages.iter().any(|message| message.role == "user");
         tracing::info!(
             external_conversation_id = %request.external_conversation_id,
             turn_id = ?request.turn_id,
@@ -321,6 +327,7 @@ impl ConversationService {
         );
         let is_voice = crate::agents::conversation::is_voice_channel(&request.identity.channel);
         let is_inbound_connect = is_voice
+            && !request.outbound
             && (request.text.trim() == "The call just connected. Greet the user."
                 || (prior_messages.is_empty()
                     && request.initiation_context.as_deref()
@@ -328,13 +335,14 @@ impl ConversationService {
 
         if is_inbound_connect {
             let known_name = self.memory.get_user_name(active_user_id).await?;
+            let greeting = self
+                .opening_greeting(
+                    active_user_id,
+                    known_name.as_deref(),
+                    &request.external_conversation_id,
+                )
+                .await?;
             let name_loaded = std::time::Instant::now();
-            let greeting = if let Some(ref name) = known_name {
-                format!("Hello {}! How can I help you today?", name.trim())
-            } else {
-                "Hi there! It seems you're calling for the first time. How can I help you?"
-                    .to_string()
-            };
 
             self.append_message(conversation_id, "assistant", &greeting)
                 .await?;
@@ -350,19 +358,9 @@ impl ConversationService {
                 "CORE_GREETING_METRICS"
             );
 
-            let chunks = if let Some(ref name) = known_name {
-                vec![
-                    Ok(format!("Hello {}! ", name.trim())),
-                    Ok("How can I help you today?".to_string()),
-                ]
-            } else {
-                vec![
-                    Ok("Hi there! ".to_string()),
-                    Ok(
-                        "It seems you're calling for the first time. How can I help you?"
-                            .to_string(),
-                    ),
-                ]
+            let chunks = match greeting.split_once("! ") {
+                Some((hello, rest)) => vec![Ok(format!("{hello}! ")), Ok(rest.to_string())],
+                None => vec![Ok(greeting)],
             };
             return Ok(Box::pin(futures_util::stream::iter(chunks)));
         }
@@ -405,6 +403,7 @@ impl ConversationService {
                     tts_provider: request.tts_provider,
                     filler: request.filler,
                     conversation_id: Some(conversation_id.0),
+                    outbound: request.outbound,
                 })
                 .await
                 .map_err(ConversationError::from)
@@ -539,11 +538,9 @@ impl ConversationService {
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        let greeting = match name {
-            Some(name) => format!("Hello {name}! How can I help you today?"),
-            None => "Hi there! It seems you're calling for the first time. How can I help you?"
-                .to_owned(),
-        };
+        let greeting = self
+            .opening_greeting(owner.user_id, name, &request.external_conversation_id)
+            .await?;
         let channel = request.identity.channel.clone();
         let external_conversation_id = request.external_conversation_id.clone();
         let turn_id = request.turn_id.clone();
@@ -683,6 +680,31 @@ impl ConversationService {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn opening_greeting(
+        &self,
+        user_id: UserId,
+        name: Option<&str>,
+        external_conversation_id: &str,
+    ) -> Result<String, ConversationError> {
+        if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+            return Ok(format!("Hello {name}! How can I help you today?"));
+        }
+        let returning: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id = c.id \
+             WHERE c.user_id = $1 AND c.external_conversation_id <> $2 AND m.role = 'user')",
+        )
+        .bind(user_id.0)
+        .bind(external_conversation_id)
+        .fetch_one(self.db.pool())
+        .await?;
+        Ok(if returning {
+            "Hi there! How can I help you today?"
+        } else {
+            "Hi there! It seems you're calling for the first time. How can I help you?"
+        }
+        .to_owned())
     }
 
     async fn load_recent_messages(

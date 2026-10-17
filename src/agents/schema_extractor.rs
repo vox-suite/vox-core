@@ -36,14 +36,14 @@ pub trait SchemaExtracting: Send + Sync {
 }
 
 pub struct GeminiSchemaExtractor {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     model: String,
 }
 
 impl GeminiSchemaExtractor {
     pub fn new(config: &Config) -> Self {
         Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             model: config.gemini_model.clone(),
         }
     }
@@ -91,7 +91,7 @@ impl SchemaExtracting for GeminiSchemaExtractor {
         &self,
         prompt: SchemaExtractionPrompt,
     ) -> Result<SchemaExtractionResult, AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
             .name("schema-extractor-agent")

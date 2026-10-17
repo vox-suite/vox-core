@@ -22,7 +22,7 @@ use uuid::Uuid;
 pub struct SpaceRuntime {
     workflow_slots: std::sync::Arc<tokio::sync::Semaphore>,
     db: Db,
-    gemini_api_key: String,
+    gemini: Option<gemini::Client>,
     gemini_model: String,
     exa_api_key: String,
     google_maps_api_key: Option<String>,
@@ -37,7 +37,7 @@ impl SpaceRuntime {
         Self {
             workflow_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(12)),
             db,
-            gemini_api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             gemini_model: config.gemini_model.clone(),
             exa_api_key: config.exa_api_key.clone(),
             google_maps_api_key: config.google_maps_api_key.clone(),
@@ -163,7 +163,7 @@ impl SpaceRuntime {
             space.title, space.intent, spec.mission, spec.look_for, spec.done_when
         );
 
-        let Ok(client) = gemini::Client::new(&self.gemini_api_key) else {
+        let Some(client) = self.gemini.as_ref() else {
             let err_text = "Failed to initialize Gemini client".to_string();
             let _ = repo
                 .set_run_state(space_id, RunState::Failed, Some(&err_text))

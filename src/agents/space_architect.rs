@@ -15,14 +15,14 @@ pub trait SpaceArchitecting: Send + Sync {
 }
 
 pub struct GeminiSpaceArchitect {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     model: String,
 }
 
 impl GeminiSpaceArchitect {
     pub fn new(config: &Config) -> Self {
         Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             model: config.gemini_model.clone(),
         }
     }
@@ -74,7 +74,7 @@ impl SpaceArchitecting for GeminiSpaceArchitect {
         intent: &str,
         available_schemas: &[DataSchema],
     ) -> Result<AgentSpec, AgentError> {
-        let Ok(client) = gemini::Client::new(&self.api_key) else {
+        let Some(client) = self.gemini.as_ref() else {
             return Ok(fallback_spec(intent));
         };
 

@@ -59,14 +59,14 @@ pub trait SuggestingCharts: Send + Sync {
 }
 
 pub struct GeminiChartSuggester {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     model: String,
 }
 
 impl GeminiChartSuggester {
     pub fn new(config: &Config) -> Self {
         Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             model: config.gemini_model.clone(),
         }
     }
@@ -99,7 +99,7 @@ impl SuggestingCharts for GeminiChartSuggester {
         timezone: String,
         focus: Option<String>,
     ) -> Result<Vec<crate::domain::pulse::PulseCandidate>, AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         let summaries: Vec<_> = measurements.iter().map(|m| serde_json::json!({
             "id": m.id, "title": m.title, "description":m.description, "source":m.profile.source,
             "count":m.profile.count,"dated_count":m.profile.dated_count,
@@ -129,7 +129,7 @@ impl SuggestingCharts for GeminiChartSuggester {
         &self,
         prompt: ChartSuggestionPrompt,
     ) -> Result<Vec<ChartSuggestion>, AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
 
         let mut schema_descriptions = Vec::new();
         for s in &prompt.schemas {

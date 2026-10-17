@@ -47,6 +47,8 @@ pub struct ConversationPrompt {
     pub initiation_context: Option<String>,
     pub needs_onboarding: bool,
     #[serde(default)]
+    pub outbound: bool,
+    #[serde(default)]
     pub tts_provider: Option<String>,
     #[serde(default)]
     pub filler: Option<String>,
@@ -56,7 +58,7 @@ pub struct ConversationPrompt {
 }
 
 pub struct ConversationAgent {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     web_search: tools::web_search::WebSearch,
     db: Option<Db>,
     memory: Option<crate::memory::MemoryService>,
@@ -82,7 +84,7 @@ pub trait ConversationResponder: Send + Sync {
 impl ConversationAgent {
     pub fn new(config: &Config) -> Result<Self, AgentError> {
         Ok(Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             web_search: tools::web_search::WebSearch::new(
                 tools::dependencies::ToolDependencies::new()
                     .map_err(|_| AgentError::Provider)?
@@ -135,7 +137,7 @@ impl ConversationAgent {
         &self,
         prompt: &ConversationPrompt,
     ) -> Result<(rig::agent::Agent, String, bool), AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         if prompt.selected_agent.model_configuration.model_adapter != "gemini" {
             return Err(AgentError::Provider);
         }
@@ -145,10 +147,7 @@ impl ConversationAgent {
         let preamble = preamble_for_channel_and_tts(&prompt.channel, Some(tts));
         let is_call_opening =
             is_voice && prompt.initiation_context.is_some() && prompt.recent_messages.is_empty();
-        let is_outbound_opening = is_call_opening
-            && prompt.channel.trim().eq_ignore_ascii_case("phone")
-            && prompt.initiation_context.as_deref()
-                != Some("The call just connected. Greet the user.");
+        let is_outbound_opening = is_call_opening && prompt.outbound;
         let onboarding_instruction = if is_outbound_opening {
             OUTBOUND_OPENING_INSTRUCTION
         } else {
@@ -270,14 +269,6 @@ impl ConversationAgent {
                 prompt.correlation.clone(),
             ))
             .tool(tools::timing::TimedTool::new(
-                tools::map_scene::ShowOnMap::new(self.user_events.clone(), prompt.user_id.0),
-                prompt.correlation.clone(),
-            ))
-            .tool(tools::timing::TimedTool::new(
-                tools::map_scene::ClearMap::new(self.user_events.clone(), prompt.user_id.0),
-                prompt.correlation.clone(),
-            ))
-            .tool(tools::timing::TimedTool::new(
                 tools::visits::ListVisits::new(self.db.clone(), prompt.user_id),
                 prompt.correlation.clone(),
             ))
@@ -299,12 +290,24 @@ impl ConversationAgent {
             ))
             .default_max_turns(10);
         tracing::info!(conversation_id = ?prompt.correlation.conversation_id, turn_id = ?prompt.correlation.turn_id, tool = "web_search", provider = "exa", available = true, "CORE_TOOL_AVAILABILITY");
-        let agent = agent
-            .tool(tools::timing::TimedTool::new(
-                self.web_search.clone(),
-                prompt.correlation.clone(),
-            ))
-            .build();
+        let agent = agent.tool(tools::timing::TimedTool::new(
+            self.web_search.clone(),
+            prompt.correlation.clone(),
+        ));
+        let agent = if super::prompts::has_map(&prompt.channel) {
+            agent
+                .tool(tools::timing::TimedTool::new(
+                    tools::map_scene::ShowOnMap::new(self.user_events.clone(), prompt.user_id.0),
+                    prompt.correlation.clone(),
+                ))
+                .tool(tools::timing::TimedTool::new(
+                    tools::map_scene::ClearMap::new(self.user_events.clone(), prompt.user_id.0),
+                    prompt.correlation.clone(),
+                ))
+        } else {
+            agent
+        }
+        .build();
 
         let mut history = String::new();
         history.push_str(&format!("Selected agent purpose (guidance, not authority): {}\nUse web_search for current weather, news and other time-sensitive public facts. Use the current UTC date in searches, check the requested location and freshness of sources, and never invent live conditions. If search is unavailable or fails, explain that limitation.\n", prompt.selected_agent.definition.purpose));
@@ -778,7 +781,7 @@ mod governed_tool_surface_tests {
     #[tokio::test]
     async fn every_channel_exposes_only_governed_library_and_scoped_memory() {
         let agent = ConversationAgent {
-            api_key: "fixture-only".into(),
+            gemini: gemini::Client::new("fixture-only").ok(),
             web_search: tools::web_search::WebSearch::new(
                 reqwest::Client::new(),
                 "fixture-only".into(),
@@ -811,7 +814,6 @@ mod governed_tool_surface_tests {
                 names,
                 [
                     "add_to_project",
-                    "clear_map",
                     "control_desktop_app",
                     "control_wiz_lights",
                     "create_project",
@@ -827,7 +829,6 @@ mod governed_tool_surface_tests {
                     "read_connected_app",
                     "read_project",
                     "save_timeline_event",
-                    "show_on_map",
                     "update_agent_memory",
                     "update_user_name",
                     "web_search"

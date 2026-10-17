@@ -4,6 +4,11 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::identity::{
+    DeploymentId, HostAppId, HostOrganizationId, ResolvedUserContext, UserContextId,
+    UserContextSubject, UserId,
+};
+
 #[derive(Clone)]
 pub struct DesktopVoiceBroker {
     pool: PgPool,
@@ -19,6 +24,8 @@ pub struct VoiceBinding {
     pub session_id: Uuid,
     pub user_id: Uuid,
     pub device_id: Option<Uuid>,
+    #[serde(skip)]
+    pub context: Option<ResolvedUserContext>,
 }
 impl DesktopVoiceBroker {
     pub fn new(pool: PgPool) -> Self {
@@ -55,14 +62,29 @@ impl DesktopVoiceBroker {
             session_id: r.get("id"),
             user_id: r.get("user_id"),
             device_id: r.get("device_id"),
+            context: None,
         }))
     }
     pub async fn active(&self, id: Uuid) -> Result<Option<VoiceBinding>, sqlx::Error> {
-        let row = sqlx::query("SELECT id,user_id,device_id FROM desktop_voice_sessions WHERE id=$1 AND state='active' AND redeemed_at IS NOT NULL AND created_at>now()-interval '12 hours' AND (device_id IS NULL OR EXISTS(SELECT 1 FROM devices WHERE devices.id=desktop_voice_sessions.device_id AND devices.user_id=desktop_voice_sessions.user_id AND is_active AND revoked_at IS NULL))").bind(id).fetch_optional(&self.pool).await?;
+        let row = sqlx::query("SELECT s.id,s.user_id,s.device_id,uc.id AS ctx_id,uc.deployment_id,uc.host_app_id,uc.organization_id,uc.host_user_id FROM desktop_voice_sessions s LEFT JOIN LATERAL (SELECT * FROM user_contexts WHERE user_contexts.user_id=s.user_id LIMIT 1) uc ON true WHERE s.id=$1 AND s.state='active' AND s.redeemed_at IS NOT NULL AND s.created_at>now()-interval '12 hours' AND (s.device_id IS NULL OR EXISTS(SELECT 1 FROM devices WHERE devices.id=s.device_id AND devices.user_id=s.user_id AND is_active AND revoked_at IS NULL))").bind(id).fetch_optional(&self.pool).await?;
         Ok(row.map(|r| VoiceBinding {
             session_id: r.get("id"),
             user_id: r.get("user_id"),
             device_id: r.get("device_id"),
+            context: r
+                .get::<Option<Uuid>, _>("ctx_id")
+                .map(|ctx_id| ResolvedUserContext {
+                    id: UserContextId(ctx_id),
+                    user_id: UserId(r.get("user_id")),
+                    subject: UserContextSubject {
+                        deployment_id: DeploymentId(r.get("deployment_id")),
+                        host_app_id: HostAppId(r.get("host_app_id")),
+                        organization_id: r
+                            .get::<Option<Uuid>, _>("organization_id")
+                            .map(HostOrganizationId),
+                        host_user_id: r.get("host_user_id"),
+                    },
+                }),
         }))
     }
     pub async fn complete(&self, id: Uuid) -> Result<(), sqlx::Error> {

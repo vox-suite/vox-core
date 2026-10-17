@@ -99,6 +99,7 @@ fn request(binding: &VoiceBinding, input: TurnInput) -> RespondRequest {
         revision: input.revision,
         tts_provider: input.tts_provider,
         filler: None,
+        outbound: false,
     }
 }
 pub async fn respond_stream(
@@ -117,9 +118,12 @@ pub async fn respond_stream(
     let Some(service) = state.legacy.conversations() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let context = match service.resolve_context_for_user(binding.user_id).await {
-        Ok(c) => c,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let context = match binding.context.clone() {
+        Some(c) => c,
+        None => match service.resolve_context_for_user(binding.user_id).await {
+            Ok(c) => c,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
     };
     let stream = match service
         .respond_stream(context, request(&binding, input))

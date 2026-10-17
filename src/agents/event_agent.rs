@@ -47,7 +47,7 @@ pub struct EventContext {
 
 pub struct EventAgent {
     db: Db,
-    gemini_api_key: String,
+    gemini: Option<gemini::Client>,
     gemini_model: String,
     notifier: Option<Arc<UserNotifier>>,
 }
@@ -56,7 +56,7 @@ impl EventAgent {
     pub fn new(db: Db, config: &Config, notifier: Option<Arc<UserNotifier>>) -> Self {
         Self {
             db,
-            gemini_api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             gemini_model: config.gemini_model.clone(),
             notifier,
         }
@@ -64,7 +64,7 @@ impl EventAgent {
 
     pub async fn run(&self, context: EventContext) -> Result<String, AgentError> {
         let user_id: UserId = context.owner.user_id;
-        let client = gemini::Client::new(&self.gemini_api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         let agent = client
             .agent(&self.gemini_model)
             .name("event-agent")

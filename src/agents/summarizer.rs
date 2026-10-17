@@ -17,14 +17,14 @@ pub trait Summarizing: Send + Sync {
 }
 
 pub struct GeminiSummarizer {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     model: String,
 }
 
 impl GeminiSummarizer {
     pub fn new(config: &Config) -> Self {
         Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             model: config.gemini_model.clone(),
         }
     }
@@ -33,7 +33,7 @@ impl GeminiSummarizer {
 #[async_trait]
 impl Summarizing for GeminiSummarizer {
     async fn summarize(&self, prompt: SummaryPrompt) -> Result<StructuredSummary, AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
             .name("summarizer-agent")

@@ -27,6 +27,8 @@ pub struct RespondRequest {
     pub tts_provider: Option<String>,
     #[serde(default)]
     pub filler: Option<String>,
+    #[serde(default)]
+    pub outbound: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

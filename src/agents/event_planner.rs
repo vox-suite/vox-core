@@ -24,7 +24,7 @@ pub trait EventPlanning: Send + Sync {
 }
 
 pub struct GeminiEventPlanner {
-    api_key: String,
+    gemini: Option<gemini::Client>,
     model: String,
     http: reqwest::Client,
     exa_api_key: String,
@@ -36,7 +36,7 @@ impl GeminiEventPlanner {
         let dependencies = super::tools::dependencies::ToolDependencies::new()
             .map_err(|_| AgentError::Provider)?;
         Ok(Self {
-            api_key: config.gemini_api_key.clone(),
+            gemini: gemini::Client::new(&config.gemini_api_key).ok(),
             model: config.gemini_model.clone(),
             http: dependencies.http,
             exa_api_key: config.exa_api_key.clone(),
@@ -48,7 +48,7 @@ impl GeminiEventPlanner {
 #[async_trait]
 impl EventPlanning for GeminiEventPlanner {
     async fn plan(&self, prompt: EventPlanningPrompt) -> Result<Vec<PlannedAction>, AgentError> {
-        let client = gemini::Client::new(&self.api_key).map_err(|_| AgentError::Provider)?;
+        let client = self.gemini.as_ref().ok_or(AgentError::Provider)?;
         let agent = client
             .agent(&self.model)
             .name("event-planner-agent")

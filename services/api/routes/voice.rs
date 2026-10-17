@@ -613,6 +613,7 @@ async fn handle_voice_socket(
             revision: None,
             tts_provider: Some(tts_provider.to_string()),
             filler: None,
+            outbound: false,
         };
         let session_id = session_id.clone();
         let span = tracing::info_span!("native_voice_turn", %session_id, %turn_id, conversation_id = %external_conv_id, kind = "greeting");
@@ -884,6 +885,7 @@ async fn handle_voice_socket(
                                 revision: None,
                                 tts_provider: Some(tts_provider.to_string()),
                                 filler: None,
+                                outbound: false,
                             };
 
                             let llm_started = Instant::now();
