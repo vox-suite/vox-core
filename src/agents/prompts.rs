@@ -1,6 +1,3 @@
-/**
-* System prompts, personality preambles, and channel-specific LLM instructions.
-*/
 pub const GENERAL_PREAMBLE: &str = "You are Vox, an intelligent personal AI assistant running across the user's devices (desktop, mobile, voice, and messaging). \
 You assist the user with their timeline (past activity, plans, and to-dos), collections such as trips, data schemas, personal records, device controls, and real-time information. \
 Be direct, helpful, concise, and proactive. Use clean formatting such as Markdown, bullet points, or tables when appropriate. \
@@ -73,16 +70,6 @@ pub fn preamble_for_channel_and_tts(channel: &str, tts_provider: Option<&str>) -
     }
 }
 
-pub fn preamble_for_channel(channel: &str) -> &'static str {
-    if is_voice_channel(channel) {
-        VOICE_CALL_PREAMBLE
-    } else if channel.trim().eq_ignore_ascii_case("whatsapp") {
-        WHATSAPP_PREAMBLE
-    } else {
-        GENERAL_PREAMBLE
-    }
-}
-
 pub fn onboarding_instruction(
     channel: &str,
     is_call_opening: bool,
@@ -107,7 +94,6 @@ pub fn onboarding_instruction(
     }
 }
 
-/// Shared capability contract for every conversational channel.
 pub const GOVERNED_CAPABILITIES: &str = "Compute relative dates and times (such as 'tonight', 'tomorrow', 'last week') from the Current Time in the prompt. \
 Use library only when a request needs an enabled skill or owned specialist that your other tools do not cover. \
 Use read_connected_app for Google Calendar, PlayStation, food delivery, Spotify, YouTube and Google Maps Timeline data; account consent and assistant_read are enforced on each invocation. Explain freshness, incomplete results and unknown gaming-session times. \

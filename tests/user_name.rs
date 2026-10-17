@@ -177,7 +177,6 @@ async fn small_talk_never_writes_a_name_in_sync_or_streaming_conversations() {
                 turn_id: None,
                 revision: None,
                 tts_provider: None,
-                filler: None,
                 outbound: false,
             };
             let reply = if streaming {

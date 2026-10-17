@@ -150,7 +150,7 @@ impl SpaceRuntime {
              Space Title: {}\n\
              Original Vision/Intent: {}\n\
              Mission: {}\n\
-             What to look for: {:?}\n\
+             What to look for: {}\n\
              Done when: {}\n\n\
              Instructions:\n\
              1. If the graph is empty, start by creating a root 'goal' node with add_node.\n\
@@ -160,7 +160,11 @@ impl SpaceRuntime {
              5. Connect nodes using add_edge to form a clean, flowing DAG directed toward a conclusion.\n\
              6. When options are evaluated, synthesize a 'plan' or 'decision' node with concrete steps.\n\
              7. If the user sends a steer message, adapt the graph accordingly, updating or removing affected nodes.",
-            space.title, space.intent, spec.mission, spec.look_for, spec.done_when
+            space.title,
+            space.intent,
+            spec.mission,
+            serde_json::to_string(&spec.look_for).unwrap_or_default(),
+            spec.done_when
         );
 
         let Some(client) = self.gemini.as_ref() else {
@@ -185,9 +189,9 @@ impl SpaceRuntime {
         let existing_graph_summary = format!(
             "Existing Nodes ({}):\n{}\nExisting Edges ({}):\n{}",
             existing_nodes.map_or(0, |n| n.len()),
-            serde_json::to_string_pretty(existing_nodes.unwrap_or(&vec![])).unwrap_or_default(),
+            serde_json::to_string(existing_nodes.unwrap_or(&vec![])).unwrap_or_default(),
             existing_edges.map_or(0, |e| e.len()),
-            serde_json::to_string_pretty(existing_edges.unwrap_or(&vec![])).unwrap_or_default()
+            serde_json::to_string(existing_edges.unwrap_or(&vec![])).unwrap_or_default()
         );
 
         let user_turn = match user_message {

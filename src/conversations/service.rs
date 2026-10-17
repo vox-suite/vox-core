@@ -1,6 +1,3 @@
-/**
-* Core conversational engine handling user turns, greetings, and LLM responses.
-*/
 use super::{CompleteConversationRequest, ConversationId, RespondRequest, RespondResponse};
 use crate::{
     agents::{
@@ -194,7 +191,6 @@ impl ConversationService {
                 initiation_context: request.initiation_context,
                 needs_onboarding,
                 tts_provider: request.tts_provider.clone(),
-                filler: request.filler.clone(),
                 conversation_id: Some(conversation_id.0),
                 outbound: request.outbound,
             })
@@ -401,7 +397,6 @@ impl ConversationService {
                     initiation_context: request.initiation_context,
                     needs_onboarding,
                     tts_provider: request.tts_provider,
-                    filler: request.filler,
                     conversation_id: Some(conversation_id.0),
                     outbound: request.outbound,
                 })
@@ -514,7 +509,7 @@ impl ConversationService {
     ) -> Result<ConversationTextStream, ConversationError> {
         let started = std::time::Instant::now();
         let owner = context.owner();
-        // A channel identity is presentation data, never a cache authority key.
+
         let ((name, name_ms), (_, conversation_ms)) = tokio::try_join!(
             async {
                 let phase = std::time::Instant::now();

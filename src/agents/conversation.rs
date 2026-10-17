@@ -1,6 +1,3 @@
-/**
-* Conversational agent logic, prompting structures, and TTS token chunking.
-*/
 use super::{AgentError, tools};
 use crate::{
     config::Config,
@@ -19,7 +16,7 @@ use std::pin::Pin;
 pub use super::prompts::{
     ELEVENLABS_VOICE_CALL_PREAMBLE, GENERAL_PREAMBLE, OUTBOUND_OPENING_INSTRUCTION,
     VOICE_CALL_PREAMBLE, WHATSAPP_PREAMBLE, is_elevenlabs_provider, is_voice_channel,
-    onboarding_instruction, preamble_for_channel, preamble_for_channel_and_tts,
+    onboarding_instruction, preamble_for_channel_and_tts,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -50,9 +47,7 @@ pub struct ConversationPrompt {
     pub outbound: bool,
     #[serde(default)]
     pub tts_provider: Option<String>,
-    #[serde(default)]
-    pub filler: Option<String>,
-    /// Groups every turn of one call or chat into a Langfuse session.
+
     #[serde(default)]
     pub conversation_id: Option<uuid::Uuid>,
 }
@@ -154,8 +149,6 @@ impl ConversationAgent {
             onboarding_instruction(&prompt.channel, is_call_opening, prompt.needs_onboarding)
         };
 
-        // Tool exposure is independent of inferred intent and channel. The library
-        // rechecks owned-agent access on every operation; loading is not authority.
         let projects = tools::projects::ProjectAccess::new(
             self.db.clone(),
             prompt.user_id,
@@ -314,24 +307,15 @@ impl ConversationAgent {
         for msg in &prompt.recent_messages {
             history.push_str(&format!("{}: {}\n", msg.role, msg.text));
         }
-        let filler_instruction = if let Some(ref filler) = prompt.filler {
-            format!(
-                "\nVoice Assistant Acknowledgment Already Spoken: \"{}\"\nInstruction: You are speaking on a live voice call. The acknowledgment above was ALREADY spoken out loud to the caller by the assistant just now. Do NOT repeat or contradict this acknowledgment, and do not repeat greetings. Seamlessly continue directly into delivering your answer as a natural continuation of this acknowledgment.\n",
-                filler.trim()
-            )
-        } else {
-            String::new()
-        };
         let current_time = chrono::Utc::now().to_rfc3339();
         let input = format!(
-            "Current Time: {}\nProfile name (user-supplied data): {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}{}",
+            "Current Time: {}\nProfile name (user-supplied data): {}\nUser context:\n{}\nInitiation context:\n{}\nConversation history:\n{}\nUser message:\n{}{}",
             current_time,
             serde_json::to_string(&prompt.user_name).map_err(|_| AgentError::Provider)?,
             prompt.user_context,
             prompt.initiation_context.as_deref().unwrap_or("None"),
             if history.is_empty() { "None" } else { &history },
             prompt.user_text,
-            filler_instruction,
             onboarding_instruction
         );
         Ok((agent, input, is_voice))
@@ -432,8 +416,6 @@ impl ConversationAgent {
     }
 }
 
-/// Polls the reply inside the turn span, since the caller polls it after
-/// `generate_stream` returns, so rig's chat and tool spans nest under the turn.
 fn traced_reply(
     reply: impl Stream<Item = Result<String, AgentError>> + Send + 'static,
     span: tracing::Span,
@@ -487,8 +469,6 @@ fn traced_reply(
     ))
 }
 
-/// Records the agent's reply on the turn span once, when the reply ends or the
-/// caller drops it mid-turn (barge-in), so a cut-off turn keeps what was said.
 struct SpokenReply {
     span: tracing::Span,
     text: String,
@@ -518,8 +498,6 @@ impl Drop for SpokenReply {
     }
 }
 
-/// Root span of one agent turn: one Langfuse trace, grouped per conversation,
-/// exported under the name of the agent that ran (`shopping-agent`, ...).
 fn turn_span(prompt: &ConversationPrompt) -> tracing::Span {
     tracing::info_span!(
         target: crate::telemetry::TURN_TARGET,
@@ -532,7 +510,7 @@ fn turn_span(prompt: &ConversationPrompt) -> tracing::Span {
         channel = %prompt.channel,
         vox.tool_domain = tracing::field::Empty,
         otel.status_code = tracing::field::Empty,
-        // The caller's words and the agent's reply, only with content tracing on.
+
         langfuse.observation.input = crate::telemetry::record_content()
             .then_some(prompt.user_text.as_str()),
         langfuse.observation.output = tracing::field::Empty,

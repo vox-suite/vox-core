@@ -1,6 +1,3 @@
-/**
-* API service entry point running HTTP server and lifecycle listeners.
-*/
 mod auth;
 mod cache_refresh;
 mod config;
@@ -120,8 +117,6 @@ async fn main() {
         .map(|key| Arc::new(vox_core::stt::AssemblyAiClient::new(key.clone())));
     let chart_suggester: Arc<dyn vox_core::agents::chart_suggester::SuggestingCharts> =
         Arc::new(vox_core::agents::chart_suggester::GeminiChartSuggester::new(&config));
-    let space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting> =
-        Arc::new(vox_core::agents::space_architect::GeminiSpaceArchitect::new(&config));
     let space_runtime = Arc::new(vox_core::agents::space_runtime::SpaceRuntime::new(
         db.clone(),
         &config,
@@ -142,7 +137,6 @@ async fn main() {
         tts,
         stt,
         chart_suggester,
-        space_architect,
         space_runtime,
     );
     api_state.bridge = bridge;

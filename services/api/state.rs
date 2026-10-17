@@ -1,7 +1,5 @@
 use sqlx::PgPool;
-/**
-* Shared application state container for API request handlers.
-*/
+
 use std::sync::Arc;
 use vox_core::{
     agents::chart_suggester::SuggestingCharts,
@@ -59,7 +57,6 @@ impl ApiState {
         tts: Option<std::sync::Arc<vox_core::tts::ElevenLabsClient>>,
         stt: Option<std::sync::Arc<vox_core::stt::AssemblyAiClient>>,
         chart_suggester: Arc<dyn SuggestingCharts>,
-        _space_architect: Arc<dyn vox_core::agents::space_architect::SpaceArchitecting>,
         space_runtime: Arc<vox_core::agents::space_runtime::SpaceRuntime>,
     ) -> Self {
         let pool = db.pool().clone();

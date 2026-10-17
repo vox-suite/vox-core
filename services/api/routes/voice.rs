@@ -1,13 +1,5 @@
 use axum::extract::Query;
-/**
- * Real-time bidirectional voice WebSocket endpoint for desktop and mobile clients.
- *
- * Clients stream raw 16-bit mono PCM audio at 16kHz for one utterance as one or
- * more binary WebSocket frames, followed by a `Turn` text message marking the
- * utterance complete. The server transcribes it (AssemblyAI), queries the Gemini
- * agent, and streams back the transcript, text deltas, and high-fidelity
- * ElevenLabs MP3 audio chunks.
- */
+
 use axum::{
     Extension,
     extract::{
@@ -34,8 +26,6 @@ use vox_core::{
     tts::{ElevenLabsClient, SentenceChunker},
 };
 
-/// The sample rate (Hz) clients must resample captured mic audio to before
-/// sending it as binary PCM16 frames.
 pub const VOICE_INPUT_SAMPLE_RATE: u32 = 16000;
 
 #[derive(Clone)]
@@ -48,16 +38,13 @@ pub struct VoiceSocketState {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceClientMessage {
-    /// Marks the audio sent as preceding binary frames (since the last Turn
-    /// or Interrupt) as one complete utterance ready to transcribe.
     Turn {
         #[serde(default)]
         conversation_id: Option<String>,
-        /// Already-transcribed utterance from a client doing on-device STT;
-        /// when set, buffered audio and server STT are skipped.
+
         #[serde(default)]
         text: Option<String>,
-        /// Tools the client already ran on-device for this utterance.
+
         #[serde(default)]
         tool_results: Vec<serde_json::Value>,
     },
@@ -67,8 +54,6 @@ pub enum VoiceClientMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct VoiceSocketParams {
-    /// `local` means the client synthesizes speech on-device, so the server
-    /// streams text only.
     #[serde(default)]
     pub audio: Option<String>,
     #[serde(default)]
@@ -87,7 +72,7 @@ pub enum VoiceServerMessage<'a> {
     AudioTurnSubmitted {
         audio_ms: u64,
     },
-    /// The server's transcription of the audio for this turn.
+
     UserTranscript {
         turn_id: &'a str,
         text: &'a str,
@@ -140,7 +125,6 @@ const UNSET: u64 = u64::MAX;
 const VOICE_CHANNEL: &str = "voice";
 const GREETING_TRIGGER: &str = "The call just connected. Greet the user.";
 
-/// Whole-call counters, logged when the socket closes.
 #[derive(Default)]
 struct SessionStats {
     turns: AtomicU64,
@@ -148,7 +132,6 @@ struct SessionStats {
     audio_frames_out: AtomicU64,
 }
 
-/// Per-turn TTS counters; `first_audio_ms` is measured from the turn start.
 struct SpeakStats {
     kind: &'static str,
     turn_started: Instant,
@@ -234,9 +217,6 @@ impl Drop for SpeakStats {
     }
 }
 
-/// Synthesizes and streams one sentence's audio to the client. Returns
-/// `false` if the caller should stop the turn immediately (cancelled
-/// mid-stream, or the outbound channel closed), `true` to continue.
 async fn speak_sentence(
     tts: Option<&ElevenLabsClient>,
     sentence: &str,
@@ -315,9 +295,6 @@ async fn speak_sentence(
     true
 }
 
-/// Drains queued sentences in order, one at a time, so the caller can push
-/// sentences as soon as they're chunked without waiting for each one's full
-/// TTS synthesis+streaming before consuming the next LLM token.
 async fn run_speaker(
     mut sentence_rx: mpsc::UnboundedReceiver<String>,
     tts: Option<Arc<ElevenLabsClient>>,
@@ -342,7 +319,6 @@ async fn run_speaker(
     }
 }
 
-/// Everything `stream_reply` needs besides the agent stream itself.
 struct Reply {
     kind: &'static str,
     turn_id: String,
@@ -353,8 +329,6 @@ struct Reply {
     llm_started: Instant,
 }
 
-/// Streams an agent reply to the client as text deltas plus spoken audio,
-/// then sends `Done`. Shared by the connect greeting and normal turns.
 async fn stream_reply<S, E>(mut stream: S, reply: Reply)
 where
     S: futures_util::Stream<Item = Result<String, E>> + Unpin,
@@ -578,8 +552,7 @@ async fn handle_voice_socket(
         channel: VOICE_CHANNEL.to_string(),
         external_id: user_id.to_string(),
     };
-    // One conversation per call: it is completed when the socket closes so the
-    // summary worker folds it into the user's memory, shared by desktop and mobile.
+
     let external_conv_id = format!("voice:{user_id}:{session_id}");
     let mut current_turn_cancel: Option<CancellationToken> = None;
     let mut last_turn: Option<tokio::task::JoinHandle<()>> = None;
@@ -612,7 +585,6 @@ async fn handle_voice_socket(
             turn_id: Some(turn_id.clone()),
             revision: None,
             tts_provider: Some(tts_provider.to_string()),
-            filler: None,
             outbound: false,
         };
         let session_id = session_id.clone();
@@ -884,7 +856,6 @@ async fn handle_voice_socket(
                                 turn_id: Some(turn_id.clone()),
                                 revision: None,
                                 tts_provider: Some(tts_provider.to_string()),
-                                filler: None,
                                 outbound: false,
                             };
 

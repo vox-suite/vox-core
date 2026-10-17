@@ -98,7 +98,6 @@ fn request(binding: &VoiceBinding, input: TurnInput) -> RespondRequest {
         turn_id: input.turn_id,
         revision: input.revision,
         tts_provider: input.tts_provider,
-        filler: None,
         outbound: false,
     }
 }
