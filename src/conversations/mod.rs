@@ -35,6 +35,16 @@ pub struct RespondResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InterruptedTurnRequest {
+    pub agent_external_key: String,
+    pub identity: ChannelIdentity,
+    pub external_conversation_id: String,
+    pub text: String,
+    pub reply: String,
+    pub heard: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CompleteConversationRequest {
     pub agent_external_key: String,
     pub identity: ChannelIdentity,

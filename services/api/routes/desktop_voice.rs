@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 use vox_core::{
-    conversations::{CompleteConversationRequest, RespondRequest},
+    conversations::{CompleteConversationRequest, InterruptedTurnRequest, RespondRequest},
     desktop_voice::{DesktopVoiceBroker, VoiceBinding},
     domain::identity::Actor,
     http::auth::authorized,
@@ -85,6 +85,13 @@ async fn binding(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
         .ok_or(StatusCode::UNAUTHORIZED)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterruptedInput {
+    pub text: String,
+    pub reply: String,
+    pub heard: String,
+}
 fn request(binding: &VoiceBinding, input: TurnInput) -> RespondRequest {
     RespondRequest {
         agent_external_key: "general".into(),
@@ -146,6 +153,45 @@ pub async fn respond_stream(
         .header("cache-control", "no-cache")
         .body(axum::body::Body::from_stream(events))
         .unwrap()
+}
+pub async fn interrupted(
+    State(state): State<ApiState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<InterruptedInput>,
+) -> Response {
+    let binding = match binding(&state, &headers, id).await {
+        Ok(b) => b,
+        Err(e) => return e.into_response(),
+    };
+    let Some(service) = state.legacy.conversations() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let context = match binding.context.clone() {
+        Some(c) => c,
+        None => match service.resolve_context_for_user(binding.user_id).await {
+            Ok(c) => c,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+    };
+    let request = InterruptedTurnRequest {
+        agent_external_key: "general".into(),
+        identity: ChannelIdentity {
+            channel: "voice".into(),
+            external_id: binding.user_id.to_string(),
+        },
+        external_conversation_id: format!("desktop:{}", binding.session_id),
+        text: input.text,
+        reply: input.reply,
+        heard: input.heard,
+    };
+    match service.record_interruption(context, request).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(vox_core::conversations::service::ConversationError::Invalid) => {
+            StatusCode::BAD_REQUEST.into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 pub async fn complete(
     State(state): State<ApiState>,

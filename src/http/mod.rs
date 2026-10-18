@@ -283,6 +283,10 @@ pub fn router(state: AppState) -> Router {
             post(conversations::respond_stream),
         )
         .route("/v1/conversations/complete", post(conversations::complete))
+        .route(
+            "/v1/conversations/interrupted",
+            post(conversations::interrupted),
+        )
         .route("/v1/events", post(events::ingest))
         .route("/v1/schedules", post(schedules::create))
         .route("/v1/schedules/{id}/update", post(schedules::update))

@@ -1,4 +1,7 @@
-use super::{CompleteConversationRequest, ConversationId, RespondRequest, RespondResponse};
+use super::{
+    CompleteConversationRequest, ConversationId, InterruptedTurnRequest, RespondRequest,
+    RespondResponse,
+};
 use crate::{
     agents::{
         AgentError,
@@ -674,6 +677,76 @@ impl ConversationService {
             .await?;
         }
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn record_interruption(
+        &self,
+        context: ResolvedUserContext,
+        request: InterruptedTurnRequest,
+    ) -> Result<(), ConversationError> {
+        self.selected_agent(&context, &request.agent_external_key)
+            .await?;
+        if request.identity.channel.trim().is_empty()
+            || request.identity.external_id.trim().is_empty()
+            || request.external_conversation_id.trim().is_empty()
+            || request.text.len() > 32768
+            || request.reply.len() > 65536
+            || request.heard.len() > request.reply.len()
+        {
+            return Err(ConversationError::Invalid);
+        }
+        let owner = context.owner();
+        let Some(row) = sqlx::query(
+            "SELECT id FROM conversations \
+             WHERE channel = $1 AND external_conversation_id = $2 AND user_context_id = $3 AND agent_external_key = $4",
+        )
+        .bind(request.identity.channel.trim())
+        .bind(request.external_conversation_id.trim())
+        .bind(owner.user_context_id.0)
+        .bind(&request.agent_external_key)
+        .fetch_optional(self.db.pool())
+        .await?
+        else {
+            return Ok(());
+        };
+        let conversation_id = row.get::<Uuid, _>("id");
+        let heard = format!("{}…", request.heard.trim());
+
+        let mut tx = self.db.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(conversation_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let truncated = sqlx::query(
+            "UPDATE messages SET text = $2 \
+             WHERE id = (SELECT id FROM messages WHERE conversation_id = $1 ORDER BY sequence_number DESC LIMIT 1) \
+             AND role = 'assistant' AND btrim(text) = $3",
+        )
+        .bind(conversation_id)
+        .bind(&heard)
+        .bind(request.reply.trim())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if truncated == 0 && !request.text.trim().is_empty() {
+            let sequence = sqlx::query_scalar::<_, i64>(
+                "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM messages WHERE conversation_id = $1",
+            )
+            .bind(conversation_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query("INSERT INTO messages (conversation_id,sequence_number,role,text) VALUES ($1,$2,'user',$3),($1,$2+1,'assistant',$4)")
+                .bind(conversation_id).bind(sequence).bind(request.text.trim()).bind(&heard).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        tracing::info!(
+            external_conversation_id = %request.external_conversation_id,
+            truncated = truncated == 1,
+            heard_chars = request.heard.len(),
+            reply_chars = request.reply.len(),
+            "CONVERSATION_TURN_INTERRUPTED"
+        );
         Ok(())
     }
 

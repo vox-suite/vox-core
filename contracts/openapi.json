@@ -4199,6 +4199,21 @@
         "summary": "Complete conversation turn sequence"
       }
     },
+    "/v1/conversations/interrupted": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Interruption recorded"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Record what the listener heard of an interrupted voice reply"
+      }
+    },
     "/v1/conversations/respond": {
       "post": {
         "responses": {
