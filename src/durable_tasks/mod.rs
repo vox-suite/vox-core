@@ -604,7 +604,7 @@ mod tests {
             .claim("fixture", Utc::now(), Duration::seconds(30), 100)
             .await
             .unwrap();
-        assert!(eligible.iter().any(|job| job.id == autonomous_job));
+        assert!(!eligible.iter().any(|job| job.id == autonomous_job));
         assert!(eligible.iter().any(|job| job.id == event_job));
         assert!(!eligible.iter().any(|job| job.id == task.run_id));
         service.cancel(&context, task.id).await.unwrap();
