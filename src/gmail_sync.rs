@@ -407,7 +407,11 @@ pub async fn ingest_message(
         }
         Err(error) => return Err(error.into()),
     };
-    let extraction = crate::document_extraction::extract(&extraction_source(&msg)).await?;
+    let extraction = crate::usage::scope(
+        user_id,
+        crate::document_extraction::extract(&extraction_source(&msg)),
+    )
+    .await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind(format!("gmail:{user_id}:{message_id}"))

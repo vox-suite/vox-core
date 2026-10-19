@@ -129,7 +129,7 @@ pub async fn extract_actor(
 
         let actor = Actor::user(user_id);
         req.extensions_mut().insert(actor);
-        return Ok(next.run(req).await);
+        return Ok(vox_core::usage::scope(user_id, next.run(req)).await);
     }
 
     // 2. Otherwise check session tokens in auth_sessions
@@ -161,7 +161,7 @@ pub async fn extract_actor(
     };
     req.extensions_mut().insert(actor);
 
-    Ok(next.run(req).await)
+    Ok(vox_core::usage::scope(user_id, next.run(req)).await)
 }
 
 #[cfg(test)]

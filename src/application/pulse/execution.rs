@@ -156,10 +156,12 @@ async fn execute_single(
             .ok_or_else(|| sqlx::Error::Protocol("date boundary unavailable in timezone".into()))?
             .with_timezone(&Utc)
     };
-    let type_id = m
-        .profile
-        .schema_id
-        .ok_or_else(|| sqlx::Error::Protocol("Missing event type".into()))?;
+    let usage = m.profile.source == USAGE_SOURCE;
+    let type_id = match m.profile.schema_id {
+        Some(id) => id,
+        None if usage => Uuid::nil(),
+        None => return Err(sqlx::Error::Protocol("Missing event type".into())),
+    };
     let metric_key = format!(
         "{:x}",
         Sha256::digest(
@@ -183,13 +185,15 @@ async fn execute_single(
         m.kind,
         MeasurementKind::NumericMedian | MeasurementKind::NumericP95
     );
-    let mut rows = if !distribution {
+    let mut rows = if !distribution && !usage {
         sqlx::query("SELECT day, dimension_value AS dimension, aggregate_value::float8 AS sum_value, count_events::bigint AS cnt, (metadata->>'valid_count')::bigint AS valid_count FROM pulse_daily_aggregates WHERE user_id=$1 AND metric_key=$2 AND data_revision=$3 ORDER BY day")
             .bind(user).bind(&metric_key).bind(revision).fetch_all(pool).await?
     } else {
         Vec::new()
     };
-    if rows.is_empty() {
+    if usage {
+        rows = usage_rows(pool, user, d, m, from_day, end_at).await?;
+    } else if rows.is_empty() {
         let field = m.field.as_deref().unwrap_or("");
         if !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(sqlx::Error::Protocol("Invalid metric field".into()));
@@ -401,4 +405,63 @@ async fn execute_single(
         error: None,
         series: vec![],
     })
+}
+
+async fn usage_rows(
+    pool: &PgPool,
+    user: Uuid,
+    d: &PulseDefinition,
+    m: &Measurement,
+    from_day: chrono::NaiveDate,
+    end_at: chrono::DateTime<Utc>,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    let field = match m.kind {
+        MeasurementKind::EventCount => "",
+        MeasurementKind::NumericSum => m.field.as_deref().unwrap_or(""),
+        _ => {
+            return Err(sqlx::Error::Protocol(
+                "Unsupported usage measurement".into(),
+            ));
+        }
+    };
+    let dimension = d.dimension.as_deref().unwrap_or("");
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout='5s'")
+        .execute(&mut *tx)
+        .await?;
+    let rows = sqlx::query(
+        r#"
+        WITH event_values AS (
+            SELECT (occurred_at AT TIME ZONE $2)::date AS day,
+                CASE $5 WHEN 'channel' THEN channel WHEN 'feature' THEN feature WHEN 'model' THEN coalesce(model, 'unknown') ELSE '' END AS dimension,
+                CASE $6
+                    WHEN '' THEN 1::float8
+                    WHEN 'total_tokens' THEN CASE WHEN input_tokens IS NULL AND output_tokens IS NULL THEN NULL
+                        ELSE (coalesce(input_tokens, 0) + coalesce(output_tokens, 0) + coalesce(reasoning_tokens, 0))::float8 END
+                    WHEN 'input_tokens' THEN input_tokens::float8
+                    WHEN 'output_tokens' THEN output_tokens::float8
+                    WHEN 'reasoning_tokens' THEN reasoning_tokens::float8
+                    WHEN 'cached_input_tokens' THEN cached_input_tokens::float8
+                    WHEN 'session_seconds' THEN session_seconds
+                    WHEN 'input_audio_seconds' THEN input_audio_seconds
+                    WHEN 'output_audio_seconds' THEN output_audio_seconds
+                END AS val
+            FROM usage_events
+            WHERE user_id = $1 AND kind = $7
+                AND occurred_at >= ($3::date::timestamp AT TIME ZONE $2) AND occurred_at <= $4
+        ) SELECT day, dimension, sum(val)::float8 AS sum_value, count(*)::bigint AS cnt, count(val)::bigint AS valid_count
+        FROM event_values GROUP BY day, dimension ORDER BY day
+    "#,
+    )
+    .bind(user)
+    .bind(&d.timezone)
+    .bind(from_day)
+    .bind(end_at)
+    .bind(dimension)
+    .bind(field)
+    .bind(&m.profile.action)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
 }

@@ -220,6 +220,78 @@ impl PulseRepository {
             });
         }
 
+        let usage = sqlx::query(
+            "SELECT kind, count(*)::bigint AS count, min(occurred_at) AS first_at, max(occurred_at) AS last_at \
+             FROM usage_events WHERE user_id = $1 AND occurred_at >= now() - interval '366 days' GROUP BY kind",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await?;
+        for r in usage {
+            let kind: String = r.get("kind");
+            let count: i64 = r.get("count");
+            total_records += count;
+            let (fields, metrics): (&[&str], serde_json::Value) = if kind == "voice" {
+                (
+                    &[
+                        "session_seconds",
+                        "input_audio_seconds",
+                        "output_audio_seconds",
+                    ],
+                    serde_json::json!([
+                        {"field":"session_seconds","aggregation":"sum","unit":"minutes","scale":0.016666666666666666,"title":"Total voice time"},
+                        {"field":"input_audio_seconds","aggregation":"sum","unit":"minutes","scale":0.016666666666666666,"title":"Voice input"},
+                        {"field":"output_audio_seconds","aggregation":"sum","unit":"minutes","scale":0.016666666666666666,"title":"Voice output"},
+                        {"aggregation":"count","unit":"sessions","title":"Voice sessions"}
+                    ]),
+                )
+            } else {
+                (
+                    &[
+                        "total_tokens",
+                        "input_tokens",
+                        "output_tokens",
+                        "reasoning_tokens",
+                        "cached_input_tokens",
+                    ],
+                    serde_json::json!([
+                        {"field":"total_tokens","aggregation":"sum","unit":"tokens","title":"Gemini tokens"},
+                        {"field":"input_tokens","aggregation":"sum","unit":"tokens","title":"Gemini input tokens"},
+                        {"field":"output_tokens","aggregation":"sum","unit":"tokens","title":"Gemini output tokens"},
+                        {"field":"reasoning_tokens","aggregation":"sum","unit":"tokens","title":"Gemini reasoning tokens"},
+                        {"field":"cached_input_tokens","aggregation":"sum","unit":"tokens","title":"Gemini cached input tokens"},
+                        {"aggregation":"count","unit":"requests","title":"Gemini requests"}
+                    ]),
+                )
+            };
+            let mut field_types: std::collections::BTreeMap<String, String> = fields
+                .iter()
+                .map(|f| ((*f).to_owned(), "number".to_owned()))
+                .collect();
+            for dimension in USAGE_DIMENSIONS {
+                field_types.insert(dimension.to_owned(), "string".to_owned());
+            }
+            profiles.push(SourceProfile {
+                key: format!("{USAGE_SOURCE}:{kind}"),
+                schema_id: None,
+                connection_id: None,
+                source: USAGE_SOURCE.into(),
+                category: "usage".into(),
+                action: kind,
+                timing: String::new(),
+                currency: String::new(),
+                count,
+                dated_count: count,
+                first_at: r.get("first_at"),
+                last_at: r.get("last_at"),
+                known_intervals: 0,
+                fields: field_types,
+                samples: vec![
+                    serde_json::json!({"metrics": metrics, "dimensions": USAGE_DIMENSIONS}),
+                ],
+            });
+        }
+
         let source_count = profiles.len();
         Ok(Inventory {
             profiles,

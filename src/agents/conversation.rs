@@ -327,10 +327,20 @@ impl ConversationAgent {
             let is_voice = is_voice_channel(&prompt.channel);
             let (agent, input, _) = self.build_agent_and_input(&prompt).await?;
             let start = std::time::Instant::now();
-            let response = agent.prompt(input).await.map_err(|_| {
+            let response = agent.prompt(input).extended_details().await.map_err(|_| {
                 tracing::Span::current().record("otel.status_code", "ERROR");
                 AgentError::Provider
             })?;
+            for call in &response.completion_calls {
+                crate::usage::record_call(
+                    Some(prompt.user_id.0),
+                    crate::usage::channel(&prompt.channel),
+                    "conversation",
+                    &prompt.selected_agent.model_configuration.model,
+                    call,
+                );
+            }
+            let response = response.output;
             if crate::telemetry::record_content() {
                 tracing::Span::current().record("langfuse.observation.output", response.as_str());
             }
@@ -377,8 +387,12 @@ impl ConversationAgent {
             .await;
 
         let model_correlation = prompt.correlation.clone();
+        let usage_user = prompt.user_id.0;
+        let usage_channel = crate::usage::channel(&prompt.channel);
+        let usage_model = prompt.selected_agent.model_configuration.model.clone();
         let text_stream = stream.filter_map(move |item_res| {
             let correlation = model_correlation.clone();
+            let usage_model = usage_model.clone();
             async move {
             match item_res {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t))) => {
@@ -389,6 +403,7 @@ impl ConversationAgent {
                     }
                 }
                 Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                    crate::usage::record_call(Some(usage_user), usage_channel, "conversation", &usage_model, &call);
                     let usage_known = call.usage.total_tokens > 0 || call.usage.input_tokens > 0 || call.usage.output_tokens > 0;
                     tracing::info!(conversation_id = correlation.conversation_id.as_deref(), turn_id = correlation.turn_id.as_deref(), revision = correlation.revision,
                         model_round = call.call_index, usage_known,

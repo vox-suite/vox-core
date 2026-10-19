@@ -257,8 +257,15 @@ impl SpaceRuntime {
             .build();
 
         let mut failed = false;
-        match agent.prompt(prompt_input).await {
-            Ok(reply) => {
+        match agent.prompt(prompt_input).extended_details().await {
+            Ok(response) => {
+                crate::usage::record_calls(
+                    Some(space.user_id),
+                    "space_runtime",
+                    &self.gemini_model,
+                    &response.completion_calls,
+                );
+                let reply = response.output;
                 let asst_msg = repo.add_message(space_id, "assistant", &reply).await;
                 if let (Ok(msg), Some(hub)) = (asst_msg, &self.user_events) {
                     hub.notify(

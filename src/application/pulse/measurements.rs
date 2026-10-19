@@ -107,7 +107,12 @@ pub fn measurement_catalog(profiles: &[SourceProfile]) -> Vec<Measurement> {
                 .get("title")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&p.action);
-            out.push(measurement(p, kind, field, format!("{title} ({unit})"), unit, "recorded", 1.0,
+            let scale = metric
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .unwrap_or(1.0);
+            out.push(measurement(p, kind, field, format!("{title} ({unit})"), unit, "recorded", scale,
                 "Computed from recorded events. Missing coverage remains unknown; currencies are never combined."));
         }
     }

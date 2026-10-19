@@ -109,8 +109,11 @@ impl SchemaExtracting for GeminiSchemaExtractor {
                     .to_string()
                     .replace("</untrusted_payload>", "[removed]"),
             ))
+            .extended_details()
             .await
             .map_err(|_| AgentError::Provider)?;
+        crate::usage::record_calls(None, "schema_extractor", &self.model, &raw.completion_calls);
+        let raw = raw.output;
 
         let mut result: SchemaExtractionResult = serde_json::from_str(structured_json(&raw))
             .map_err(|_| AgentError::InvalidStructuredOutput)?;

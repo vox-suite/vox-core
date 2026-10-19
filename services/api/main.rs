@@ -45,6 +45,7 @@ async fn main() {
     db.migrate()
         .await
         .expect("Vox Core database migration failed");
+    vox_core::usage::init(db.pool().clone());
 
     let device_hub = vox_core::realtime::DeviceHub::new();
     let user_events = vox_core::realtime::UserEventHub::new();

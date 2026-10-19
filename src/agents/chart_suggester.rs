@@ -77,8 +77,11 @@ impl SuggestingCharts for GeminiChartSuggester {
                 serde_json::to_string(&summaries)
                     .map_err(|_| AgentError::InvalidStructuredOutput)?
             ))
+            .extended_details()
             .await
             .map_err(|_| AgentError::Provider)?;
+        crate::usage::record_calls(None, "chart_suggester", &self.model, &raw.completion_calls);
+        let raw = raw.output;
         serde_json::from_str(structured_json(&raw)).map_err(|_| AgentError::InvalidStructuredOutput)
     }
 }

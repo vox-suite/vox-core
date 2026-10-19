@@ -33,6 +33,7 @@ pub async fn run_worker(
     )
     .await
     .expect("Vox Core database is unavailable");
+    vox_core::usage::init(db.pool().clone());
     let fresh_connections = vox_core::fresh_connections::FreshConnectionsService::new(
         db.pool().clone(),
         config.credential_key.as_deref(),

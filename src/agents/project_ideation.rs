@@ -73,10 +73,15 @@ Each citation must be an object copied exactly from Allowed citations, never a "
         excerpts,
         message
     );
-    let raw = tokio::time::timeout(std::time::Duration::from_secs(90), agent.prompt(prompt))
-        .await
-        .map_err(|_| "Project assistant timed out")?
-        .map_err(|_| "Project assistant request failed")?;
+    let raw = tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        agent.prompt(prompt).extended_details(),
+    )
+    .await
+    .map_err(|_| "Project assistant timed out")?
+    .map_err(|_| "Project assistant request failed")?;
+    crate::usage::record_calls(None, "project_ideation", model, &raw.completion_calls);
+    let raw = raw.output;
     let parsed: ModelReply = serde_json::from_str(super::structured_json(&raw))
         .map_err(|_| "Project assistant returned invalid output")?;
     let mut reply = IdeationReply {

@@ -19,6 +19,7 @@ pub use users::*;
 pub mod pulse;
 pub mod timeline;
 pub mod updates;
+pub mod usage;
 
 pub mod object_storage;
 pub mod space_tasks;

@@ -159,6 +159,15 @@ impl SpaceRuntime {
         let mut last = std::time::Instant::now();
         while let Some(item) = stream.next().await {
             match item {
+                Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                    crate::usage::record_call(
+                        Some(user),
+                        "background",
+                        "space_workflow",
+                        &self.gemini_model,
+                        &call,
+                    );
+                }
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
                     chunk,
                 ))) => {
@@ -317,7 +326,11 @@ impl SpaceRuntime {
                 .map_err(|_| AgentError::Provider)?
                 .ok_or(AgentError::Provider)?;
             let nodes: Vec<_> = graph.nodes.iter().filter(|n| n.is_current).collect();
-            let decision = self.decide_request(space, &nodes, selected, &text).await;
+            let decision = crate::usage::scope(
+                space.user_id,
+                self.decide_request(space, &nodes, selected, &text),
+            )
+            .await;
             let valid =
                 |candidate: Option<Uuid>| candidate.filter(|c| nodes.iter().any(|n| n.id == *c));
             let target = valid(decision.target).or(valid(selected));
@@ -618,12 +631,19 @@ impl SpaceRuntime {
             .build();
         let Ok(Ok(raw)) = tokio::time::timeout(
             std::time::Duration::from_secs(40),
-            agent.prompt(prompt.as_str()),
+            agent.prompt(prompt.as_str()).extended_details(),
         )
         .await
         else {
             return fallback;
         };
+        crate::usage::record_calls(
+            None,
+            "space_router",
+            &self.gemini_model,
+            &raw.completion_calls,
+        );
+        let raw = raw.output;
         parse_request_decision(&raw).unwrap_or(fallback)
     }
 

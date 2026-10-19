@@ -50,7 +50,7 @@ impl SummaryHandler {
     }
 
     pub async fn handle(&self, conversation_id: ConversationId) -> Result<(), SummaryHandlerError> {
-        let row = sqlx::query("SELECT summary_version FROM conversations WHERE id = $1")
+        let row = sqlx::query("SELECT summary_version, user_id FROM conversations WHERE id = $1")
             .bind(conversation_id.0)
             .fetch_optional(self.db.pool())
             .await?
@@ -108,10 +108,12 @@ impl SummaryHandler {
                 }
         }
 
-        let summary = self
-            .summarizer
-            .summarize(SummaryPrompt { messages })
-            .await?;
+        let user_id: uuid::Uuid = row.get("user_id");
+        let summary = crate::usage::scope(
+            user_id,
+            self.summarizer.summarize(SummaryPrompt { messages }),
+        )
+        .await?;
 
         let profile_updates_val = serde_json::to_value(&summary.profile_updates)
             .unwrap_or_else(|_| serde_json::json!({}));

@@ -44,9 +44,11 @@ pub struct InterruptedTurnRequest {
     pub heard: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CompleteConversationRequest {
     pub agent_external_key: String,
     pub identity: ChannelIdentity,
     pub external_conversation_id: String,
+    #[serde(default)]
+    pub usage: Option<crate::storage::usage::VoiceUsage>,
 }

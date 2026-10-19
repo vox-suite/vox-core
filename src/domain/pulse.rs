@@ -3,6 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
+pub const USAGE_SOURCE: &str = "vox_usage";
+pub const USAGE_DIMENSIONS: [&str; 3] = ["channel", "feature", "model"];
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Bucket {

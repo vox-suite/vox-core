@@ -58,8 +58,11 @@ impl Summarizing for GeminiSummarizer {
                 chrono::Utc::now().to_rfc3339(),
                 transcript.replace("</untrusted_transcript>", "[removed]")
             ))
+            .extended_details()
             .await
             .map_err(|_| AgentError::Provider)?;
+        crate::usage::record_calls(None, "summarizer", &self.model, &raw.completion_calls);
+        let raw = raw.output;
 
         parse_summary(&raw)
     }

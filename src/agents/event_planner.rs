@@ -65,8 +65,16 @@ impl EventPlanning for GeminiEventPlanner {
         );
         let output = agent
             .prompt(input)
+            .extended_details()
             .await
             .map_err(|_| AgentError::Provider)?;
+        crate::usage::record_calls(
+            Some(prompt.user_id.0),
+            "event_planner",
+            &self.model,
+            &output.completion_calls,
+        );
+        let output = output.output;
         parse_planned_actions(&output)
     }
 }

@@ -922,6 +922,11 @@ async fn handle_voice_socket(
             agent_external_key: "general".to_string(),
             identity,
             external_conversation_id: external_conv_id,
+            usage: Some(vox_core::storage::usage::VoiceUsage {
+                session_seconds: Some(session_started.elapsed().as_secs_f64()),
+                input_audio_seconds: Some(bytes_in as f64 / 32_000.0),
+                ..Default::default()
+            }),
         };
         match conversations.complete(context, request).await {
             Ok(()) => summary_queued = true,

@@ -103,9 +103,20 @@ impl EventAgent {
             kind = context.event_type,
             occurred = context.occurred_at.to_rfc3339(),
         );
-        agent.prompt(prompt).await.map_err(|error| {
-            tracing::warn!(%error, event_id = %context.event_id, "Event agent failed");
-            AgentError::Provider
-        })
+        let response = agent
+            .prompt(prompt)
+            .extended_details()
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, event_id = %context.event_id, "Event agent failed");
+                AgentError::Provider
+            })?;
+        crate::usage::record_calls(
+            Some(user_id.0),
+            "event_agent",
+            &self.gemini_model,
+            &response.completion_calls,
+        );
+        Ok(response.output)
     }
 }

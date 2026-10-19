@@ -88,14 +88,18 @@ pub async fn extract(source: &str) -> Result<Extraction, ExtractionError> {
     let started = std::time::Instant::now();
     let raw = tokio::time::timeout(
         Duration::from_secs(45),
-        agent.prompt(format!(
-            "<untrusted_document>\n{}\n</untrusted_document>",
-            source.replace("</untrusted_document>", "[removed]")
-        )),
+        agent
+            .prompt(format!(
+                "<untrusted_document>\n{}\n</untrusted_document>",
+                source.replace("</untrusted_document>", "[removed]")
+            ))
+            .extended_details(),
     )
     .await
     .map_err(|_| ExtractionError::Timeout)?
     .map_err(|_| ExtractionError::Unavailable)?;
+    crate::usage::record_calls(None, "document_extraction", &model, &raw.completion_calls);
+    let raw = raw.output;
     if raw.len() > 200_000 {
         return Ok(review(
             "Server extraction exceeded the output limit and needs review.",

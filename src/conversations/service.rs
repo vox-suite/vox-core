@@ -648,6 +648,21 @@ impl ConversationService {
             Some(row) => row.get::<Uuid, _>("id"),
             None => return Ok(()),
         };
+        if let Some(usage) = request
+            .usage
+            .as_ref()
+            .filter(|usage| valid_voice_usage(usage))
+            && let Err(error) = crate::storage::usage::UsageRepository::new(self.db.pool().clone())
+                .insert_voice(
+                    owner.user_id.0,
+                    &conversation_id.to_string(),
+                    crate::usage::channel(&request.identity.channel),
+                    usage,
+                )
+                .await
+        {
+            tracing::warn!(%error, "USAGE_RECORD_FAILED");
+        }
 
         let mut tx = self.db.begin().await?;
         let changed = sqlx::query(
@@ -906,4 +921,16 @@ impl ConversationService {
         tx.commit().await?;
         Ok(())
     }
+}
+
+fn valid_voice_usage(usage: &crate::storage::usage::VoiceUsage) -> bool {
+    [
+        usage.session_seconds,
+        usage.input_audio_seconds,
+        usage.output_audio_seconds,
+    ]
+    .into_iter()
+    .flatten()
+    .all(|seconds| seconds.is_finite() && (0.0..=86_400.0).contains(&seconds))
+        && usage.tts_chars.is_none_or(|chars| chars >= 0)
 }

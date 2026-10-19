@@ -324,6 +324,7 @@ pub async fn complete(
     State(state): State<ApiState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    usage: Option<Json<vox_core::storage::usage::VoiceUsage>>,
 ) -> Response {
     let binding = match binding(&state, &headers, id).await {
         Ok(b) => b,
@@ -346,6 +347,7 @@ pub async fn complete(
                         external_id: binding.user_id.to_string(),
                     },
                     external_conversation_id: format!("desktop:{id}"),
+                    usage: usage.map(|Json(usage)| usage),
                 },
             )
             .await;

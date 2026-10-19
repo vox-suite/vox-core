@@ -268,13 +268,15 @@ pub async fn process_attachment(
     };
 
     let parse_result = match parse_result {
-        Ok(text) => match crate::document_extraction::extract(&text).await {
-            Ok(extracted) if !extracted.uncertainty && !extracted.events.is_empty() => {
-                Ok(extracted.events)
+        Ok(text) => {
+            match crate::usage::scope(user_id, crate::document_extraction::extract(&text)).await {
+                Ok(extracted) if !extracted.uncertainty && !extracted.events.is_empty() => {
+                    Ok(extracted.events)
+                }
+                Ok(_) => Err(PdfError::NoFactsFound),
+                Err(error) => Err(PdfError::ExtractionFailed(error.to_string())),
             }
-            Ok(_) => Err(PdfError::NoFactsFound),
-            Err(error) => Err(PdfError::ExtractionFailed(error.to_string())),
-        },
+        }
         Err(error) => Err(error),
     };
     let mut tx = attachment_transaction(

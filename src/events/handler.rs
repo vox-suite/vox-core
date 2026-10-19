@@ -269,14 +269,16 @@ impl EventHandler {
         near_miss_schemas: Vec<SchemaDescriptor>,
         span_source: &str,
     ) -> Result<(), EventHandlerError> {
-        let result = match extractor
-            .extract(SchemaExtractionPrompt {
+        let result = match crate::usage::scope(
+            user_id,
+            extractor.extract(SchemaExtractionPrompt {
                 event_type: event_type.to_string(),
                 payload: payload.clone(),
                 occurred_at,
                 near_miss_schemas,
-            })
-            .await
+            }),
+        )
+        .await
         {
             Ok(result) => result,
             Err(err) => {
