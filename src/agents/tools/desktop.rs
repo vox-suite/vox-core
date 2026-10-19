@@ -32,11 +32,11 @@ impl Tool for ControlDesktopApp {
     type Output = Value;
     type Error = DesktopError;
     fn description(&self) -> String {
-        "Control the user's signed-in Vox desktop from any channel, including phone. Call action=context first for the current page, open Space, Project or Pulse, selection, timezone and revision; use devices when several desktops exist. Never guess IDs, ask when a reference is ambiguous, and report completion only when ok=true. Pass spaceId, pulseId and expected_revision from context where an action needs them. Actions:\n- navigate: page=agent|timeline|spaces|projects|pulse|connections|updates, with spaceId, projectId or pulseId; to open a project the user names, pass page=projects and projectName (no lookup needed)\n- timeline_filter: range=today|yesterday|this_week|last_week|custom, timezone, startDate/endDate inclusive for custom, optional merchant/category; spending means confirmed outflow, not authorization attempts\n- select_item(itemId), terminal_panel(open; only opens the panel), stop_work\n- Spaces: list_spaces, create_space(intent,title), space_chat(message), add_node(kind,title,body), update_node(nodeId,title/body,expectedVersion), remove_node(nodeId,expectedVersion), connect_nodes(fromNodeId,toNodeId), arrange_canvas\n- Pulse: list_pulse_measurements, create_pulse(title,definition,idempotencyKey), update_pulse(pulseId,title,definition)".into()
+        "Control the user's signed-in Vox desktop from any channel, including phone. Call action=context first for the current page, open Space, Project or Pulse, selection, timezone and revision; use devices when several desktops exist. Never guess IDs, ask when a reference is ambiguous, and report completion only when ok=true. Pass spaceId, pulseId and expected_revision from context where an action needs them. Actions:\n- navigate: page=agent|timeline|spaces|projects|pulse|connections|updates, with spaceId, projectId or pulseId; to open a project the user names, pass page=projects and projectName (no lookup needed)\n- draw_diagram(prompt): with a project open, start its diagram generator using the user's request as the prompt; it keeps drawing on the desktop after ok=true, so say it has started rather than that it is done\n- timeline_filter: range=today|yesterday|this_week|last_week|custom, timezone, startDate/endDate inclusive for custom, optional merchant/category; spending means confirmed outflow, not authorization attempts\n- select_item(itemId), terminal_panel(open; only opens the panel), stop_work\n- Spaces: list_spaces, create_space(intent,title), space_chat(message), add_node(kind,title,body), update_node(nodeId,title/body,expectedVersion), remove_node(nodeId,expectedVersion), connect_nodes(fromNodeId,toNodeId), arrange_canvas\n- Pulse: list_pulse_measurements, create_pulse(title,definition,idempotencyKey), update_pulse(pulseId,title,definition)".into()
     }
     fn parameters(&self) -> Value {
         json!({"type":"object","properties":{
-        "action":{"type":"string","enum":["devices","context","navigate","timeline_filter","select_item","terminal_panel","create_space","space_chat","add_node","update_node","remove_node","connect_nodes","arrange_canvas","stop_work","create_pulse","update_pulse","list_pulse_measurements","list_spaces"]},
+        "action":{"type":"string","enum":["devices","context","navigate","timeline_filter","select_item","terminal_panel","create_space","space_chat","add_node","update_node","remove_node","connect_nodes","arrange_canvas","stop_work","create_pulse","update_pulse","list_pulse_measurements","list_spaces","draw_diagram"]},
         "device_id":{"type":"string","format":"uuid"},"expected_revision":{"type":"integer","minimum":0},
         "arguments":{"type":"object","description":"Action-specific typed fields described in tool description. No arbitrary code or shell commands."}
     },"required":["action"],"additionalProperties":false})
@@ -81,6 +81,7 @@ impl Tool for ControlDesktopApp {
             "update_pulse",
             "list_pulse_measurements",
             "list_spaces",
+            "draw_diagram",
         ]
         .contains(&args.action.as_str())
         {

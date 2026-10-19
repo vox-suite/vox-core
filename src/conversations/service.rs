@@ -756,7 +756,7 @@ impl ConversationService {
         name: Option<&str>,
         external_conversation_id: &str,
     ) -> Result<String, ConversationError> {
-        if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        if let Some(name) = name.and_then(|name| name.split_whitespace().next()) {
             return Ok(format!("Hello {name}! How can I help you today?"));
         }
         let returning: bool = sqlx::query_scalar(
