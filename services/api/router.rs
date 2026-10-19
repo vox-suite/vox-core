@@ -477,6 +477,10 @@ pub fn build_api_router(state: ApiState) -> Router {
             post(crate::routes::desktop_voice::respond_stream),
         )
         .route(
+            "/internal/v1/desktop-voice/{id}/navigate",
+            post(crate::routes::desktop_voice::navigate),
+        )
+        .route(
             "/internal/v1/desktop-voice/{id}/interrupted",
             post(crate::routes::desktop_voice::interrupted),
         )

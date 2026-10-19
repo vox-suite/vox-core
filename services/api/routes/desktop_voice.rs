@@ -11,10 +11,12 @@ use serde_json::json;
 use uuid::Uuid;
 use vox_core::{
     conversations::{CompleteConversationRequest, InterruptedTurnRequest, RespondRequest},
+    desktop::service::DesktopControlService,
     desktop_voice::{DesktopVoiceBroker, VoiceBinding},
     domain::identity::Actor,
     http::auth::authorized,
     identity::ChannelIdentity,
+    storage::projects::ProjectRepository,
 };
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -153,6 +155,131 @@ pub async fn respond_stream(
         .header("cache-control", "no-cache")
         .body(axum::body::Body::from_stream(events))
         .unwrap()
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NavigateInput {
+    pub text: String,
+    pub page: String,
+}
+const PAGES: [(&str, &str); 7] = [
+    ("agent", "the agent page"),
+    ("timeline", "your timeline"),
+    ("spaces", "Spaces"),
+    ("projects", "Projects"),
+    ("pulse", "Pulse"),
+    ("connections", "Connections"),
+    ("updates", "Updates"),
+];
+fn words(text: &str) -> String {
+    let joined = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(" {joined} ")
+}
+fn match_project(text: &str, projects: &[(Uuid, String)]) -> Option<(Uuid, String)> {
+    let heard = words(text);
+    let mut hits: Vec<&(Uuid, String)> = projects
+        .iter()
+        .filter(|(_, name)| {
+            let name = words(name);
+            name.trim().len() > 1 && heard.contains(&name)
+        })
+        .collect();
+    hits.sort_by_key(|(_, name)| std::cmp::Reverse(words(name).len()));
+    match hits.as_slice() {
+        [] => None,
+        [only] => Some((*only).clone()),
+        [first, second, ..] => {
+            (words(&first.1).len() > words(&second.1).len()).then(|| (*first).clone())
+        }
+    }
+}
+pub async fn navigate(
+    State(state): State<ApiState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<NavigateInput>,
+) -> Response {
+    let binding = match binding(&state, &headers, id).await {
+        Ok(b) => b,
+        Err(e) => return e.into_response(),
+    };
+    let unhandled = || Json(json!({"handled":false})).into_response();
+    let project = if input.page == "project" {
+        let Ok(list) = ProjectRepository(state.pool.clone())
+            .list(binding.user_id, None)
+            .await
+        else {
+            return unhandled();
+        };
+        let list: Vec<(Uuid, String)> = list.into_iter().map(|p| (p.id, p.name)).collect();
+        match match_project(&input.text, &list) {
+            Some(p) => Some(p),
+            None => return unhandled(),
+        }
+    } else {
+        None
+    };
+    let page = if project.is_some() {
+        "projects"
+    } else {
+        input.page.as_str()
+    };
+    let Some((_, label)) = PAGES.iter().find(|(p, _)| *p == page) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let session = format!("desktop:{}", binding.session_id);
+    let desktop = DesktopControlService {
+        pool: state.pool.clone(),
+        hub: state.device_hub.clone(),
+    };
+    let device = match binding.device_id {
+        Some(device) => device,
+        None => match desktop.target(binding.user_id, None, Some(&session)).await {
+            Ok(device) => device,
+            Err(_) => return unhandled(),
+        },
+    };
+    let args = json!({"page":page,"projectId":project.as_ref().map(|(id, _)| id)});
+    match desktop
+        .dispatch(device, "navigate", args, None, Uuid::new_v4())
+        .await
+    {
+        Ok(result) if result["ok"] == true => {}
+        _ => return unhandled(),
+    }
+    let spoken = format!(
+        "Opening {}.",
+        project
+            .as_ref()
+            .map(|(_, name)| name.as_str())
+            .unwrap_or(label)
+    );
+    if let Some(service) = state.legacy.conversations() {
+        let (user, context, reply) = (binding.user_id, binding.context.clone(), spoken.clone());
+        tokio::spawn(async move {
+            let context = match context {
+                Some(c) => c,
+                None => match service.resolve_context_for_user(user).await {
+                    Ok(c) => c,
+                    Err(_) => return,
+                },
+            };
+            if service
+                .record_turn(context, &session, &input.text, &reply)
+                .await
+                .is_err()
+            {
+                tracing::warn!("DESKTOP_FAST_NAVIGATE_HISTORY_FAILED");
+            }
+        });
+    }
+    tracing::info!(page, project = project.is_some(), "DESKTOP_FAST_NAVIGATE");
+    Json(json!({"handled":true,"spoken":spoken})).into_response()
 }
 pub async fn interrupted(
     State(state): State<ApiState>,

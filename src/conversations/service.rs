@@ -835,6 +835,20 @@ impl ConversationService {
         Ok((ConversationId(row.get("id")), UserId(row.get("user_id"))))
     }
 
+    pub async fn record_turn(
+        &self,
+        context: ResolvedUserContext,
+        external_conversation_id: &str,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> Result<(), ConversationError> {
+        let (conversation_id, _) = self
+            .resolve_conversation(context.owner(), "voice", external_conversation_id, "general")
+            .await?;
+        self.append_turn(conversation_id, user_text, assistant_text)
+            .await
+    }
+
     pub(super) async fn append_turn(
         &self,
         conversation_id: ConversationId,
