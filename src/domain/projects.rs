@@ -192,7 +192,7 @@ impl ProjectData {
                                     && n.title.len() <= 300
                                     && n.kind.len() <= 80
                                     && n.detail.len() <= 2000
-                                    && n.citations.len() <= 20
+                                    && n.citations.len() <= 256
                             })
                             && f.nodes
                                 .iter()
@@ -203,7 +203,7 @@ impl ProjectData {
                             && f.edges.iter().all(|e| {
                                 e.label.len() <= 300
                                     && matches!(e.evidence.as_str(), "observed" | "inferred")
-                                    && e.citations.len() <= 20
+                                    && e.citations.len() <= 256
                                     && f.nodes.iter().any(|n| n.id == e.from)
                                     && f.nodes.iter().any(|n| n.id == e.to)
                             })
@@ -250,5 +250,54 @@ impl ProjectData {
             .chars()
             .take(32000)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod diagram_evidence_tests {
+    use super::*;
+    #[test]
+    fn aggregated_diagram_citations_survive_project_validation() {
+        let proof = ProjectCitation {
+            source_id: Uuid::new_v4(),
+            path: "src/voice.rs".into(),
+            start_line: 1,
+            end_line: 20,
+            hash: "a".repeat(64),
+        };
+        let mut data = ProjectData::default();
+        data.messages.push(ProjectMessage {
+            id: Uuid::new_v4(),
+            role: "assistant".into(),
+            body: "Voice flow".into(),
+            at: "2026-10-19T09:00:00Z".into(),
+            proposals: vec![],
+            diagram_id: None,
+            flow: Some(ProjectFlow {
+                title: "Voice flow".into(),
+                nodes: vec![ProjectFlowNode {
+                    id: "bridge".into(),
+                    title: "Bridge".into(),
+                    kind: "backend".into(),
+                    detail: String::new(),
+                    citations: vec![proof.clone(); 40],
+                }],
+                edges: vec![ProjectFlowEdge {
+                    from: "bridge".into(),
+                    to: "bridge".into(),
+                    label: "Process".into(),
+                    evidence: "observed".into(),
+                    citations: vec![proof.clone(); 40],
+                }],
+                gaps: vec![],
+                diagram: None,
+            }),
+        });
+        assert!(data.validate());
+        data.messages[0].flow.as_mut().unwrap().nodes[0].citations = vec![proof.clone(); 257];
+        assert!(!data.validate());
+        data.messages[0].flow.as_mut().unwrap().nodes[0].citations = vec![proof.clone(); 40];
+        data.messages[0].flow.as_mut().unwrap().edges[0].citations = vec![proof; 257];
+        assert!(!data.validate());
     }
 }
