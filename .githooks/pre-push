@@ -5,6 +5,7 @@ set -euo pipefail
 echo "Running pre-push checks..."
 
 echo "1. Checking formatting and clippy lints..."
+cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 
 echo "2. Running test suite..."
