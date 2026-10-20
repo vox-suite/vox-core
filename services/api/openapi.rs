@@ -89,6 +89,9 @@ use utoipa::OpenApi;
     crate::routes::updates::provide_job_input,
     crate::routes::gmail::historical_import,
     crate::routes::gmail::historical_page,
+    crate::routes::gmail::start_backfill,
+    crate::routes::app_version::app_version,
+    crate::routes::gmail::backfill_progress,
     crate::routes::takeout::upload_takeout
 ))]
 struct ApiDoc;

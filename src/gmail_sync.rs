@@ -230,7 +230,6 @@ async fn process_gmail_delta_inner(
 
     let mut records_extracted = 0;
     let mut records_ingested = 0;
-    let mut all_processed_cleanly = true;
 
     for msg_id in &message_ids {
         records_extracted += 1;
@@ -247,41 +246,27 @@ async fn process_gmail_delta_inner(
         {
             Ok(ingested) => records_ingested += i32::from(ingested),
             Err(error) => {
-                all_processed_cleanly = false;
-                tracing::warn!(%user_id, %connection_id, message_id = %msg_id, error = %error, "gmail ingestion failed; cursor retained");
+                tracing::warn!(%user_id, %connection_id, message_id = %msg_id, error = %error, "gmail ingestion failed; message skipped");
             }
         }
     }
 
-    if all_processed_cleanly {
-        let meta_update = json!({
-            "last_history_id": new_cursor,
-            "last_synced_at": Utc::now(),
-        });
-        let finalized: Result<(), sqlx::Error> = async {
-            let mut tx = pool.begin().await?;
-            finalize_cursor(&mut tx, user_id, connection_id, email_address,
-                credential_generation, authorization_generation, new_cursor, meta_update).await?;
-            sqlx::query("UPDATE connector_sync_runs SET status='completed',records_extracted=$1,records_ingested=$2,cursor_state=$3,completed_at=now() WHERE id=$4")
-                .bind(records_extracted).bind(records_ingested).bind(json!({"history_id":new_cursor})).bind(sync_run_id).execute(&mut *tx).await?;
-            sqlx::query("UPDATE connector_coverage SET coverage_end=now(),is_healthy=true,last_checked_at=now(),updated_at=now() WHERE user_id=$1 AND connector_id='gmail'")
-                .bind(user_id).execute(&mut *tx).await?;
-            tx.commit().await
-        }.await;
-        if let Err(error) = finalized {
-            tracing::error!(%connection_id,%error,"gmail cursor finalization failed");
-            return false;
-        }
-    } else {
-        let _ = sqlx::query(
-            "UPDATE connector_sync_runs SET status = 'failed', records_extracted = $1, records_ingested = $2, \
-             error = 'partial_message_fetch_failure', completed_at = now() WHERE id = $3",
-        )
-        .bind(records_extracted)
-        .bind(records_ingested)
-        .bind(sync_run_id)
-        .execute(pool)
-        .await;
+    let meta_update = json!({
+        "last_history_id": new_cursor,
+        "last_synced_at": Utc::now(),
+    });
+    let finalized: Result<(), sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        finalize_cursor(&mut tx, user_id, connection_id, email_address,
+            credential_generation, authorization_generation, new_cursor, meta_update).await?;
+        sqlx::query("UPDATE connector_sync_runs SET status='completed',records_extracted=$1,records_ingested=$2,cursor_state=$3,completed_at=now() WHERE id=$4")
+            .bind(records_extracted).bind(records_ingested).bind(json!({"history_id":new_cursor})).bind(sync_run_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE connector_coverage SET coverage_end=now(),is_healthy=true,last_checked_at=now(),updated_at=now() WHERE user_id=$1 AND connector_id='gmail'")
+            .bind(user_id).execute(&mut *tx).await?;
+        tx.commit().await
+    }.await;
+    if let Err(error) = finalized {
+        tracing::error!(%connection_id,%error,"gmail cursor finalization failed");
         return false;
     }
     true
@@ -407,11 +392,20 @@ pub async fn ingest_message(
         }
         Err(error) => return Err(error.into()),
     };
-    let extraction = crate::usage::scope(
-        user_id,
-        crate::document_extraction::extract(&extraction_source(&msg)),
-    )
-    .await?;
+    let extraction = if worth_extracting(&msg).await {
+        crate::usage::scope(
+            user_id,
+            crate::document_extraction::extract(&extraction_source(&msg)),
+        )
+        .await?
+    } else {
+        crate::document_extraction::Extraction {
+            useful: false,
+            uncertainty: false,
+            reason: "Filtered before extraction".into(),
+            events: Vec::new(),
+        }
+    };
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind(format!("gmail:{user_id}:{message_id}"))
@@ -485,6 +479,63 @@ pub async fn ingest_message(
     Ok(true)
 }
 
+async fn worth_extracting(msg: &vox_connections::providers::gmail::GmailMessageItem) -> bool {
+    let Some(key) = std::env::var("JEV_API_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+    else {
+        return true;
+    };
+    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let attachments: Vec<&str> = msg
+        .attachments
+        .iter()
+        .map(|a| a.filename.as_str())
+        .collect();
+    let state = format!(
+        "Sender: {}\nSubject: {}\nSnippet: {}\nAttachments: {}",
+        msg.from.as_deref().unwrap_or(""),
+        msg.subject
+            .as_deref()
+            .map(redact_email_codes)
+            .unwrap_or_default(),
+        msg.snippet
+            .as_deref()
+            .map(redact_email_codes)
+            .unwrap_or_default(),
+        attachments.join(", ")
+    );
+    let body = json!({
+        "state": state,
+        "model": "jev-latest",
+        "questions": {"relevant": {
+            "type": "noul",
+            "instructions": "Could this email record something that happened in the recipient's own life: a payment, bill, refund, order, delivery, booking, trip, appointment, subscription or account statement?",
+            "criteria": {
+                "true": "A receipt, invoice, bill, statement, order or delivery update, booking or ticket, appointment, or a document about the recipient's money or plans.",
+                "false": "Newsletters, promotions, marketing, social notifications, OTP or login codes, generic alerts, or personal conversation."
+            }
+        }}
+    });
+    let response = HTTP
+        .get_or_init(reqwest::Client::new)
+        .post("https://api.typesafe.ai/v1/systemone")
+        .bearer_auth(key)
+        .timeout(std::time::Duration::from_secs(5))
+        .json(&body)
+        .send()
+        .await;
+    let probability = match response {
+        Ok(response) if response.status().is_success() => response
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|parsed| parsed["answers"]["relevant"]["noul"].as_f64()),
+        _ => None,
+    };
+    probability.is_none_or(|probability| probability >= 0.2)
+}
+
 pub fn redact_email_codes(text: &str) -> String {
     static FORWARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static REVERSE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -512,6 +563,159 @@ pub fn extraction_source(message: &vox_connections::providers::gmail::GmailMessa
             .map(redact_email_codes)
             .unwrap_or_default()
     )
+}
+
+pub async fn process_gmail_backfills(pool: &PgPool) {
+    let rows = sqlx::query("SELECT id,user_id,COALESCE(account_id,account_display_id) AS email,metadata->'backfill' AS backfill FROM vox_connections WHERE connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true AND metadata->'backfill'->>'state'='running' LIMIT 5")
+        .fetch_all(pool)
+        .await;
+    let Ok(rows) = rows else {
+        tracing::warn!("Cannot read pending Gmail backfills");
+        return;
+    };
+    for row in rows {
+        let connection_id: Uuid = row.get("id");
+        let budget = std::time::Duration::from_secs(180);
+        if tokio::time::timeout(
+            budget,
+            backfill_page(
+                pool,
+                connection_id,
+                row.get("user_id"),
+                row.get("email"),
+                row.get("backfill"),
+            ),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(%connection_id, "Gmail backfill page exceeded its time budget");
+        }
+    }
+}
+
+async fn backfill_page(
+    pool: &PgPool,
+    connection_id: Uuid,
+    user_id: Uuid,
+    email: Option<String>,
+    backfill: Value,
+) {
+    let Some(email) = email else { return };
+    let Ok(mut lease) = pool.begin().await else {
+        return;
+    };
+    let locked =
+        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("gmail-backfill:{connection_id}"))
+            .fetch_one(&mut *lease)
+            .await;
+    if !matches!(locked, Ok(true)) {
+        return;
+    }
+    let Ok(service) = vox_connections::accounts::FreshConnectionsService::new(
+        pool.clone(),
+        std::env::var("VOX_CREDENTIAL_KEY").ok().as_deref(),
+        std::sync::Arc::new(DummyIngestor),
+        std::env::var("GOOGLE_CLIENT_ID").ok(),
+        std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+        std::env::var("VOX_CORE_API_URL").ok(),
+    ) else {
+        return;
+    };
+    let Ok(tokens) = service.get_gmail_tokens(user_id, connection_id).await else {
+        tracing::warn!(%connection_id, "Gmail backfill token refresh failed");
+        return;
+    };
+    let query = format!(
+        "after:{} before:{}",
+        backfill["after"].as_i64().unwrap_or_default(),
+        backfill["before"].as_i64().unwrap_or_default()
+    );
+    let gmail = vox_connections::providers::gmail::GmailClient::new();
+    let (ids, next) = match list_page(
+        &tokens.access_token,
+        &query,
+        backfill["page_token"].as_str(),
+    )
+    .await
+    {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!(%connection_id, %error, "Gmail backfill page listing failed");
+            return;
+        }
+    };
+    let (mut imported, mut skipped) = (0, 0);
+    for id in &ids {
+        match ingest_message(
+            pool,
+            &gmail,
+            &tokens.access_token,
+            user_id,
+            &email,
+            id,
+            true,
+        )
+        .await
+        {
+            Ok(true) => imported += 1,
+            Ok(false) => {}
+            Err(error) => {
+                skipped += 1;
+                tracing::warn!(%connection_id, message_id = %id, %error, "Gmail backfill message skipped");
+            }
+        }
+    }
+    let count = |key: &str| backfill[key].as_i64().unwrap_or_default();
+    let mut update = backfill.clone();
+    update["page_token"] = json!(next);
+    update["processed"] = json!(count("processed") + ids.len() as i64);
+    update["imported"] = json!(count("imported") + imported);
+    update["skipped"] = json!(count("skipped") + skipped);
+    if next.is_none() {
+        update["state"] = json!("done");
+        update["completed_at"] = json!(Utc::now());
+    }
+    if let Err(error) = sqlx::query("UPDATE vox_connections SET metadata=metadata || jsonb_build_object('backfill',$2::jsonb) WHERE id=$1 AND metadata->'backfill'->>'started_at'=$3")
+        .bind(connection_id)
+        .bind(update)
+        .bind(backfill["started_at"].as_str())
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(%connection_id, %error, "Gmail backfill progress update failed");
+    }
+}
+
+async fn list_page(
+    token: &str,
+    query: &str,
+    page_token: Option<&str>,
+) -> Result<(Vec<String>, Option<String>), reqwest::Error> {
+    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let mut params = vec![("q", query), ("maxResults", "25")];
+    if let Some(page_token) = page_token {
+        params.push(("pageToken", page_token));
+    }
+    let page: Value = HTTP
+        .get_or_init(reqwest::Client::new)
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
+        .bearer_auth(token)
+        .query(&params)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let ids = page["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["id"].as_str().map(str::to_owned))
+        .collect();
+    Ok((ids, page["nextPageToken"].as_str().map(str::to_owned)))
 }
 
 pub async fn process_pending_gmail(pool: &PgPool) {

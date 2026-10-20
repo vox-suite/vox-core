@@ -449,3 +449,50 @@ pub async fn historical_import(
         imported_records: imported,
     }))
 }
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct BackfillStatus {
+    pub state: Option<String>,
+    pub processed: i64,
+    pub imported: i64,
+    pub skipped: i64,
+}
+
+fn backfill_status(backfill: Option<Value>) -> BackfillStatus {
+    let backfill = backfill.unwrap_or(Value::Null);
+    let count = |key: &str| backfill[key].as_i64().unwrap_or_default();
+    BackfillStatus {
+        state: backfill["state"].as_str().map(str::to_owned),
+        processed: count("processed"),
+        imported: count("imported"),
+        skipped: count("skipped"),
+    }
+}
+
+#[utoipa::path(post,path="/v1/connectors/gmail/backfill",responses((status=200,body=BackfillStatus),(status=409,description="Enable Gmail timeline sync")))]
+pub async fn start_backfill(
+    State(pool): State<PgPool>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<BackfillStatus>, StatusCode> {
+    let backfill: Option<Value> = sqlx::query_scalar("UPDATE vox_connections SET metadata=metadata || jsonb_build_object('backfill', CASE WHEN metadata->'backfill'->>'state'='running' THEN metadata->'backfill' ELSE jsonb_build_object('state','running','after',extract(epoch FROM now()-interval '90 days')::bigint,'before',extract(epoch FROM COALESCE((metadata->>'baseline_at')::timestamptz,created_at,now()))::bigint,'page_token',NULL,'processed',0,'imported',0,'skipped',0,'started_at',now()) END) WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true RETURNING metadata->'backfill'")
+        .bind(actor.user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::CONFLICT)?;
+    Ok(Json(backfill_status(backfill)))
+}
+
+#[utoipa::path(get,path="/v1/connectors/gmail/backfill",responses((status=200,body=BackfillStatus)))]
+pub async fn backfill_progress(
+    State(pool): State<PgPool>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Json<BackfillStatus>, StatusCode> {
+    let backfill: Option<Value> = sqlx::query_scalar("SELECT metadata->'backfill' FROM vox_connections WHERE user_id=$1 AND connector_id='gmail'")
+        .bind(actor.user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .flatten();
+    Ok(Json(backfill_status(backfill)))
+}

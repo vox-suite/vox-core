@@ -1,6 +1,7 @@
 /**
 * Module definitions exporting API route handlers.
 */
+pub mod app_version;
 pub mod auth;
 pub mod callback_page;
 pub mod client_logs;

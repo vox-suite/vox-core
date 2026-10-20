@@ -135,6 +135,9 @@ pub async fn google_callback(
         svc.handle_google_callback(q.code.as_deref().unwrap_or_default(), &q.state)
             .await
     };
+    if let Err(e) = &result {
+        tracing::warn!(error = %e, provider_error = ?q.error, "google connector callback failed");
+    }
     super::callback_page::page("google", result.is_ok())
 }
 
@@ -167,6 +170,9 @@ pub async fn connector_callback(
         }
         _ => svc.handle_food_callback(&connector, code, &q.state).await,
     };
+    if let Err(e) = &result {
+        tracing::warn!(%connector, error = %e, provider_error = ?q.error, "connector callback failed");
+    }
     super::callback_page::page(&connector, result.is_ok())
 }
 

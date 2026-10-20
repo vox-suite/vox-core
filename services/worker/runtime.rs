@@ -82,6 +82,22 @@ pub async fn run_worker(
             }
         }
     });
+    let backfill_pool = db.pool().clone();
+    let backfill_cancel = cancellation.clone();
+    let backfill_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = backfill_cancel.cancelled() => break,
+                _ = interval.tick() => {
+                    tokio::select! {
+                        _ = backfill_cancel.cancelled() => break,
+                        _ = vox_core::gmail_sync::process_gmail_backfills(&backfill_pool) => {}
+                    }
+                }
+            }
+        }
+    });
     let pulse_pool = db.pool().clone();
     let pulse_cancel = cancellation.clone();
     let pulse_handle = tokio::spawn(async move {
@@ -313,6 +329,7 @@ pub async fn run_worker(
     retention_handle.await?;
     att_handle.await?;
     gmail_handle.await?;
+    backfill_handle.await?;
     pulse_handle.await?;
     if let Some(handle) = status_handle {
         handle.await?;

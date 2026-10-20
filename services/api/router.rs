@@ -443,6 +443,10 @@ pub fn build_api_router(state: ApiState) -> Router {
             post(crate::routes::gmail::historical_import),
         )
         .route(
+            "/v1/connectors/gmail/backfill",
+            post(crate::routes::gmail::start_backfill).get(crate::routes::gmail::backfill_progress),
+        )
+        .route(
             "/v1/connectors/google/takeout/upload",
             post(crate::routes::takeout::upload_takeout)
                 .layer(axum::extract::DefaultBodyLimit::max(104_857_600))
@@ -527,6 +531,10 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(internal_routes)
         .merge(desktop_voice_internal)
         .merge(google_callback_route)
+        .route(
+            "/v1/app/version",
+            get(crate::routes::app_version::app_version),
+        )
         .merge(gmail_pubsub_route)
         .merge(protected_routes)
         .layer(crate::cors::layer())
