@@ -58,6 +58,7 @@ const CROSS: &str = r#"<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/>
 
 fn provider(id: &str) -> (&'static str, &'static str) {
     match id {
+        "steam" => ("Steam", "#66c0f4"),
         "spotify" => ("Spotify", "#1db954"),
         "youtube" => ("YouTube", "#ff0033"),
         "swiggy" => ("Swiggy", "#fc8019"),

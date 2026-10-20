@@ -367,6 +367,10 @@ pub fn build_api_router(state: ApiState) -> Router {
             get(crate::routes::connections::google_callback),
         )
         .route(
+            "/v1/connectors/steam/callback",
+            get(crate::routes::connections::steam_callback),
+        )
+        .route(
             "/v1/connectors/{connector}/callback",
             get(crate::routes::connections::connector_callback),
         )

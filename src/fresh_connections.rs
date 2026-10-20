@@ -32,6 +32,7 @@ impl TimelineIngestor for CoreIngestor {
             other => other,
         };
         let _category = match connector {
+            "steam" => "gaming",
             "spotify" => "music",
             "youtube" => "video",
             "google_maps" => "visit",
@@ -44,6 +45,9 @@ impl TimelineIngestor for CoreIngestor {
         let mut created = 0;
         for item in items {
             let (event_type, title) = match (connector, item.provider_data["action"].as_str()) {
+                ("steam", Some("playtime_observed")) => {
+                    ("gaming.playtime_observed", format!("Steam: {}", item.title))
+                }
                 ("spotify", _) => ("music.listened", item.title.clone()),
                 ("google_maps", Some("visit")) => ("place.visited", item.title.clone()),
                 ("youtube", Some("watch")) if item.provider_data["watch_event"] == true => {
@@ -78,6 +82,17 @@ impl TimelineIngestor for CoreIngestor {
                 "timing": "provider_timestamp",
                 "session_times_known": item.ended_at.is_some(),
             });
+            if connector == "steam" {
+                let fields = item.provider_data.as_object().ok_or_else(|| {
+                    FreshConnectionError::Invalid("Invalid Steam activity".into())
+                })?;
+                payload
+                    .as_object_mut()
+                    .expect("object payload")
+                    .extend(fields.clone());
+                payload["session_times_known"] = json!(false);
+                payload["timing"] = json!("observed_counter_delta");
+            }
             let event_payload = json!({
                 "title": item.title, "occurred_at": item.occurred_at,
                 "ended_at": item.ended_at, "activity": payload,
@@ -92,6 +107,7 @@ impl TimelineIngestor for CoreIngestor {
                 .bind(event_type).bind(item.occurred_at).bind(event_payload)
                 .fetch_one(&mut **tx).await?;
             let type_val = match event_type {
+                "gaming.playtime_observed" => "gaming",
                 "music.listened" => "music",
                 "place.visited" => "visit",
                 "video.watched" => "video_watch",
@@ -117,6 +133,20 @@ impl TimelineIngestor for CoreIngestor {
             if let Some(channel) = item.provider_data["channel"].as_str() {
                 payload["channel"] = json!(channel);
             }
+            let summary = if connector == "steam" {
+                let minutes = item.provider_data["duration_seconds"]
+                    .as_u64()
+                    .filter(|v| *v > 0)
+                    .ok_or_else(|| {
+                        FreshConnectionError::Invalid("Steam playtime must be positive".into())
+                    })?
+                    / 60;
+                format!(
+                    "{minutes} minutes of playtime observed on Steam; exact session times unavailable"
+                )
+            } else {
+                title.clone()
+            };
             validate_content(tx, type_val, &payload).await?;
             let event_row = sqlx::query(
                 "INSERT INTO timeline_events (user_id, event_type_id, group_id, title, summary, occurred_at, ended_at, time_precision, content, record_state, confidence, dedupe_key) \
@@ -129,7 +159,7 @@ impl TimelineIngestor for CoreIngestor {
             )
             .bind(user_id)
             .bind(&title)
-            .bind(&title)
+            .bind(&summary)
             .bind(item.occurred_at)
             .bind(item.ended_at)
             .bind(&payload)

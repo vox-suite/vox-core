@@ -124,6 +124,17 @@ pub async fn disconnect_connection(
         })
 }
 
+pub async fn steam_callback(
+    State(svc): State<FreshConnectionsService>,
+    Query(params): Query<std::collections::BTreeMap<String, String>>,
+) -> Response {
+    let result = svc.handle_steam_callback(&params).await;
+    if let Err(error) = &result {
+        tracing::warn!(%error, "Steam connector callback failed");
+    }
+    super::callback_page::page("steam", result.is_ok())
+}
+
 pub async fn google_callback(
     State(svc): State<FreshConnectionsService>,
     Query(q): Query<GoogleCallbackQuery>,
