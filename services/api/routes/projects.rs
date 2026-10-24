@@ -389,7 +389,9 @@ pub async fn agent_model(
         .get_or_init(|| {
             reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(180))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .read_timeout(std::time::Duration::from_secs(90))
+                .timeout(std::time::Duration::from_secs(300))
                 .build()
         })
         .as_ref()
