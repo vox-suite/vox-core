@@ -255,12 +255,12 @@ impl PulseRepository {
                         "cached_input_tokens",
                     ],
                     serde_json::json!([
-                        {"field":"total_tokens","aggregation":"sum","unit":"tokens","title":"Gemini tokens"},
-                        {"field":"input_tokens","aggregation":"sum","unit":"tokens","title":"Gemini input tokens"},
-                        {"field":"output_tokens","aggregation":"sum","unit":"tokens","title":"Gemini output tokens"},
-                        {"field":"reasoning_tokens","aggregation":"sum","unit":"tokens","title":"Gemini reasoning tokens"},
-                        {"field":"cached_input_tokens","aggregation":"sum","unit":"tokens","title":"Gemini cached input tokens"},
-                        {"aggregation":"count","unit":"requests","title":"Gemini requests"}
+                        {"field":"total_tokens","aggregation":"sum","unit":"tokens","title":"LLM tokens"},
+                        {"field":"input_tokens","aggregation":"sum","unit":"tokens","title":"LLM input tokens"},
+                        {"field":"output_tokens","aggregation":"sum","unit":"tokens","title":"LLM output tokens"},
+                        {"field":"reasoning_tokens","aggregation":"sum","unit":"tokens","title":"LLM reasoning tokens"},
+                        {"field":"cached_input_tokens","aggregation":"sum","unit":"tokens","title":"LLM cached input tokens"},
+                        {"aggregation":"count","unit":"requests","title":"LLM requests"}
                     ]),
                 )
             };

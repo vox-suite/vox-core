@@ -450,12 +450,35 @@ pub async fn historical_import(
     }))
 }
 
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackfillRequest {
+    pub start_date: String,
+    pub end_date: String,
+}
+
+fn backfill_range(request: &BackfillRequest) -> Result<(i64, i64), StatusCode> {
+    let start = chrono::NaiveDate::parse_from_str(&request.start_date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let end = chrono::NaiveDate::parse_from_str(&request.end_date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if end <= start || (end - start).num_days() > 366 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok((
+        start.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp(),
+        end.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp(),
+    ))
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct BackfillStatus {
     pub state: Option<String>,
     pub processed: i64,
     pub imported: i64,
     pub skipped: i64,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
 }
 
 fn backfill_status(backfill: Option<Value>) -> BackfillStatus {
@@ -466,16 +489,27 @@ fn backfill_status(backfill: Option<Value>) -> BackfillStatus {
         processed: count("processed"),
         imported: count("imported"),
         skipped: count("skipped"),
+        start_date: backfill["start_date"].as_str().map(str::to_owned),
+        end_date: backfill["end_date"].as_str().map(str::to_owned),
     }
 }
 
-#[utoipa::path(post,path="/v1/connectors/gmail/backfill",responses((status=200,body=BackfillStatus),(status=409,description="Enable Gmail timeline sync")))]
+#[utoipa::path(post,path="/v1/connectors/gmail/backfill",request_body=Option<BackfillRequest>,responses((status=200,body=BackfillStatus),(status=409,description="Enable Gmail timeline sync")))]
 pub async fn start_backfill(
     State(pool): State<PgPool>,
     Extension(actor): Extension<Actor>,
+    payload: Option<Json<BackfillRequest>>,
 ) -> Result<Json<BackfillStatus>, StatusCode> {
-    let backfill: Option<Value> = sqlx::query_scalar("UPDATE vox_connections SET metadata=metadata || jsonb_build_object('backfill', CASE WHEN metadata->'backfill'->>'state'='running' THEN metadata->'backfill' ELSE jsonb_build_object('state','running','after',extract(epoch FROM now()-interval '90 days')::bigint,'before',extract(epoch FROM COALESCE((metadata->>'baseline_at')::timestamptz,created_at,now()))::bigint,'page_token',NULL,'processed',0,'imported',0,'skipped',0,'started_at',now()) END) WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true RETURNING metadata->'backfill'")
+    let range = payload
+        .as_ref()
+        .map(|Json(request)| backfill_range(request))
+        .transpose()?;
+    let backfill: Option<Value> = sqlx::query_scalar("UPDATE vox_connections SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('backfill', CASE WHEN metadata->'backfill'->>'state'='running' THEN metadata->'backfill' ELSE jsonb_build_object('state','running','after',COALESCE($2::bigint,extract(epoch FROM now()-interval '90 days')::bigint),'before',COALESCE($3::bigint,extract(epoch FROM COALESCE((metadata->>'baseline_at')::timestamptz,created_at,now()))::bigint),'start_date',$4::text,'end_date',$5::text,'page_token',NULL,'processed',0,'imported',0,'skipped',0,'started_at',now()) END) WHERE user_id=$1 AND connector_id='gmail' AND authorization_state='authorized' AND sync_timeline=true RETURNING metadata->'backfill'")
         .bind(actor.user_id)
+        .bind(range.map(|r| r.0))
+        .bind(range.map(|r| r.1))
+        .bind(payload.as_ref().map(|r| r.start_date.as_str()))
+        .bind(payload.as_ref().map(|r| r.end_date.as_str()))
         .fetch_optional(&pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -495,4 +529,28 @@ pub async fn backfill_progress(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .flatten();
     Ok(Json(backfill_status(backfill)))
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    #[test]
+    fn validates_calendar_range() {
+        let range = |start: &str, end: &str| {
+            backfill_range(&BackfillRequest {
+                start_date: start.into(),
+                end_date: end.into(),
+            })
+        };
+        assert_eq!(
+            range("2026-10-01", "2026-11-01").unwrap().1
+                - range("2026-10-01", "2026-11-01").unwrap().0,
+            31 * 86400
+        );
+        assert!(range("2025-05-01", "2026-10-27").is_err());
+        assert!(range("2026-10-01", "2026-10-01").is_err());
+        assert!(range("2026-11-01", "2026-10-01").is_err());
+        assert!(range("2026-02-30", "2026-03-01").is_err());
+        assert!(range("2024-01-01", "2025-01-01").is_ok());
+    }
 }

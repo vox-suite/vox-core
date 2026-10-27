@@ -599,7 +599,7 @@ async fn backfill_page(
     connection_id: Uuid,
     user_id: Uuid,
     email: Option<String>,
-    backfill: Value,
+    _backfill: Value,
 ) {
     let Some(email) = email else { return };
     let Ok(mut lease) = pool.begin().await else {
@@ -613,6 +613,10 @@ async fn backfill_page(
     if !matches!(locked, Ok(true)) {
         return;
     }
+    // Read the cursor after acquiring the lease: another worker may have advanced it.
+    let Ok(Some(backfill)) = sqlx::query_scalar::<_, Value>(
+        "SELECT metadata->'backfill' FROM vox_connections WHERE id=$1 AND authorization_state='authorized' AND sync_timeline=true AND metadata->'backfill'->>'state'='running'"
+    ).bind(connection_id).fetch_optional(&mut *lease).await else { return; };
     let Ok(service) = vox_connections::accounts::FreshConnectionsService::new(
         pool.clone(),
         std::env::var("VOX_CREDENTIAL_KEY").ok().as_deref(),
@@ -646,8 +650,10 @@ async fn backfill_page(
             return;
         }
     };
+    let offset = backfill["page_offset"].as_u64().unwrap_or_default() as usize;
     let (mut imported, mut skipped) = (0, 0);
-    for id in &ids {
+    let mut failed = false;
+    for id in ids.iter().skip(offset) {
         match ingest_message(
             pool,
             &gmail,
@@ -660,20 +666,22 @@ async fn backfill_page(
         .await
         {
             Ok(true) => imported += 1,
-            Ok(false) => {}
+            Ok(false) => skipped += 1,
             Err(error) => {
-                skipped += 1;
-                tracing::warn!(%connection_id, message_id = %id, %error, "Gmail backfill message skipped");
+                tracing::warn!(%connection_id, message_id = %id, %error, "Gmail backfill message failed; retrying page");
+                failed = true;
+                break;
             }
         }
     }
     let count = |key: &str| backfill[key].as_i64().unwrap_or_default();
     let mut update = backfill.clone();
-    update["page_token"] = json!(next);
-    update["processed"] = json!(count("processed") + ids.len() as i64);
+    if !failed { update["page_token"] = json!(next); }
+    update["page_offset"] = json!(if failed { offset + (imported + skipped) as usize } else { 0 });
+    update["processed"] = json!(count("processed") + imported + skipped);
     update["imported"] = json!(count("imported") + imported);
     update["skipped"] = json!(count("skipped") + skipped);
-    if next.is_none() {
+    if !failed && next.is_none() {
         update["state"] = json!("done");
         update["completed_at"] = json!(Utc::now());
     }
