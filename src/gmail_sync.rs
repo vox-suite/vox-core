@@ -676,8 +676,14 @@ async fn backfill_page(
     }
     let count = |key: &str| backfill[key].as_i64().unwrap_or_default();
     let mut update = backfill.clone();
-    if !failed { update["page_token"] = json!(next); }
-    update["page_offset"] = json!(if failed { offset + (imported + skipped) as usize } else { 0 });
+    if !failed {
+        update["page_token"] = json!(next);
+    }
+    update["page_offset"] = json!(if failed {
+        offset + (imported + skipped) as usize
+    } else {
+        0
+    });
     update["processed"] = json!(count("processed") + imported + skipped);
     update["imported"] = json!(count("imported") + imported);
     update["skipped"] = json!(count("skipped") + skipped);
