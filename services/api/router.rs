@@ -62,11 +62,16 @@ pub fn build_api_router(state: ApiState) -> Router {
         .with_state(state.spans.clone());
 
     let personal_task_routes = Router::new()
-        .route("/v1/personal-tasks", post(crate::routes::personal_tasks::create))
-        .with_state(vox_core::application::personal_tasks::PersonalTaskService::new(
-            state.pool.clone(),
-            state.spans.clone(),
-        ));
+        .route(
+            "/v1/personal-tasks",
+            post(crate::routes::personal_tasks::create),
+        )
+        .with_state(
+            vox_core::application::personal_tasks::PersonalTaskService::new(
+                state.pool.clone(),
+                state.spans.clone(),
+            ),
+        );
 
     let collection_routes = Router::new()
         .route("/v1/collections", post(create_collection))
