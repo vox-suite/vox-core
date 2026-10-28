@@ -31,5 +31,6 @@ pub mod updates;
 pub mod desktop_actions;
 pub mod desktop_voice;
 
+pub mod meeting_analysis;
 pub mod personal_tasks;
 pub mod projects;

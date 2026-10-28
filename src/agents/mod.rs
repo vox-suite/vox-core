@@ -21,3 +21,4 @@ pub enum AgentError {
     #[error("agent provider request failed")]
     Provider,
 }
+pub mod meeting_analysis;

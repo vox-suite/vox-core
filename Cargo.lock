@@ -8300,10 +8300,14 @@ dependencies = [
 [[package]]
 name = "vox-shared"
 version = "0.1.0"
-source = "git+https://github.com/vox-suite/vox-shared.git?branch=main#d6f0434eed0741a56fdeda9073d573f2bea55095"
+source = "git+https://github.com/vox-suite/vox-shared.git?branch=main#9b608ce865fe2b156d00d7db38459cab63f75049"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]

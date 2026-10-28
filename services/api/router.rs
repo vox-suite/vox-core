@@ -73,6 +73,13 @@ pub fn build_api_router(state: ApiState) -> Router {
             ),
         );
 
+    let meeting_analysis_routes = Router::new()
+        .route(
+            "/v1/meetings/analyze",
+            post(crate::routes::meeting_analysis::analyze),
+        )
+        .with_state(state.clone());
+
     let collection_routes = Router::new()
         .route("/v1/collections", post(create_collection))
         .route("/v1/collections/list", post(list_collections))
@@ -529,6 +536,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(space_routes)
         .merge(project_routes)
         .merge(personal_task_routes)
+        .merge(meeting_analysis_routes)
         .merge(web_token_routes)
         .merge(connection_routes)
         .merge(timeline_routes)
