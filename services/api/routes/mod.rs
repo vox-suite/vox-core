@@ -32,3 +32,4 @@ pub mod desktop_actions;
 pub mod desktop_voice;
 
 pub mod projects;
+pub mod personal_tasks;

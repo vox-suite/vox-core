@@ -1,0 +1,14 @@
+# Canonical personal task creation
+
+First dependency for meeting summary/action extraction: one authenticated, idempotent human-task creation service on existing Timeline spans. No meeting-only task table or autonomous execution. Direct requests can use it with no source; reviewed meeting candidates can attach opaque local meeting/evidence references later.
+
+Contract: explicit request_id plus bounded title/notes, optional RFC3339 due_at (unknown stays null), bounded source links. Server forces planned/manual_human/category task and derives owner from Actor. A transactionally created receipt maps owner+request to span. Concurrent retries return the existing span, changed payload reports conflict, and hard deletion leaves a receipt tombstone via nullable FK so retries cannot recreate deleted tasks. Different intentional request IDs can create identically titled tasks. Existing span APIs own list/update/complete/cancel and ownership checks.
+
+Ruling: deliver this reusable backend/API first; attached meeting summaries, candidate review UI, local outbox/sync, and routing existing unrelated agent tools through it remain subsequent work. Do not change RecordTask permissions/source semantics in this slice. No cloud meeting-text submission or model inference is introduced yet. API publication is source delivery; it does not imply deployment.
+
+Steps: validation/serialization tests red-green; migration and transactional service; authenticated API/OpenAPI; isolated PostgreSQL concurrency/tombstone/ownership tests; fresh review; focused checks and commit/push under standing authorization.
+
+Ledger: clean vox-core main baseline at start. Existing timeline spans support untimed planned manual tasks; durable_tasks starts execution and is deliberately excluded. Docker was started for a dedicated disposable PostgreSQL test container, never a production database.
+
+Ledger: validation tests observed red before implementation, then green. Added a control-character regression: NUL title was accepted (red), now rejected (green) while multiline notes remain valid. Five focused tests passed, including all migrations plus eight-way concurrent idempotency, ownership, untimed listing, preserved edits/completion, changed-payload conflict, deletion tombstone, and a new request after deletion on a dedicated PostgreSQL 17+pgvector container. API compile and OpenAPI schema check passed. Fresh read-only review found no P1/P2. No production DB, HTTP auth session, deployment, model inference, meeting UI, or existing agent-tool rerouting claimed.
+Final checks: `cargo clippy --lib --bin vox-core-api --locked -- -D warnings` passed. The generated OpenAPI contains the new endpoint and request schema. Only the dedicated fixture container is stopped/removed after verification; Docker itself and unrelated containers are left alone.

@@ -61,6 +61,13 @@ pub fn build_api_router(state: ApiState) -> Router {
         .route("/v1/spans/{id}/delete", post(delete_span))
         .with_state(state.spans.clone());
 
+    let personal_task_routes = Router::new()
+        .route("/v1/personal-tasks", post(crate::routes::personal_tasks::create))
+        .with_state(vox_core::application::personal_tasks::PersonalTaskService::new(
+            state.pool.clone(),
+            state.spans.clone(),
+        ));
+
     let collection_routes = Router::new()
         .route("/v1/collections", post(create_collection))
         .route("/v1/collections/list", post(list_collections))
@@ -516,6 +523,7 @@ pub fn build_api_router(state: ApiState) -> Router {
         .merge(pulse_routes)
         .merge(space_routes)
         .merge(project_routes)
+        .merge(personal_task_routes)
         .merge(web_token_routes)
         .merge(connection_routes)
         .merge(timeline_routes)

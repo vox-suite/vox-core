@@ -4,6 +4,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(paths(
+    crate::routes::personal_tasks::create,
     crate::routes::projects::count,
     crate::routes::projects::list,
     crate::routes::projects::create,

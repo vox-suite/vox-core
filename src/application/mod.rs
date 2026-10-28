@@ -23,3 +23,4 @@ pub mod updates;
 
 pub use timeline::*;
 pub use updates::*;
+pub mod personal_tasks;
