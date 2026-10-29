@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Automatically fix formatting and lints before commit..."
+
+echo "1. Fix formatting"
+cargo fmt
+
+echo "2. Automatically fix eligible clippy warnings, allowing dirty files"
+cargo clippy --fix --allow-dirty --allow-staged
+
+echo "3. Re-stage any files that were modified by clippy or fmt"
+git add -u
