@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
 echo "Automatically fix formatting and lints before commit..."
